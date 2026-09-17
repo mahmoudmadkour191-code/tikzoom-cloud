@@ -1,0 +1,14 @@
+pillow
+yt-dlp
+python-dotenv
+spotipy
+Telethon
+spotdl
+shazamio
+lyricsgenius
+aiosqlite
+wget
+FastTelethonhelper
+lxml
+webdriver_manager
+selenium

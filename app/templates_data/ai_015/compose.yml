@@ -1,0 +1,12 @@
+services:
+    pokitoki:
+        container_name: pokitoki
+        restart: unless-stopped
+        build:
+            context: .
+            dockerfile: Dockerfile
+        volumes:
+            - ./config.yml:/code/config.yml
+            - data:/code/data
+volumes:
+    data:

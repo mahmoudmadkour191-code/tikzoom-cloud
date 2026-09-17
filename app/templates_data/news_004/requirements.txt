@@ -1,0 +1,5 @@
+# auto-added by TikZoom curator
+python-telegram-bot
+discord.py
+redis
+tqdm

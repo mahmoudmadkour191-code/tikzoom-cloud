@@ -1,0 +1,11 @@
+aiohttp
+aria2p
+hachoir
+Pillow
+Pyrogram
+tgcrypto
+youtube-dl
+psutil
+
+# auto-added by TikZoom curator
+yt-dlp

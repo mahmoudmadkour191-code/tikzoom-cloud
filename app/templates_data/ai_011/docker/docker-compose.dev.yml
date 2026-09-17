@@ -1,0 +1,58 @@
+# NekroAgent 开发环境 Docker Compose
+# 用于启动开发所需的依赖服务，主应用通过源码运行
+#
+# 使用方法:
+# docker compose -f docker/docker-compose.dev.yml up -d
+
+services:
+  # PostgreSQL 服务
+  nekro_postgres:
+    image: postgres:16
+    container_name: nekro_dev_postgres
+    environment:
+      POSTGRES_USER: nekro_agent
+      POSTGRES_PASSWORD: nekro_agent
+      POSTGRES_DB: nekro_agent_dev
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5433:5432"  # 使用 5433 避免与本地 PostgreSQL 冲突
+    volumes:
+      - ../data/dev_postgres_data:/var/lib/postgresql/data:z
+    networks:
+      - nekro_network
+    restart: unless-stopped
+
+  # Qdrant 服务
+  nekro_qdrant:
+    image: qdrant/qdrant:v1.17.1
+    container_name: nekro_dev_qdrant
+    environment:
+      - QDRANT__SERVICE__API_KEY=your-qdrant-api-key
+    ports:
+      - "6334:6333" # 使用 6334 避免与生产环境 Qdrant 冲突
+    volumes:
+      - ../data/dev_qdrant_data:/qdrant/storage:z
+    networks:
+      - nekro_network
+    restart: unless-stopped
+
+  # Napcat 服务
+  nekro_napcat:
+    image: mlikiowa/napcat-docker
+    container_name: nekro_dev_napcat
+    ports:
+      - "6199:6099" # 使用 6199 避免与默认 6099 冲突
+    volumes:
+      - ../data/nekro_agent:/app/nekro_agent_data
+      - ../data/nekro_agent/napcat_data/QQ:/app/.config/QQ
+      - ../data/nekro_agent/napcat_data/napcat:/app/napcat/config
+    networks:
+      - nekro_network
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+networks:
+  nekro_network:
+    name: nekro_dev_network
+    driver: bridge

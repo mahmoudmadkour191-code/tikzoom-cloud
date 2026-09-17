@@ -1,0 +1,471 @@
+"""Application bootstrap — wires post_init and post_shutdown lifecycle.
+
+`bot.py` defines the PTB ``Application`` factory + lifecycle delegates;
+the actual wiring (provider commands, runtime callbacks, session
+monitor, status polling, mini-app) lives here as named functions so
+each step is independently testable.
+
+Ordering invariant: ``wire_runtime_callbacks`` must run before
+``start_session_monitor`` because the monitor dispatches Stop events
+to the registered Stop callback, and an unwired callback raises after
+F2.6.
+
+Module-level state (``session_monitor``, ``_status_poll_task``) is
+created in post_init and torn down in post_shutdown — kept here, not
+in ``bot.py``, so the lifecycle delegates stay one-liners.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+from typing import TYPE_CHECKING
+
+import structlog
+from telegram.error import TelegramError
+
+from .cc_commands import register_commands
+from .config import config
+from .handlers.commands import setup_menu_refresh_job
+from .handlers.hook_events import dispatch_hook_event
+from .handlers.messaging_pipeline.message_queue import shutdown_workers
+from .handlers.messaging_pipeline.message_routing import handle_new_message
+from .handlers.polling.polling_coordinator import status_poll_loop
+from .handlers.polling.polling_state import terminal_poll_state
+from .handlers.shell import register_approval_callback, show_command_approval
+from .handlers.status.topic_emoji import mark_awaiting_first_paint
+from .handlers.topics.topic_orchestration import (
+    adopt_unbound_windows as _adopt_unbound_windows,
+)
+from .handlers.topics.topic_orchestration import (
+    handle_new_window as _handle_new_window,
+    still_adoptable as _still_adoptable,
+)
+from .handlers.topics.topic_orchestration import (
+    is_pending_creation as _is_pending_creation,
+)
+from .session_map import register_in_flight_window_predicate
+from .multiplexer import get_multiplexer, install_multiplexer, multiplexer
+from .providers import get_provider
+from .session import session_manager
+from .telegram_client import PTBTelegramClient
+from .thread_router import thread_router
+from .session_monitor import (
+    NewMessage,
+    NewWindowEvent,
+    SessionMonitor,
+    clear_active_monitor,
+    set_active_monitor,
+)
+from .utils import task_done_callback
+
+if TYPE_CHECKING:
+    from telegram.ext import Application
+
+    from .providers.base import HookEvent
+
+logger = structlog.get_logger()
+
+session_monitor: SessionMonitor | None = None
+_status_poll_task: asyncio.Task[None] | None = None
+_callbacks_wired = False
+
+
+def install_global_exception_handler() -> None:
+    """Install the asyncio last-resort exception handler."""
+    asyncio.get_running_loop().set_exception_handler(_global_exception_handler)
+
+
+def _global_exception_handler(
+    _loop: asyncio.AbstractEventLoop, ctx: dict[str, object]
+) -> None:
+    """Last-resort handler for uncaught exceptions in asyncio tasks."""
+    exc = ctx.get("exception")
+    msg = ctx.get("message", "Unhandled exception in event loop")
+    if isinstance(exc, BaseException):
+        logger.error(
+            "asyncio exception handler: %s",
+            msg,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+    else:
+        logger.error("asyncio exception handler: %s", msg)
+
+
+async def register_provider_commands(application: Application) -> None:
+    """Register the default provider's BotCommand list and schedule menu refresh."""
+    default_provider = get_provider()
+    try:
+        await register_commands(application.bot, provider=default_provider)
+    except TelegramError:
+        logger.warning("Failed to register bot commands at startup, will retry later")
+    setup_menu_refresh_job(application)
+
+
+def verify_hooks_installed() -> None:
+    """Warn if managed hooks are missing for the default provider."""
+    provider = get_provider()
+    if not provider.capabilities.supports_hook:
+        return
+    provider_name = provider.capabilities.name
+    if provider_name != "claude":
+        if provider.capabilities.hook_install_managed_by_ccgram:
+            # DEBUG (not INFO/WARNING): Codex/Gemini fall back to transcript-scan
+            # discovery when hooks are absent, so this is an opt-in latency tip,
+            # not a degraded state — it should not greet every startup at INFO.
+            logger.debug(
+                "%s hooks can improve status tracking. Run: ccgram hook --provider %s --install",
+                provider_name,
+                provider_name,
+            )
+        return
+
+    # Lazy: hook module is the Claude-Code subprocess entry point;
+    # importing it eagerly drags `utils`/IO costs into bootstrap even
+    # when the active provider has no hooks.
+    # Lazy: hook helpers used only during the hook-verify step
+    from .hook import _claude_settings_file, get_installed_events
+
+    settings_file = _claude_settings_file()
+    if not settings_file.exists():
+        logger.warning(
+            "Claude Code hooks not installed (%s missing). Run: ccgram hook --install",
+            settings_file,
+        )
+        return
+
+    try:
+        settings = json.loads(settings_file.read_text())
+    except json.JSONDecodeError, OSError:
+        logger.warning("Claude Code hooks not installed. Run: ccgram hook --install")
+        return
+
+    events = get_installed_events(settings)
+    missing = [e for e, ok in events.items() if not ok]
+    if missing:
+        logger.warning(
+            "Claude Code hooks incomplete — %d missing: %s. Run: ccgram hook --install",
+            len(missing),
+            ", ".join(missing),
+        )
+
+
+def wire_multiplexer() -> None:
+    """Install the configured multiplexer backend as the module-level proxy.
+
+    Selects the backend from ``config.multiplexer_name`` (``CCGRAM_MULTIPLEXER``,
+    default tmux). Must run before the session monitor / status polling start so
+    callers that use the ``multiplexer`` proxy forward to a wired backend.
+    Idempotent — re-installs the same cached backend on repeat calls.
+    """
+    backend = get_multiplexer(config.multiplexer_name)
+    install_multiplexer(backend)
+    logger.info("Multiplexer backend wired: %s", backend.capabilities.name)
+
+
+async def ensure_multiplexer_session() -> None:
+    """Ensure the active backend's session/server is reachable before polling.
+
+    tmux creates/finds the session; herdr verifies the socket is alive and
+    warns on protocol uncertainty without gating startup. Runs once at startup
+    via the seam so an unreachable backend fails loudly here rather than later
+    as silent ``None`` returns in the polling loop.
+
+    An unreachable backend is fatal but not a bug: log one actionable line and
+    exit cleanly. ``SystemExit`` (unlike a plain exception) is caught by PTB's
+    ``run_polling`` and triggers a graceful shutdown, so the user sees the error
+    instead of a traceback.
+    """
+    try:
+        await multiplexer.ensure_session()
+    except Exception as exc:
+        logger.error(
+            "Multiplexer '%s' is not available: %s. "
+            "Make sure it is installed and running, then start ccgram again.",
+            config.multiplexer_name,
+            exc,
+        )
+        raise SystemExit(1) from exc
+
+
+def wire_runtime_callbacks() -> None:
+    """Wire module-level callbacks that break cross-subsystem direct imports.
+
+    Idempotent — safe to call multiple times. Must run before
+    ``start_session_monitor`` — the monitor dispatches approval prompts to
+    ``register_approval_callback``, which raises if not wired.
+    """
+    global _callbacks_wired
+
+    if _callbacks_wired:
+        return
+
+    register_approval_callback(show_command_approval)
+    register_in_flight_window_predicate(_is_pending_creation)
+    _callbacks_wired = True
+
+
+async def start_session_monitor(application: Application) -> SessionMonitor:
+    """Build the SessionMonitor, set its callbacks, and start polling.
+
+    Raises ``RuntimeError`` if ``wire_runtime_callbacks`` has not run —
+    the monitor would dispatch Stop events to an unwired callback.
+    """
+    global session_monitor
+
+    if not _callbacks_wired:
+        raise RuntimeError(
+            "wire_runtime_callbacks() must run before start_session_monitor()"
+        )
+
+    monitor = SessionMonitor()
+    set_active_monitor(monitor)
+
+    # Lazy: telegram_client wraps PTB Bot; bootstrap is otherwise free of
+    # PTB types, so loading the adapter here keeps cold imports clean.
+
+    client = PTBTelegramClient(application.bot)
+
+    async def message_callback(msg: NewMessage) -> None:
+        await handle_new_message(msg, client)
+
+    monitor.set_message_callback(message_callback)
+
+    # Keep queue ownership at the bootstrap boundary: the monitor owns durable
+    # watermarks while the queue owns source-scoped task retirement and notice I/O.
+    # Lazy: messaging pipeline imports status handlers during queue dispatch.
+    from .handlers.messaging_pipeline.message_queue import purge_source_tasks
+
+    # Lazy: message routing imports monitor NewMessage for transcript dispatch.
+    from .handlers.messaging_pipeline.message_routing import enqueue_backlog_skip_notice
+
+    async def purge_backlog(intent) -> int | None:
+        return await purge_source_tasks(
+            intent.user_id,
+            intent.window_id,
+            intent.thread_id,
+            intent.session_id,
+            intent.snapshot_offset,
+            intent.chat_id,
+        )
+
+    async def send_skip_notice(intent) -> None:
+        await enqueue_backlog_skip_notice(client, intent)
+
+    def validate_skip(intent) -> bool:
+        return (
+            thread_router.resolve_window_for_thread(
+                intent.user_id, intent.thread_id, intent.chat_id
+            )
+            == intent.window_id
+        )
+
+    monitor.set_skip_callbacks(
+        purge=purge_backlog,
+        notice=send_skip_notice,
+        validate=validate_skip,
+    )
+
+    async def new_window_callback(event: NewWindowEvent) -> None:
+        # The automatic sink, so eligibility is re-read per window. The monitor
+        # emits a batch and awaits each creation in turn, so without this the
+        # last window in a batch is judged on a listing taken before the first
+        # one's topic existed. Explicit binds do not come through here.
+        if not await _still_adoptable(event.window_id):
+            return
+        await _handle_new_window(event, client)
+
+    monitor.set_new_window_callback(new_window_callback)
+
+    async def hook_event_callback(event: HookEvent) -> None:
+        await dispatch_hook_event(event, client)
+
+    monitor.set_hook_event_callback(hook_event_callback)
+
+    monitor.start()
+    session_monitor = monitor
+    logger.info("Session monitor started")
+    return monitor
+
+
+def _settle_preexisting_windows() -> None:
+    """Seed already-bound windows for an immediate, settled first poll."""
+    for (
+        user_id,
+        chat_id,
+        thread_id,
+        window_id,
+    ) in thread_router.iter_thread_bindings_with_chat():
+        if not window_id:
+            continue
+        terminal_poll_state.mark_seen_status(window_id)
+        resolved_chat_id = (
+            chat_id
+            if chat_id is not None
+            else thread_router.resolve_chat_id(user_id, thread_id)
+        )
+        if resolved_chat_id:
+            mark_awaiting_first_paint(resolved_chat_id, thread_id)
+
+
+def start_status_polling(application: Application) -> asyncio.Task[None]:
+    """Spawn the status-polling background task."""
+    global _status_poll_task
+
+    _settle_preexisting_windows()
+    _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
+    _status_poll_task.add_done_callback(task_done_callback)
+    logger.info("Status polling task started")
+    return _status_poll_task
+
+
+def start_event_stream(application: Application) -> object | None:
+    """Start the push event-stream consumer on event-stream backends (herdr).
+
+    No-op on backends without ``capabilities.supports_event_stream`` (tmux).
+    Returns the monitor (or None) so callers/tests can inspect it.
+    """
+    if not multiplexer.capabilities.supports_event_stream:
+        return None
+    # Lazy: keep the event-stream consumer (and its handler graph) out of the
+    # cold-import path; only event-stream backends ever load it.
+    from .event_stream_monitor import EventStreamMonitor, set_active_event_stream
+
+    # Lazy: thread_router proxy, used only to seed the bound-window set.
+    from .thread_router import thread_router
+
+    def _bound_window_ids() -> set[str]:
+        return {wid for _u, _t, wid in thread_router.iter_thread_bindings()}
+
+    monitor = EventStreamMonitor(PTBTelegramClient(application.bot), _bound_window_ids)
+    monitor.start()
+    set_active_event_stream(monitor)
+    logger.info("Event-stream consumer started")
+    return monitor
+
+
+async def bootstrap_application(application: Application) -> None:
+    """Run the full post_init sequence in the prescribed order."""
+    install_global_exception_handler()
+    wire_multiplexer()
+    await ensure_multiplexer_session()
+    await register_provider_commands(application)
+    await session_manager.resolve_stale_ids()
+    await _adopt_unbound_windows(PTBTelegramClient(application.bot))
+    verify_hooks_installed()
+    wire_runtime_callbacks()
+    await start_session_monitor(application)
+    start_status_polling(application)
+    start_event_stream(application)
+
+    # Lazy: main imports bot at top, bot imports bootstrap; hoisting forms
+    # main → bot → bootstrap → main on cold import.
+    # Lazy: bootstrap ↔ main cycle
+    from .main import start_miniapp_if_enabled
+
+    await start_miniapp_if_enabled()
+
+
+async def stop_delivery_runtime() -> None:
+    """Phase 1 (post_stop): stop producers and drain pending deliveries.
+
+    Runs while PTB's HTTP transport is still alive (post_stop precedes
+    Application.shutdown, which tears down HTTPXRequest), so the queue drain
+    can actually deliver parsed-but-unsent messages (TASK-5/6). Must run
+    before any consumer that could enqueue new work is gone.
+    """
+    global _status_poll_task, session_monitor
+
+    if _status_poll_task is not None:
+        _status_poll_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await _status_poll_task
+        _status_poll_task = None
+        logger.info("Status polling stopped")
+
+    monitor_to_commit = session_monitor
+    if monitor_to_commit is not None:
+        await monitor_to_commit.stop_and_wait()
+        logger.info("Session monitor stopped")
+        session_monitor = None
+    clear_active_monitor()
+
+    # Lazy: event-stream consumer is only loaded on event-stream backends.
+    from .event_stream_monitor import get_active_event_stream, set_active_event_stream
+
+    event_stream = get_active_event_stream()
+    if event_stream is not None:
+        await event_stream.stop_and_wait()
+        set_active_event_stream(None)
+        logger.info("Event-stream consumer stopped")
+
+    await shutdown_workers()
+    if monitor_to_commit is not None:
+        # A successful bounded drain can now advance receipts; cancellation or
+        # terminal delivery failures leave them unacknowledged for replay.
+        monitor_to_commit.commit_delivered_watermarks()
+
+    # Lazy: tracker is only needed to discard ephemeral input correlations at shutdown.
+    from .handlers.telegram_origin import clear_pending_telegram_injections
+
+    clear_pending_telegram_injections()
+
+
+async def shutdown_runtime() -> None:
+    """Phase 2 (post_shutdown): teardown that needs no HTTP transport."""
+    # Lazy: main → bot → bootstrap cycle (same as start path).
+    from .main import stop_miniapp_if_enabled
+
+    await stop_miniapp_if_enabled()
+
+    session_manager.flush_state()
+
+
+def reset_for_testing() -> None:
+    """Clear bootstrap module state and inner callback registrations.
+
+    Each e2e/integration test that drives ``bootstrap_application`` must
+    reset state between runs — F2.6 made the register_*_callbacks fail
+    loud on double registration, and bootstrap caches its own
+    ``_callbacks_wired`` flag too.
+    """
+    global _callbacks_wired, session_monitor, _status_poll_task
+
+    # Lazy: each module's _reset_*_for_testing hook is only needed by the
+    # test harness; production callers never reach reset_for_testing().
+    from .handlers.shell import shell_capture
+
+    shell_capture._reset_approval_callback_for_testing()
+
+    # Lazy: same test-only reset hook, kept out of the production import path.
+    from .session_map import _reset_in_flight_window_predicate_for_testing
+
+    _reset_in_flight_window_predicate_for_testing()
+
+    # Lazy: window-id supersessions are per-run state; a redirect recorded by
+    # one test must not answer a lookup in the next.
+    from .window_resolver import reset_alias_redirects
+
+    reset_alias_redirects()
+
+    _callbacks_wired = False
+    session_monitor = None
+    # Lazy: test reset must also discard ephemeral input correlations.
+    from .handlers.telegram_origin import clear_pending_telegram_injections
+
+    clear_pending_telegram_injections()
+    _status_poll_task = None
+    clear_active_monitor()
+
+    # Stop any event-stream consumer this run started and clear its caches so the
+    # supervisor task + module-global state don't leak into the next test.
+    # Lazy: event-stream consumer is only loaded on event-stream backends.
+    from .event_stream_monitor import get_active_event_stream, set_active_event_stream
+    from .multiplexer import agent_status_cache
+
+    event_stream = get_active_event_stream()
+    if event_stream is not None:
+        event_stream.stop()
+        set_active_event_stream(None)
+    agent_status_cache.reset()

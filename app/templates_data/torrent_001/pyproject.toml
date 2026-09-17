@@ -1,0 +1,24 @@
+[project]
+name = "torrenthunt"
+version = "0.1.0"
+description = "🏴‍☠️ The ultimate torrent bot on telegram"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+  "aiohttp>=3.13",
+  "aiosqlite>=0.21",
+  "asyncpg>=0.31",
+  "greenlet>=3.2",
+  "pydantic-settings>=2.7",
+  "pyyaml>=6.0.3",
+  "scikit-learn>=1.7",
+  "sentry-sdk>=2.19",
+  "sqlalchemy>=2.0.43",
+  "structlog>=25.4",
+  "telethon>=1.44",
+  "uvloop>=0.22",
+]
+
+[tool.ty.environment]
+python = ".venv"
+root = ["app"]

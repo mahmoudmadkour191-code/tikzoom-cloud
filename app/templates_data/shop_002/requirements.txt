@@ -1,0 +1,13 @@
+pygsheets
+xlrd
+openpyxl
+pyrotgfork
+pytgcrypto
+aiosmtplib
+aiofiles
+apscheduler
+defusedxml
+typing-extensions
+
+# auto-added by TikZoom curator
+pyrogram

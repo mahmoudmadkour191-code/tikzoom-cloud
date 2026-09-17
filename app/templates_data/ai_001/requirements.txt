@@ -1,0 +1,8 @@
+# auto-added by TikZoom curator
+python-telegram-bot
+APScheduler
+aiolimiter
+cachetools
+
+# auto-added by TikZoom curator
+pytz

@@ -1,0 +1,1 @@
+Update an existing contact. Only the fields you pass are overwritten.

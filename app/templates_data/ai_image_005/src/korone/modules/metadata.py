@@ -1,0 +1,197 @@
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import KW_ONLY, dataclass
+from dataclasses import field as dataclass_field
+from enum import StrEnum
+from inspect import isawaitable, iscoroutinefunction
+from math import isfinite
+from typing import TYPE_CHECKING, Any, cast
+
+from aiogram.types import InlineQuery, InlineQueryResultsButton, InlineQueryResultUnion
+
+if TYPE_CHECKING:
+    from types import ModuleType
+
+    from aiogram import Dispatcher, Router
+    from babel.support import LazyProxy
+
+    from korone.ui import Text, UIExpression
+
+type MaybeAwaitable[T] = T | Awaitable[T]
+type ModuleText = str | LazyProxy
+type ModuleContent = ModuleText | Text | UIExpression
+type ModuleExportProvider = Callable[[int], MaybeAwaitable[object]]
+# aiogram's flag decorators erase the handler class type in their return annotations.
+type ModuleHandler = Any
+type ModuleHook = Callable[..., object]
+type ModuleInlineQueryMatcher = Callable[[InlineQuery], bool]
+type ModuleInlineQueryProvider = Callable[[InlineQuery], Awaitable[InlineQueryContribution]]
+type ModuleStatsProvider = Callable[[], MaybeAwaitable[UIExpression]]
+
+
+class ModuleScript(StrEnum):
+    PRE_SETUP = "pre_setup"
+    POST_SETUP = "post_setup"
+
+
+@dataclass(frozen=True, slots=True)
+class ModulePackage:
+    name: ModuleText
+    _: KW_ONLY
+    icon: str = "?"
+    summary: ModuleText = ""
+    description: ModuleContent = ""
+    public: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleExport:
+    provider: ModuleExportProvider
+    _: KW_ONLY
+    private_only: bool = False
+
+    async def collect(self, chat_id: int) -> object:
+        result = self.provider(chat_id)
+        if isawaitable(result):
+            return await cast("Awaitable[object]", result)
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class InlineQueryContribution:
+    results: tuple[InlineQueryResultUnion, ...] = ()
+    empty_state_button: InlineQueryResultsButton | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleInlineQuery:
+    provider: ModuleInlineQueryProvider
+    _: KW_ONLY
+    matcher: ModuleInlineQueryMatcher | None = None
+    priority: int = 0
+    timeout_seconds: float = 4.0
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
+            msg = "Inline query provider timeout must be a positive finite number"
+            raise ValueError(msg)
+
+    async def collect(self, query: InlineQuery) -> InlineQueryContribution:
+        return await self.provider(query)
+
+    def matches(self, query: InlineQuery) -> bool:
+        return self.matcher is None or self.matcher(query)
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleScripts:
+    pre_setup: ModuleHook | None = None
+    post_setup: ModuleHook | None = None
+
+    def get(self, script: ModuleScript) -> ModuleHook | None:
+        match script:
+            case ModuleScript.PRE_SETUP:
+                return self.pre_setup
+            case ModuleScript.POST_SETUP:
+                return self.post_setup
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleManifest:
+    package: ModulePackage
+    _: KW_ONLY
+    router: Router | None = None
+    handlers: tuple[ModuleHandler, ...] = ()
+    scripts: ModuleScripts = dataclass_field(default_factory=ModuleScripts)
+    stats: ModuleStatsProvider | None = None
+    export: ModuleExport | None = None
+    inline_query: ModuleInlineQuery | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedModule:
+    slug: str
+    module: ModuleType
+    manifest: ModuleManifest
+
+    @classmethod
+    def from_module(cls, slug: str, module: ModuleType) -> LoadedModule:
+        manifest = getattr(module, "manifest", None)
+        if not isinstance(manifest, ModuleManifest):
+            msg = f"korone.modules.{slug} must expose a ModuleManifest named 'manifest'"
+            raise TypeError(msg)
+        return cls(slug=slug, module=module, manifest=manifest)
+
+    @property
+    def import_path(self) -> str:
+        return self.module.__name__
+
+    @property
+    def router(self) -> Router | None:
+        return self.manifest.router
+
+    @property
+    def handlers(self) -> tuple[ModuleHandler, ...]:
+        return self.manifest.handlers
+
+    @property
+    def package(self) -> ModulePackage:
+        return self.manifest.package
+
+    @property
+    def export_private_only(self) -> bool:
+        return bool(self.manifest.export and self.manifest.export.private_only)
+
+    @property
+    def inline_query(self) -> ModuleInlineQuery | None:
+        return self.manifest.inline_query
+
+    def include_router(self, target: Dispatcher | Router) -> bool:
+        if self.router is None:
+            return False
+
+        target.include_router(self.router)
+        return True
+
+    def register_handlers(self) -> tuple[str, ...]:
+        if self.router is None:
+            return ()
+
+        for handler in self.handlers:
+            handler.register(self.router)
+        return tuple(handler.__name__ for handler in self.handlers)
+
+    def has_script(self, script: ModuleScript) -> bool:
+        return self.manifest.scripts.get(script) is not None
+
+    async def run_script(self, script: ModuleScript, *args: object) -> None:
+        hook = self.manifest.scripts.get(script)
+        if hook is None:
+            return
+
+        result: object
+        if iscoroutinefunction(hook):
+            result = hook(*args)
+        else:
+            result = await asyncio.to_thread(hook, *args)
+
+        if isawaitable(result):
+            await cast("Awaitable[object]", result)
+
+    async def collect_stats(self) -> UIExpression | None:
+        if self.manifest.stats is None:
+            return None
+
+        result = self.manifest.stats()
+        if isawaitable(result):
+            return await cast("Awaitable[UIExpression]", result)
+        return result
+
+    async def export_data(self, chat_id: int) -> object:
+        if self.manifest.export is None:
+            return None
+        return await self.manifest.export.collect(chat_id)
+
+
+type ModuleRegistry = Mapping[str, LoadedModule]

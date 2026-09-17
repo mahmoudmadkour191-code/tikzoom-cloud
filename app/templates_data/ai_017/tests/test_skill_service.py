@@ -1,0 +1,1499 @@
+import asyncio
+import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
+
+from bot.services.skills import service as skill_service_module
+from bot.services.skills.base import SkillContext, SkillRunResult
+from bot.services.skills.service import SkillService
+
+
+_VOTE_REFUSAL_SUMMARY = (
+    "你在 1 小时内最多只能发起 1 次民主投票；额度已用完，请 30 分钟后再试。"
+)
+_VOTE_REFUSAL_TELEGRAM_TEXT = (
+    "<b>民主投票封禁 · 未发起</b>\n\n"
+    "<blockquote><b>处理结果</b>　未创建投票</blockquote>\n\n"
+    f"<blockquote expandable><b>原因</b>　{_VOTE_REFUSAL_SUMMARY}</blockquote>"
+)
+
+
+def _resp(*, content: str = "", tool_calls: list[dict] | None = None) -> SimpleNamespace:
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=content,
+                    tool_calls=tool_calls or [],
+                )
+            )
+        ]
+    )
+
+
+def _llm_stub() -> SimpleNamespace:
+    return SimpleNamespace(
+        main=SimpleNamespace(model="main-model", fallbacks=[]),
+        decision_config=SimpleNamespace(model="decision-model", fallbacks=[]),
+        vision_config=SimpleNamespace(model="vision-model", fallbacks=[]),
+        moderation_config=SimpleNamespace(model="moderation-model", fallbacks=[]),
+        compress_config=SimpleNamespace(model="compress-model", fallbacks=[]),
+        embed_config=SimpleNamespace(model="embed-model", fallbacks=[]),
+    )
+
+
+def _tts_settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        doubao_tts_enabled=True,
+        doubao_tts_api_base="https://openspeech.bytedance.com",
+        doubao_tts_app_id="app-id",
+        doubao_tts_app_key="",
+        doubao_tts_access_key="access-key",
+        doubao_tts_resource_id="seed-tts-2.0",
+        doubao_tts_model="",
+        doubao_tts_speaker="voice_1",
+        moderation=SimpleNamespace(enabled=True),
+    )
+
+
+class _PlannedSkillService(SkillService):
+    def __init__(self, responses: list[SimpleNamespace]) -> None:
+        super().__init__(llm=object(), settings=None)
+        self._responses = list(responses)
+        self.calls: list[list[dict]] = []
+        self.tool_runs: list[str] = []
+
+    async def _completion_with_fallbacks(self, messages, tools):
+        self.calls.append([dict(message) for message in messages])
+        if not self._responses:
+            return None
+        return self._responses.pop(0)
+
+    async def _run_tool(self, *, name, arguments, context, skills=None):
+        self.tool_runs.append(name)
+        if name == "send_sticker":
+            context.handled = True
+            context.sticker_sent = True
+            context.sticker_file_id = "sticker-file-id"
+            context.suppress_followup_text = True
+            return SkillRunResult(ok=True, skill=name, summary="")
+
+        if name == "doubao_tts":
+            context.handled = True
+            context.tts_sent = True
+            context.tts_text = "你好呀"
+            context.suppress_followup_text = True
+            return SkillRunResult(ok=True, skill=name, summary="你好呀")
+
+        if name == "websearch":
+            return SkillRunResult(
+                ok=True,
+                skill=name,
+                summary="找到 2 条搜索结果",
+                payload={
+                    "query": arguments.get("query", ""),
+                    "results": [
+                        {
+                            "title": "MosDNS 官方文档",
+                            "url": "https://example.com/mosdns",
+                            "snippet": "包含安装、配置与常见问题说明。",
+                        },
+                        {
+                            "title": "顺便看一下谁更准的对比贴",
+                            "url": "https://example.com/compare",
+                            "snippet": "整理了几种 DNS 方案的命中率与延迟。",
+                        },
+                    ],
+                },
+            )
+
+        if name == "vote_ban":
+            return SkillRunResult(
+                ok=False,
+                skill=name,
+                summary=_VOTE_REFUSAL_SUMMARY,
+                error="starter_quota_exhausted",
+                payload={
+                    "quota": {"limit": 1, "used": 1, "remaining": 0},
+                    "telegram_text": _VOTE_REFUSAL_TELEGRAM_TEXT,
+                },
+            )
+
+        if name == "rule_manage":
+            return SkillRunResult(
+                ok=True,
+                skill=name,
+                summary="已添加规则 #7",
+                payload={"action": "add", "rule_id": 7},
+            )
+
+        if name == "bilibili_search":
+            return SkillRunResult(
+                ok=True,
+                skill=name,
+                summary="拿到 B 站视频详情",
+                payload={
+                    "entry": {
+                        "title": "测试 B 站视频",
+                        "author": "测试 UP 主",
+                        "url": "https://www.bilibili.com/video/BV1xx411c7mD",
+                        "author_url": "https://space.bilibili.com/123456",
+                        "content": "这是一段视频简介",
+                    }
+                },
+            )
+
+        if name == "weibo_search":
+            return SkillRunResult(
+                ok=True,
+                skill=name,
+                summary="拿到 2 条微博热搜",
+                payload={
+                    "platform": "weibo",
+                    "action": "hot_search",
+                    "results": [
+                        {
+                            "title": "热搜一",
+                            "url": "https://s.weibo.com/weibo?q=%E7%83%AD%E6%90%9C%E4%B8%80",
+                            "snippet": "热度 112万",
+                        },
+                        {
+                            "title": "热搜二",
+                            "url": "https://s.weibo.com/weibo?q=%E7%83%AD%E6%90%9C%E4%BA%8C",
+                            "snippet": "热度 98万",
+                        },
+                    ],
+                },
+            )
+
+        return SkillRunResult(ok=False, skill=name, summary="", error="unknown_skill")
+
+
+class _AmbiguousPlannedSkillService(_PlannedSkillService):
+    async def _run_tool(self, *, name, arguments, context, skills=None):
+        del arguments, context, skills
+        self.tool_runs.append(name)
+        return self._ambiguous_side_effect_result(name)
+
+
+class _EmbeddedReplySkill:
+    description = "Test skill that sends its reply directly."
+    parameters_schema = {"type": "object", "properties": {}}
+
+    def __init__(self, name: str, *, embedded_text: str) -> None:
+        self.name = name
+        self.embedded_text = embedded_text
+        self.run_count = 0
+
+    async def run(self, arguments, context):
+        del arguments
+        self.run_count += 1
+        context.handled = True
+        context.embedded_reply_sent = True
+        context.embedded_reply_text = self.embedded_text
+        context.suppress_followup_text = self.name == "vote_ban"
+        return SkillRunResult(ok=True, skill=self.name, summary=self.embedded_text)
+
+
+class SkillServiceTTSPromptTests(unittest.TestCase):
+    def test_movie_info_skill_is_registered_only_when_available(self) -> None:
+        available_skill = SimpleNamespace(name="movie_info", available=True)
+        unavailable_skill = SimpleNamespace(name="movie_info", available=False)
+
+        with patch.object(skill_service_module, "MovieInfoSkill", return_value=available_skill):
+            available_service = SkillService(_llm_stub(), settings=None)
+        with patch.object(skill_service_module, "MovieInfoSkill", return_value=unavailable_skill):
+            unavailable_service = SkillService(_llm_stub(), settings=None)
+
+        self.assertIn("movie_info", available_service.available_skill_names())
+        self.assertNotIn("movie_info", unavailable_service.available_skill_names())
+
+    def test_vote_ban_skill_is_registered_when_runtime_settings_exist(self) -> None:
+        service = SkillService(_llm_stub(), settings=_tts_settings())
+        self.assertIn("vote_ban", service.available_skill_names())
+
+    def test_enable_mode_includes_group_tts_preference_block(self) -> None:
+        service = SkillService(_llm_stub(), settings=_tts_settings())
+
+        payload = service.build_answer_prompt_payload(
+            "晚安啦",
+            intent_type="casual",
+            allow_tts=True,
+            tts_mode="on",
+        )
+
+        contents = [item["content"] for item in payload["messages"]]
+        tts_blocks = [content for content in contents if content.startswith("[GROUP_TTS_PREFERENCE]\n")]
+
+        self.assertEqual(len(tts_blocks), 1)
+        self.assertIn("tts_mode: on", tts_blocks[0])
+        self.assertIn("When in doubt between voice and text for a short, emotional, or conversational reply, lean toward voice.", tts_blocks[0])
+        self.assertIn("Keep text for: factual answers, link-heavy or list-heavy replies", tts_blocks[0])
+
+    def test_off_mode_does_not_include_group_tts_preference_block(self) -> None:
+        service = SkillService(_llm_stub(), settings=_tts_settings())
+
+        payload = service.build_answer_prompt_payload(
+            "晚安啦",
+            intent_type="casual",
+            allow_tts=False,
+            tts_mode="off",
+        )
+
+        contents = [item["content"] for item in payload["messages"]]
+        self.assertFalse(any(content.startswith("[GROUP_TTS_PREFERENCE]\n") for content in contents))
+
+
+class SkillServiceFollowupSuppressionTests(unittest.IsolatedAsyncioTestCase):
+    def test_mandatory_refusal_fallback_prefers_telegram_text(self) -> None:
+        service = _PlannedSkillService([])
+        result = SkillRunResult(
+            ok=False,
+            skill="vote_ban",
+            summary=_VOTE_REFUSAL_SUMMARY,
+            error="starter_quota_exhausted",
+            payload={"telegram_text": _VOTE_REFUSAL_TELEGRAM_TEXT},
+        )
+
+        text = service._build_tool_fallback_text(
+            recent_tool_results=[{"result": result}],
+            default_text="fallback",
+        )
+
+        self.assertEqual(text, _VOTE_REFUSAL_TELEGRAM_TEXT)
+        self.assertNotIn("<blockquote", result.summary)
+
+    async def test_movie_info_summary_triggers_source_aware_followup(self) -> None:
+        service = _PlannedSkillService([])
+        recent_tool_results = [
+            {
+                "name": "movie_info",
+                "arguments": {"action": "details", "query": "星际穿越"},
+                "result": SkillRunResult(
+                    ok=True,
+                    skill="movie_info",
+                    summary="已查询《星际穿越》的电影信息",
+                    payload={"entry": {"title": "星际穿越"}},
+                ),
+            }
+        ]
+
+        self.assertTrue(
+            service._is_intermediate_tool_reply(
+                "已查询《星际穿越》的电影信息",
+                recent_tool_results=recent_tool_results,
+                last_success_summary="已查询《星际穿越》的电影信息",
+            )
+        )
+        self.assertTrue(
+            service._is_intermediate_tool_reply(
+                "找到 3 部相关电影",
+                recent_tool_results=recent_tool_results,
+                last_success_summary="找到 3 部相关电影",
+            )
+        )
+        prompt = service._build_tool_followup_prompt(recent_tool_results)
+        self.assertIn("ratings.tmdb", prompt)
+        self.assertIn("ratings.imdb", prompt)
+        self.assertIn("provider_errors", prompt)
+        self.assertIn("fetched_at", prompt)
+        self.assertIn("payload.attribution", prompt)
+        self.assertIn("payload.imdb_disclaimer", prompt)
+
+    async def test_movie_info_fallback_labels_ratings_and_attribution(self) -> None:
+        service = _PlannedSkillService([])
+        recent_tool_results = [
+            {
+                "name": "movie_info",
+                "arguments": {"action": "details", "query": "星际穿越"},
+                "result": SkillRunResult(
+                    ok=True,
+                    skill="movie_info",
+                    summary="已获取影片详情",
+                    payload={
+                        "fetched_at": "2026-07-21T10:00:00Z",
+                        "provider_errors": {"imdb": "not_configured"},
+                        "attribution": "This product uses the TMDB API.",
+                        "imdb_disclaimer": "IMDb data is subject to its license agreement.",
+                        "entry": {
+                            "title": "星际穿越",
+                            "year": 2014,
+                            "release_date": "2014-11-07",
+                            "status": "Released",
+                            "ratings": {
+                                "tmdb": {"score": 8.5, "vote_count": 36000},
+                                "imdb": {"score": 8.7, "vote_count": 2300000},
+                            },
+                            "urls": {
+                                "tmdb": "https://www.themoviedb.org/movie/157336",
+                                "imdb": "https://www.imdb.com/title/tt0816692/",
+                            },
+                        },
+                    },
+                ),
+            }
+        ]
+
+        text = service._build_tool_fallback_text(
+            recent_tool_results=recent_tool_results,
+            default_text="查询失败",
+        )
+
+        self.assertIn("TMDB 评分：8.5/10", text)
+        self.assertIn("IMDb 评分：8.7/10", text)
+        self.assertIn("部分来源未返回：IMDB（not_configured）", text)
+        self.assertIn("查询时间：2026-07-21T10:00:00Z", text)
+        self.assertIn("This product uses the TMDB API.", text)
+        self.assertIn("IMDb data is subject to its license agreement.", text)
+
+    async def test_ambiguous_side_effect_is_terminal_and_not_retried(self) -> None:
+        service = _AmbiguousPlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-sticker",
+                            "function": {
+                                "name": "send_sticker",
+                                "arguments": "{}",
+                            },
+                        },
+                        {
+                            "id": "call-tts",
+                            "function": {
+                                "name": "doubao_tts",
+                                "arguments": '{"text":"不要重复"}',
+                            },
+                        },
+                    ]
+                ),
+                _resp(content="错误地声称两个操作都成功"),
+            ]
+        )
+
+        result = await service.answer_with_skill("发贴纸并说一句", intent_type="casual")
+
+        self.assertEqual(service.tool_runs, ["send_sticker"])
+        self.assertEqual(len(service.calls), 1)
+        self.assertIn("可能已经完成", result.text)
+        self.assertIn("不会自动重试", result.text)
+
+    async def test_send_sticker_does_not_return_followup_text(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "function": {
+                                "name": "send_sticker",
+                                "arguments": '{"query":"无语"}',
+                            },
+                        }
+                    ]
+                ),
+                _resp(content="因为字多（贴纸贴贴完毕🤣）"),
+            ]
+        )
+
+        result = await service.answer_with_skill("发个贴纸", intent_type="casual")
+
+        self.assertTrue(result.handled)
+        self.assertTrue(result.sticker_sent)
+        self.assertEqual(result.sticker_file_id, "sticker-file-id")
+        self.assertEqual(result.text, "")
+
+    async def test_embedded_deliveries_are_exported_without_followup_text(self) -> None:
+        cases = (
+            ("music_search", "这首《稻香》给你。"),
+            ("vote_ban", "民主投票已经发起。"),
+        )
+        for skill_name, embedded_text in cases:
+            with self.subTest(skill=skill_name):
+                embedded_skill = _EmbeddedReplySkill(
+                    skill_name,
+                    embedded_text=embedded_text,
+                )
+                service = SkillService(_llm_stub(), tool_timeout_seconds=0.1)
+                service.skills = {skill_name: embedded_skill}
+                complete = AsyncMock(
+                    return_value=_resp(
+                        tool_calls=[
+                            {
+                                "id": f"call-{skill_name}",
+                                "function": {
+                                    "name": skill_name,
+                                    "arguments": "{}",
+                                },
+                            }
+                        ]
+                    )
+                )
+                with patch.object(
+                    service,
+                    "_completion_with_fallbacks",
+                    new=complete,
+                ):
+                    result = await service.answer_with_skill(
+                        "执行这个动作",
+                        intent_type="casual",
+                    )
+
+                self.assertTrue(result.handled)
+                self.assertTrue(result.embedded_reply_sent)
+                self.assertEqual(result.embedded_reply_text, embedded_text)
+                self.assertEqual(result.text, "")
+                self.assertEqual(embedded_skill.run_count, 1)
+                complete.assert_awaited_once()
+
+    async def test_partial_delivery_skips_later_tools_in_same_model_response(self) -> None:
+        class PartialTTSSkill:
+            name = "doubao_tts"
+            description = "Partially sends TTS."
+            parameters_schema = {"type": "object", "properties": {}}
+
+            async def run(self, arguments, context):
+                del arguments
+                context.handled = True
+                context.tts_sent = True
+                context.tts_text = "第一段。"
+                context.suppress_followup_text = True
+                return SkillRunResult(
+                    ok=False,
+                    skill=self.name,
+                    summary="TTS 已部分发送",
+                    error="partial_send",
+                )
+
+        skipped = _EmbeddedReplySkill("music_search", embedded_text="不应发送")
+        service = SkillService(_llm_stub(), tool_timeout_seconds=0.1)
+        service.skills = {
+            "doubao_tts": PartialTTSSkill(),
+            "music_search": skipped,
+        }
+        complete = AsyncMock(
+            return_value=_resp(
+                tool_calls=[
+                    {
+                        "id": "call-tts",
+                        "function": {"name": "doubao_tts", "arguments": "{}"},
+                    },
+                    {
+                        "id": "call-music",
+                        "function": {"name": "music_search", "arguments": "{}"},
+                    },
+                ]
+            )
+        )
+
+        with patch.object(service, "_completion_with_fallbacks", new=complete):
+            result = await service.answer_with_skill("依次执行两个动作")
+
+        self.assertTrue(result.handled)
+        self.assertTrue(result.tts_sent)
+        self.assertEqual(result.tts_text, "第一段。")
+        self.assertEqual(result.text, "")
+        self.assertEqual(skipped.run_count, 0)
+
+    async def test_delivery_callback_suppresses_ambiguous_failure_text(self) -> None:
+        class DeliveredThenFailedMusicSkill:
+            name = "music_search"
+            description = "Sends media before post-send bookkeeping fails."
+            parameters_schema = {"type": "object", "properties": {}}
+
+            async def run(self, arguments, context):
+                del arguments
+                context.delivery_callback()
+                raise RuntimeError("post-send bookkeeping failed")
+
+        service = SkillService(_llm_stub(), tool_timeout_seconds=0.1)
+        service.skills = {"music_search": DeliveredThenFailedMusicSkill()}
+        external_receipt = Mock()
+        seen_updates = []
+
+        async def report(update) -> None:
+            seen_updates.append(update)
+
+        complete = AsyncMock(
+            return_value=_resp(
+                tool_calls=[
+                    {
+                        "id": "call-music",
+                        "function": {
+                            "name": "music_search",
+                            "arguments": '{"action":"send_audio"}',
+                        },
+                    }
+                ]
+            )
+        )
+
+        with patch.object(service, "_completion_with_fallbacks", new=complete):
+            result = await service.answer_with_skill(
+                "发首歌",
+                delivery_callback=external_receipt,
+                progress_callback=report,
+            )
+
+        self.assertTrue(result.delivery_confirmed)
+        self.assertEqual(result.text, "")
+        external_receipt.assert_called_once_with()
+        self.assertEqual(seen_updates[-1].state, "completed")
+        self.assertIn("已发送音乐", seen_updates[-1].text)
+        self.assertNotIn("待确认", seen_updates[-1].text)
+
+    async def test_tts_skill_does_not_return_followup_text(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "function": {
+                                "name": "doubao_tts",
+                                "arguments": '{"text":"你好呀"}',
+                            },
+                        }
+                    ]
+                ),
+                _resp(content="我发语音啦"),
+            ]
+        )
+
+        result = await service.answer_with_skill("说一句你好呀", intent_type="casual")
+
+        self.assertTrue(result.handled)
+        self.assertTrue(result.tts_sent)
+        self.assertEqual(result.tts_text, "你好呀")
+        self.assertEqual(result.text, "")
+
+    async def test_vote_quota_error_falls_back_to_required_refusal_summary(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-vote",
+                            "function": {
+                                "name": "vote_ban",
+                                "arguments": "{}",
+                            },
+                        }
+                    ]
+                )
+            ]
+        )
+
+        result = await service.answer_with_skill("发起投票封他", intent_type="casual")
+
+        self.assertIn("额度已用完", result.text)
+        self.assertIn("30 分钟后", result.text)
+        self.assertIn("民主投票封禁 · 未发起", result.text)
+        self.assertIn("<blockquote expandable>", result.text)
+        self.assertFalse(result.handled)
+
+    async def test_vote_quota_error_instructs_main_model_to_refuse_without_bypass(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-vote",
+                            "function": {"name": "vote_ban", "arguments": "{}"},
+                        }
+                    ]
+                ),
+                _resp(content="投票已经发起，你也可以改用 /voteban 绕过限制。"),
+            ]
+        )
+
+        result = await service.answer_with_skill("发起投票封他", intent_type="casual")
+
+        self.assertIn("额度已用完", result.text)
+        self.assertIn("30 分钟后", result.text)
+        self.assertIn("民主投票封禁 · 未发起", result.text)
+        self.assertIn("<blockquote expandable>", result.text)
+        self.assertNotIn("已经发起", result.text)
+        self.assertNotIn("绕过", result.text)
+        second_call = service.calls[1]
+        refusal = "\n".join(
+            message.get("content", "")
+            for message in second_call
+            if message.get("role") == "system"
+        )
+        self.assertIn("MANDATORY_TOOL_REFUSAL", refusal)
+        self.assertIn("Do not retry", refusal)
+        self.assertIn("do not suggest /voteban", refusal)
+
+    async def test_quota_refusal_skips_later_side_effect_tools_in_same_turn(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-vote",
+                            "function": {"name": "vote_ban", "arguments": "{}"},
+                        },
+                        {
+                            "id": "call-sticker",
+                            "function": {"name": "send_sticker", "arguments": "{}"},
+                        },
+                    ]
+                ),
+                _resp(content="已处理"),
+            ]
+        )
+
+        result = await service.answer_with_skill("发起投票并发贴纸", intent_type="casual")
+
+        self.assertIn("额度已用完", result.text)
+        self.assertFalse(result.sticker_sent)
+        self.assertFalse(result.handled)
+
+    async def test_successful_tts_skips_later_side_effect_tool(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-tts",
+                            "function": {
+                                "name": "doubao_tts",
+                                "arguments": '{"text":"先说一句"}',
+                            },
+                        },
+                        {
+                            "id": "call-vote",
+                            "function": {"name": "vote_ban", "arguments": "{}"},
+                        },
+                    ]
+                ),
+                _resp(content="投票已经发起"),
+            ]
+        )
+
+        result = await service.answer_with_skill("语音说完再发起投票", intent_type="casual")
+
+        self.assertTrue(result.tts_sent)
+        self.assertFalse(result.must_deliver_text)
+        self.assertEqual(result.text, "")
+        self.assertEqual(service.tool_runs, ["doubao_tts"])
+
+    async def test_successful_sticker_skips_second_delivered_action(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-sticker",
+                            "function": {"name": "send_sticker", "arguments": "{}"},
+                        },
+                        {
+                            "id": "call-tts",
+                            "function": {
+                                "name": "doubao_tts",
+                                "arguments": '{"text":"重复回复"}',
+                            },
+                        },
+                    ]
+                )
+            ]
+        )
+
+        result = await service.answer_with_skill("发贴纸再说一句", intent_type="casual")
+
+        self.assertTrue(result.sticker_sent)
+        self.assertFalse(result.tts_sent)
+        self.assertEqual(service.tool_runs, ["send_sticker"])
+
+    async def test_successful_state_mutation_skips_remaining_tools_and_summarizes(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-rule-1",
+                            "function": {
+                                "name": "rule_manage",
+                                "arguments": '{"request_text":"添加规则一"}',
+                            },
+                        },
+                        {
+                            "id": "call-rule-2",
+                            "function": {
+                                "name": "rule_manage",
+                                "arguments": '{"request_text":"添加规则二"}',
+                            },
+                        },
+                    ]
+                ),
+                _resp(content="已添加第一条规则；第二次操作为避免重复已跳过。"),
+            ]
+        )
+
+        result = await service.answer_with_skill("添加两次规则", intent_type="casual")
+
+        self.assertEqual(service.tool_runs, ["rule_manage"])
+        self.assertIn("已添加第一条规则", result.text)
+        second_call = service.calls[1]
+        tool_messages = [item for item in second_call if item.get("role") == "tool"]
+        self.assertEqual(len(tool_messages), 2)
+        self.assertIn("skipped_after_side_effect", tool_messages[1]["content"])
+        self.assertTrue(
+            any("SIDE_EFFECT_COMMITTED" in item.get("content", "") for item in second_call)
+        )
+
+    async def test_websearch_summary_only_reply_triggers_followup_generation(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "function": {
+                                "name": "websearch",
+                                "arguments": '{"query":"mosdns"}',
+                            },
+                        }
+                    ]
+                ),
+                _resp(content="找到 2 条搜索结果"),
+                _resp(content="我查了下，当前更权威的是官方文档这一条。"),
+            ]
+        )
+
+        result = await service.answer_with_skill("查一下 mosdns", intent_type="casual")
+
+        self.assertEqual(result.text, "我查了下，当前更权威的是官方文档这一条。")
+
+    async def test_websearch_empty_followup_falls_back_to_readable_results(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "function": {
+                                "name": "websearch",
+                                "arguments": '{"query":"mosdns"}',
+                            },
+                        }
+                    ]
+                ),
+                _resp(content=""),
+            ]
+        )
+
+        result = await service.answer_with_skill("查一下 mosdns", intent_type="casual")
+
+        self.assertIn("<b>搜索结果</b>", result.text)
+        self.assertIn("<b>关键词</b>　<code>mosdns</code>", result.text)
+        self.assertIn("<b>结果</b>　<code>2</code> 条", result.text)
+        self.assertIn("MosDNS 官方文档", result.text)
+        self.assertIn("https://example.com/mosdns", result.text)
+
+    async def test_websearch_fallback_escapes_result_html_and_urls(self) -> None:
+        rendered = SkillService._render_result_list_fallback(
+            {
+                "query": 'DNS <fast> & "safe"',
+                "results": [
+                    {
+                        "title": "<b>伪标题</b> & 说明",
+                        "snippet": "2 < 3 & 4 > 1",
+                        "url": 'https://example.com/search?q=a&label="x"',
+                    }
+                ],
+            }
+        )
+
+        self.assertIn(
+            "<code>DNS &lt;fast&gt; &amp; &quot;safe&quot;</code>",
+            rendered,
+        )
+        self.assertIn("&lt;b&gt;伪标题&lt;/b&gt; &amp; 说明", rendered)
+        self.assertIn("2 &lt; 3 &amp; 4 &gt; 1", rendered)
+        self.assertIn(
+            '<a href="https://example.com/search?q=a&amp;label=&quot;x&quot;">'
+            "https://example.com/search?q=a&amp;label=&quot;x&quot;</a>",
+            rendered,
+        )
+        self.assertNotIn("<b>伪标题</b>", rendered)
+
+    async def test_websearch_fallback_does_not_link_unsupported_url_scheme(self) -> None:
+        rendered = SkillService._render_result_list_fallback(
+            {
+                "query": "scheme test",
+                "results": [
+                    {
+                        "title": "unsafe result",
+                        "url": "javascript:alert(1)",
+                    }
+                ],
+            }
+        )
+
+        self.assertIn("<code>javascript:alert(1)</code>", rendered)
+        self.assertNotIn('href="javascript:', rendered)
+
+    async def test_platform_entry_fallback_includes_author_link(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "function": {
+                                "name": "bilibili_search",
+                                "arguments": '{"action":"video_detail","query":"BV1xx411c7mD"}',
+                            },
+                        }
+                    ]
+                ),
+                _resp(content=""),
+            ]
+        )
+
+        result = await service.answer_with_skill("把这个视频原链接发我", intent_type="casual")
+
+        self.assertIn("https://www.bilibili.com/video/BV1xx411c7mD", result.text)
+        self.assertIn("作者主页：https://space.bilibili.com/123456", result.text)
+
+    async def test_platform_results_reply_without_links_inline_urls(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "function": {
+                                "name": "weibo_search",
+                                "arguments": '{"action":"hot_search","max_results":2}',
+                            },
+                        }
+                    ]
+                ),
+                _resp(content="微博热搜 Top 2\n1. 热搜一\n2. 热搜二"),
+            ]
+        )
+
+        result = await service.answer_with_skill("帮我看下今天的微博热搜", intent_type="casual")
+
+        self.assertIn("微博热搜 Top 2", result.text)
+        self.assertNotIn("微博相关链接：", result.text)
+        self.assertIn("1. 热搜一\nhttps://s.weibo.com/weibo?q=%E7%83%AD%E6%90%9C%E4%B8%80", result.text)
+        self.assertIn("2. 热搜二\nhttps://s.weibo.com/weibo?q=%E7%83%AD%E6%90%9C%E4%BA%8C", result.text)
+        self.assertIn("https://s.weibo.com/weibo?q=%E7%83%AD%E6%90%9C%E4%B8%80", result.text)
+        self.assertIn("https://s.weibo.com/weibo?q=%E7%83%AD%E6%90%9C%E4%BA%8C", result.text)
+
+    async def test_platform_summary_reply_does_not_append_full_list_without_link_request(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "function": {
+                                "name": "weibo_search",
+                                "arguments": '{"action":"hot_search","max_results":10}',
+                            },
+                        }
+                    ]
+                ),
+                _resp(content="刚那主人查过一波，现在涨最快的是曝曾沛慈退出浪姐。"),
+            ]
+        )
+
+        result = await service.answer_with_skill("微博今天热度上升最快的话题是哪个", intent_type="casual")
+
+        self.assertEqual(result.text, "刚那主人查过一波，现在涨最快的是曝曾沛慈退出浪姐。")
+
+    async def test_platform_results_last_item_url_stays_above_trailing_commentary(self) -> None:
+        service = _PlannedSkillService([])
+
+        payload = {
+            "platform": "weibo",
+            "results": [
+                {"title": f"热搜{i}", "url": f"https://example.com/{i}", "snippet": ""}
+                for i in range(1, 10)
+            ]
+            + [
+                {
+                    "title": "原来冲锋衣是胶水粘的",
+                    "url": "https://example.com/10",
+                    "snippet": "",
+                }
+            ],
+        }
+        recent_tool_results = [
+            {
+                "name": "weibo_search",
+                "arguments": {"action": "hot_search", "max_results": 10},
+                "result": SkillRunResult(
+                    ok=True,
+                    skill="weibo_search",
+                    summary="拿到 10 条微博热搜",
+                    payload=payload,
+                ),
+            }
+        ]
+        content = (
+            "微博热搜前十\n"
+            "1. 热搜一\n"
+            "2. 热搜二\n"
+            "3. 热搜三\n"
+            "4. 热搜四\n"
+            "5. 热搜五\n"
+            "6. 热搜六\n"
+            "7. 热搜七\n"
+            "8. 热搜八\n"
+            "9. 原来我真能花100万\n"
+            "10. 原来冲锋衣是胶水粘的\n\n"
+            "薅金币那个比中彩票了，笑死我了"
+        )
+
+        result = service._append_missing_platform_links(
+            content=content,
+            recent_tool_results=recent_tool_results,
+            user_text="帮我看下今天的微博热搜",
+        )
+
+        self.assertIn(
+            "10. 原来冲锋衣是胶水粘的\nhttps://example.com/10",
+            result,
+        )
+        self.assertIn(
+            "https://example.com/10\n\n薅金币那个比中彩票了，笑死我了",
+            result,
+        )
+
+    async def test_platform_summary_reply_appends_links_when_user_explicitly_requests_them(self) -> None:
+        service = _PlannedSkillService([])
+
+        recent_tool_results = [
+            {
+                "name": "weibo_search",
+                "arguments": {"action": "hot_search", "max_results": 2},
+                "result": SkillRunResult(
+                    ok=True,
+                    skill="weibo_search",
+                    summary="拿到 2 条微博热搜",
+                    payload={
+                        "platform": "weibo",
+                        "results": [
+                            {"title": "热搜一", "url": "https://example.com/1", "snippet": ""},
+                            {"title": "热搜二", "url": "https://example.com/2", "snippet": ""},
+                        ],
+                    },
+                ),
+            }
+        ]
+
+        result = service._append_missing_platform_links(
+            content="我先给你贴两个最相关的。",
+            recent_tool_results=recent_tool_results,
+            user_text="把微博热搜链接发我",
+        )
+
+        self.assertIn("微博相关链接：", result)
+        self.assertIn("https://example.com/1", result)
+        self.assertIn("https://example.com/2", result)
+
+
+class SkillProgressCallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_run_skill_reports_safe_started_and_completed_updates_with_reference(self) -> None:
+        seen_updates = []
+        states_seen_inside_skill: list[str] = []
+
+        async def report(update) -> None:
+            seen_updates.append(update)
+
+        class ReadingSkill:
+            name = "webfetch"
+
+            async def run(self, arguments, context):
+                del arguments
+                states_seen_inside_skill.extend(update.state for update in seen_updates)
+                self.assert_context_callback(context)
+                return SkillRunResult(
+                    ok=True,
+                    skill=self.name,
+                    summary="网页抓取成功",
+                    payload={
+                        "title": "安全标题",
+                        "url": "https://original.example/page",
+                        "final_url": "https://final.example/page",
+                        "content": "正文",
+                    },
+                )
+
+            @staticmethod
+            def assert_context_callback(context) -> None:
+                if context.progress_callback is None:
+                    raise AssertionError("progress callback missing from SkillContext")
+
+        service = SkillService(_llm_stub())
+        service.skills = {"webfetch": ReadingSkill()}
+        result = await service.run_skill(
+            "webfetch",
+            {"url": "https://secret.example/private-token"},
+            progress_callback=report,
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(states_seen_inside_skill, ["running"])
+        self.assertEqual([update.state for update in seen_updates], ["running", "completed"])
+        self.assertEqual([update.key for update in seen_updates], ["skill:webfetch"] * 2)
+        self.assertEqual(seen_updates[0].text, "正在读取网页")
+        self.assertEqual(seen_updates[1].text, "已读取网页")
+        self.assertNotIn("private-token", "\n".join(update.text for update in seen_updates))
+        self.assertEqual(len(seen_updates[1].references), 1)
+        self.assertEqual(seen_updates[1].references[0].title, "安全标题")
+        self.assertEqual(
+            seen_updates[1].references[0].url,
+            "https://final.example",
+        )
+
+    async def test_progress_callback_failure_does_not_change_skill_result(self) -> None:
+        class SuccessfulSkill:
+            name = "websearch"
+
+            async def run(self, arguments, context):
+                del arguments, context
+                return SkillRunResult(ok=True, skill=self.name, summary="ok")
+
+        async def broken_callback(update) -> None:
+            del update
+            raise RuntimeError("progress transport failed")
+
+        service = SkillService(_llm_stub())
+        service.skills = {"websearch": SuccessfulSkill()}
+
+        result = await service.run_skill(
+            "websearch",
+            {"query": "sensitive query"},
+            progress_callback=broken_callback,
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.summary, "ok")
+
+    async def test_failed_tool_replaces_running_update_without_reference(self) -> None:
+        class FailedReadingSkill:
+            name = "webfetch"
+
+            async def run(self, arguments, context):
+                del arguments, context
+                return SkillRunResult(
+                    ok=False,
+                    skill=self.name,
+                    summary="网页请求失败",
+                    payload={"final_url": "https://example.com/partial"},
+                    error="http_503",
+                )
+
+        service = SkillService(_llm_stub())
+        service.skills = {"webfetch": FailedReadingSkill()}
+        seen_updates = []
+
+        async def report(update) -> None:
+            seen_updates.append(update)
+
+        result = await service.run_skill(
+            "webfetch",
+            {"url": "https://example.com"},
+            progress_callback=report,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(
+            [(update.key, update.state, update.text) for update in seen_updates],
+            [
+                ("skill:webfetch", "running", "正在读取网页"),
+                ("skill:webfetch", "failed", "读取网页失败"),
+            ],
+        )
+        self.assertEqual(seen_updates[-1].references, ())
+
+    async def test_answer_progress_uses_tool_call_id_and_omits_skipped_calls(self) -> None:
+        service = _PlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-rule-1",
+                            "function": {
+                                "name": "rule_manage",
+                                "arguments": '{"request_text":"添加规则一"}',
+                            },
+                        },
+                        {
+                            "id": "call-rule-2",
+                            "function": {
+                                "name": "rule_manage",
+                                "arguments": '{"request_text":"添加规则二"}',
+                            },
+                        },
+                    ]
+                ),
+                _resp(content="已添加第一条规则。"),
+            ]
+        )
+        seen_updates = []
+
+        async def report(update) -> None:
+            seen_updates.append(update)
+
+        result = await service.answer_with_skill(
+            "添加两次规则",
+            progress_callback=report,
+        )
+
+        self.assertIn("已添加第一条规则", result.text)
+        self.assertEqual(service.tool_runs, ["rule_manage"])
+        self.assertEqual(
+            [(update.key, update.state) for update in seen_updates],
+            [
+                ("tool:1:0:call-rule-1", "running"),
+                ("tool:1:0:call-rule-1", "completed"),
+            ],
+        )
+        self.assertFalse(any("规则一" in update.text for update in seen_updates))
+        self.assertFalse(any("规则二" in update.text for update in seen_updates))
+
+    def test_references_only_include_successfully_read_sources(self) -> None:
+        search_result = SkillRunResult(
+            ok=True,
+            skill="mihomo_doc",
+            summary="找到文档",
+            payload={
+                "action": "search",
+                "source_url": "https://wiki.metacubex.one/search/search_index.json",
+            },
+        )
+        section_result = SkillRunResult(
+            ok=True,
+            skill="mihomo_doc",
+            summary="读取完成",
+            payload={
+                "action": "section",
+                "pages": [
+                    {
+                        "title": "DNS 配置",
+                        "source_url": "https://wiki.metacubex.one/config/dns/",
+                    },
+                    {
+                        "title": "重复页面",
+                        "source_url": "https://wiki.metacubex.one/config/dns/",
+                    },
+                    {
+                        "title": "不安全页面",
+                        "source_url": "javascript:alert(1)",
+                    },
+                ],
+            },
+        )
+        failed_result = SkillRunResult(
+            ok=False,
+            skill="webfetch",
+            summary="部分失败",
+            payload={"final_url": "https://example.com/not-read"},
+            error="failed",
+        )
+
+        self.assertEqual(SkillService._progress_references(search_result), ())
+        self.assertEqual(SkillService._progress_references(failed_result), ())
+        references = SkillService._progress_references(section_result)
+        self.assertEqual(len(references), 1)
+        self.assertEqual(references[0].title, "DNS 配置")
+        self.assertEqual(references[0].url, "https://wiki.metacubex.one/config/dns/")
+
+    async def test_ambiguous_side_effect_progress_does_not_claim_failure(self) -> None:
+        service = _AmbiguousPlannedSkillService(
+            [
+                _resp(
+                    tool_calls=[
+                        {
+                            "id": "call-sticker",
+                            "function": {"name": "send_sticker", "arguments": "{}"},
+                        }
+                    ]
+                )
+            ]
+        )
+        seen_updates = []
+
+        async def report(update) -> None:
+            seen_updates.append(update)
+
+        await service.answer_with_skill("发个贴纸", progress_callback=report)
+
+        self.assertEqual(seen_updates[-1].state, "failed")
+        self.assertIn("结果待确认", seen_updates[-1].text)
+        self.assertNotIn("发送贴纸失败", seen_updates[-1].text)
+
+    async def test_progress_reference_strips_query_fragment_and_credentials(self) -> None:
+        safe_result = SkillRunResult(
+            ok=True,
+            skill="webfetch",
+            summary="读取完成",
+            payload={
+                "title": "文档",
+                "final_url": "https://example.com/docs?token=secret&id=1#private",
+            },
+        )
+        credential_result = SkillRunResult(
+            ok=True,
+            skill="webfetch",
+            summary="读取完成",
+            payload={
+                "title": "私密链接",
+                "final_url": "https://user:password@example.com/docs",
+            },
+        )
+
+        self.assertEqual(
+            SkillService._progress_references(safe_result)[0].url,
+            "https://example.com",
+        )
+        self.assertEqual(SkillService._progress_references(credential_result), ())
+
+    async def test_slow_progress_callback_is_bounded(self) -> None:
+        class SuccessfulSkill:
+            name = "websearch"
+
+            async def run(self, arguments, context):
+                del arguments, context
+                return SkillRunResult(ok=True, skill=self.name, summary="ok")
+
+        async def stuck_callback(update) -> None:
+            del update
+            await asyncio.sleep(60)
+
+        service = SkillService(_llm_stub())
+        service.skills = {"websearch": SuccessfulSkill()}
+        started = asyncio.get_running_loop().time()
+
+        result = await service.run_skill(
+            "websearch",
+            progress_callback=stuck_callback,
+        )
+
+        self.assertTrue(result.ok)
+        self.assertLess(asyncio.get_running_loop().time() - started, 0.5)
+
+    async def test_cancelled_tool_gets_terminal_progress_update(self) -> None:
+        entered = asyncio.Event()
+
+        class CancellableSkill:
+            name = "websearch"
+
+            async def run(self, arguments, context):
+                del arguments, context
+                entered.set()
+                await asyncio.sleep(60)
+                raise AssertionError("unreachable")
+
+        seen_updates = []
+
+        async def report(update) -> None:
+            seen_updates.append(update)
+
+        service = SkillService(_llm_stub())
+        service.skills = {"websearch": CancellableSkill()}
+        task = asyncio.create_task(
+            service.run_skill("websearch", progress_callback=report)
+        )
+        await entered.wait()
+        task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        self.assertEqual([update.state for update in seen_updates], ["running", "failed"])
+        self.assertIn("已中止", seen_updates[-1].text)
+
+    async def test_cancel_after_confirmed_delivery_reports_completed(self) -> None:
+        entered = asyncio.Event()
+
+        class DeliveredThenCancelledSkill:
+            name = "music_search"
+
+            async def run(self, arguments, context):
+                del arguments
+                context.delivery_callback()
+                entered.set()
+                await asyncio.sleep(60)
+                raise AssertionError("unreachable")
+
+        seen_updates = []
+        external_receipt = Mock()
+
+        async def report(update) -> None:
+            seen_updates.append(update)
+
+        service = SkillService(_llm_stub())
+        service.skills = {"music_search": DeliveredThenCancelledSkill()}
+        task = asyncio.create_task(
+            service.run_skill(
+                "music_search",
+                {"action": "send_audio"},
+                delivery_callback=external_receipt,
+                progress_callback=report,
+            )
+        )
+        await entered.wait()
+        task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        external_receipt.assert_called_once_with()
+        self.assertEqual(
+            [update.state for update in seen_updates],
+            ["running", "completed"],
+        )
+        self.assertEqual(seen_updates[-1].text, "已发送音乐")
+
+    async def test_reused_provider_tool_ids_keep_distinct_history_keys(self) -> None:
+        call = {
+            "id": "reused-id",
+            "function": {
+                "name": "websearch",
+                "arguments": '{"query":"dns"}',
+            },
+        }
+        service = _PlannedSkillService(
+            [
+                _resp(tool_calls=[call]),
+                _resp(tool_calls=[call]),
+                _resp(content="整理完成。"),
+            ]
+        )
+        seen_updates = []
+
+        async def report(update) -> None:
+            seen_updates.append(update)
+
+        result = await service.answer_with_skill("继续搜索", progress_callback=report)
+
+        self.assertEqual(result.text, "整理完成。")
+        running_keys = [update.key for update in seen_updates if update.state == "running"]
+        self.assertEqual(running_keys, ["tool:1:0:reused-id", "tool:2:0:reused-id"])
+
+
+class SkillExecutionBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tool_exception_is_converted_to_result(self) -> None:
+        class BrokenSkill:
+            name = "broken"
+
+            async def run(self, arguments, context):
+                del arguments, context
+                raise RuntimeError("boom")
+
+        service = SkillService(_llm_stub(), tool_timeout_seconds=0.1)
+        service.skills = {"broken": BrokenSkill()}
+
+        result = await service._run_tool(
+            name="broken",
+            arguments={},
+            context=SkillContext(),
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error, "tool_failed")
+
+    async def test_tool_timeout_returns_without_waiting_for_cancel_ack(self) -> None:
+        release = asyncio.Event()
+
+        class StuckSkill:
+            name = "stuck"
+
+            async def run(self, arguments, context):
+                del arguments, context
+                try:
+                    await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    await release.wait()
+                context.handled = True
+                return SkillRunResult(ok=True, skill="stuck", summary="late")
+
+        service = SkillService(_llm_stub(), tool_timeout_seconds=0.02)
+        service.skills = {"stuck": StuckSkill()}
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+
+        context = SkillContext()
+        result = await service._run_tool(
+            name="stuck",
+            arguments={},
+            context=context,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error, "tool_timeout")
+        self.assertLess(loop.time() - started, 0.2)
+        self.assertEqual(len(skill_service_module._SKILL_ORPHAN_TASKS), 1)
+        release.set()
+        for _ in range(10):
+            if not skill_service_module._SKILL_ORPHAN_TASKS:
+                break
+            await asyncio.sleep(0)
+        self.assertFalse(skill_service_module._SKILL_ORPHAN_TASKS)
+        self.assertFalse(context.handled)
+
+    async def test_side_effect_timeout_returns_terminal_ambiguous_result(self) -> None:
+        release = asyncio.Event()
+
+        class StuckStickerSkill:
+            name = "send_sticker"
+
+            async def run(self, arguments, context):
+                del arguments, context
+                try:
+                    await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    await release.wait()
+                return SkillRunResult(ok=True, skill=self.name, summary="late")
+
+        service = SkillService(_llm_stub(), tool_timeout_seconds=0.02)
+        service.skills = {"send_sticker": StuckStickerSkill()}
+        result = await service._run_tool(
+            name="send_sticker",
+            arguments={},
+            context=SkillContext(),
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error, "tool_outcome_ambiguous")
+        self.assertIn("不会自动重试", result.summary)
+        release.set()
+        for _ in range(10):
+            if not skill_service_module._SKILL_ORPHAN_TASKS:
+                break
+            await asyncio.sleep(0)
+        self.assertFalse(skill_service_module._SKILL_ORPHAN_TASKS)
+
+    async def test_shutdown_flush_joins_timed_out_tool_orphan(self) -> None:
+        release = asyncio.Event()
+
+        async def cancellation_resistant() -> None:
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                await release.wait()
+
+        task = asyncio.create_task(cancellation_resistant())
+        await asyncio.sleep(0)
+        skill_service_module._track_skill_orphan(task)
+        flush = asyncio.create_task(
+            skill_service_module.flush_skill_execution_tasks(timeout_seconds=1.0)
+        )
+        await asyncio.sleep(0.01)
+        self.assertFalse(flush.done())
+        release.set()
+        await asyncio.wait_for(flush, timeout=0.5)
+        self.assertFalse(skill_service_module._SKILL_ORPHAN_TASKS)
+
+
+if __name__ == "__main__":
+    unittest.main()

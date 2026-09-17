@@ -1,0 +1,70 @@
+"""Message task sum type — pure data contract for the message queue.
+
+Three frozen dataclasses replace the monolithic ``MessageTask`` that lived in
+``message_queue``.  The module imports nothing from ``ccgram.handlers``,
+keeping the dependency graph acyclic.
+"""
+
+import time
+from dataclasses import dataclass, field
+from typing import Literal, TypeAlias
+
+from ccgram.delivery_contract import DeliveryReceipt
+
+ContentType: TypeAlias = Literal["text", "thinking", "tool_use", "tool_result"]
+MessageRole: TypeAlias = Literal["assistant", "user"]
+
+
+@dataclass(frozen=True, slots=True)
+class ContentTask:
+    """A Telegram message to deliver."""
+
+    window_id: str
+    parts: tuple[str, ...]
+    content_type: ContentType = "text"
+    role: MessageRole = "assistant"
+    tool_use_id: str | None = None
+    tool_name: str | None = None
+    thread_id: int | None = None
+    chat_id: int | None = None
+    # Transcript producers set receipts for watermark cycles; routing carries
+    # them unchanged until the queue worker settles delivery.
+    delivery_receipts: tuple[DeliveryReceipt, ...] = field(
+        compare=False, hash=False, default=()
+    )
+    # Queue-internal marker: each part is an independently rendered text task
+    # which may be delivered together in one Telegram message.
+    is_text_batch: bool = field(compare=False, hash=False, default=False)
+    # Source identity makes a confirmed backlog skip narrowly purgeable.
+    source_session_id: str | None = None
+    source_checkpoint: int | None = None
+    enqueued_monotonic: float = field(default_factory=time.monotonic, compare=False)
+    is_backlog_notice: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class StatusUpdateTask:
+    """An update to the status bubble (edit-in-place or send if missing)."""
+
+    window_id: str
+    text: str | None
+    thread_id: int | None = None
+    # Poll refreshes are replaceable. Hook notices are durable and must not be
+    # discarded merely because Telegram temporarily rate-limits the chat.
+    transient: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class StatusClearTask:
+    """A request to clear the status bubble for a topic."""
+
+    window_id: str | None
+    thread_id: int | None = None
+
+
+MessageTask: TypeAlias = ContentTask | StatusUpdateTask | StatusClearTask
+
+
+def thread_key(thread_id: int | None) -> int:
+    """Normalise an optional thread_id to a dict key (None -> 0)."""
+    return thread_id or 0

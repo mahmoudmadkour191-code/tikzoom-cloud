@@ -1,0 +1,645 @@
+from __future__ import annotations
+
+import asyncio
+from inspect import isawaitable
+import time
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from itertools import count
+from typing import Any, Awaitable, Callable, Optional, TypeVar
+
+from config import (
+    DOWNLOAD_QUEUE_IDLE_SCALE_DOWN_SECONDS,
+    DOWNLOAD_QUEUE_MAX_SIZE,
+    DOWNLOAD_QUEUE_MAX_WORKERS,
+    DOWNLOAD_QUEUE_MIN_WORKERS,
+    DOWNLOAD_QUEUE_PER_USER_MAX_PENDING,
+    DOWNLOAD_QUEUE_PER_USER_PENDING_TIMEOUT_SECONDS,
+    DOWNLOAD_QUEUE_PER_USER_RATE_LIMIT,
+    DOWNLOAD_QUEUE_PER_USER_WINDOW_SECONDS,
+    DOWNLOAD_QUEUE_SCALE_COOLDOWN_SECONDS,
+)
+from services.logger import logger as logging
+
+logging = logging.bind(service="download_queue")
+
+T = TypeVar("T")
+
+_SCOPE_PRUNE_INTERVAL_SECONDS = 60.0
+
+
+class QueueRateLimitError(Exception):
+    def __init__(self, retry_after: float):
+        self.retry_after = max(0.0, retry_after)
+        super().__init__(f"Rate limit exceeded. Retry after {self.retry_after:.1f}s.")
+
+
+class QueueBackpressureError(Exception):
+    def __init__(self, position: int):
+        self.position = max(1, int(position))
+        super().__init__(f"Queue is full. Position: {self.position}.")
+
+
+class QueueShutdownError(Exception):
+    """Raised when a job is submitted while the queue is stopping."""
+
+
+@dataclass(slots=True)
+class QueueTicket:
+    position: int
+    queue_size: int
+    active_workers: int
+
+
+@dataclass(slots=True)
+class QueueMetricSnapshot:
+    count: int
+    processing_p50_ms: float
+    processing_p95_ms: float
+    queue_wait_p50_ms: float
+    queue_wait_p95_ms: float
+
+
+@dataclass(slots=True)
+class QueueLoadSnapshot:
+    queued_jobs: int
+    active_jobs: int
+    active_workers: int
+
+
+@dataclass(frozen=True, slots=True)
+class _QueueScopeKey:
+    user_id: int
+    chat_id: Optional[int]
+
+
+@dataclass(order=True)
+class _QueuedJob:
+    priority: int
+    order: int
+    created_at: float = field(compare=False)
+    source: str = field(compare=False)
+    user_id: Optional[int] = field(compare=False)
+    chat_id: Optional[int] = field(compare=False, default=None)
+    scope_key: Optional[_QueueScopeKey] = field(compare=False, default=None)
+    request_key: Optional[tuple[_QueueScopeKey, str]] = field(compare=False, default=None)
+    runner: Optional[Callable[[], Awaitable[Any]]] = field(compare=False, default=None)
+    future: Optional[asyncio.Future] = field(compare=False, default=None)
+    stop_worker: bool = field(compare=False, default=False)
+
+
+class AdaptiveDownloadQueue:
+    """
+    Shared priority queue for heavy download jobs.
+
+    Features:
+    - Prioritised scheduling (lower number = higher priority)
+    - Per-user rate limiting and bounded in-flight slots
+    - Queue position feedback
+    - p50/p95 runtime + queue wait metrics per source
+    - Adaptive worker scaling based on real queue pressure
+    """
+
+    def __init__(
+        self,
+        *,
+        min_workers: int = 4,
+        max_workers: int = 10,
+        max_queue_size: int = 300,
+        per_user_rate_limit: int = 5,
+        per_user_window_seconds: float = 10.0,
+        per_user_max_pending: int = 4,
+        per_user_pending_timeout_seconds: float = 0.0,
+        metric_window: int = 300,
+    ) -> None:
+        if min_workers < 1:
+            raise ValueError("min_workers must be >= 1")
+        if max_workers < min_workers:
+            raise ValueError("max_workers must be >= min_workers")
+        if max_queue_size < 1:
+            raise ValueError("max_queue_size must be >= 1")
+        if per_user_rate_limit < 1:
+            raise ValueError("per_user_rate_limit must be >= 1")
+        if per_user_window_seconds <= 0:
+            raise ValueError("per_user_window_seconds must be > 0")
+        if per_user_max_pending < 1:
+            raise ValueError("per_user_max_pending must be >= 1")
+        if per_user_pending_timeout_seconds < 0:
+            raise ValueError("per_user_pending_timeout_seconds must be >= 0")
+
+        self.min_workers = int(min_workers)
+        self.max_workers = int(max_workers)
+        self.max_queue_size = int(max_queue_size)
+        self.per_user_rate_limit = int(per_user_rate_limit)
+        self.per_user_window_seconds = float(per_user_window_seconds)
+        self.per_user_max_pending = int(per_user_max_pending)
+        self.per_user_pending_timeout_seconds = float(per_user_pending_timeout_seconds)
+
+        self._queue: asyncio.PriorityQueue[_QueuedJob] = asyncio.PriorityQueue()
+        self._sequence = count(1)
+        self._worker_sequence = count(1)
+        self._workers: dict[int, asyncio.Task] = {}
+        self._lock = asyncio.Lock()
+        self._started = False
+        self._stopping = False
+
+        self._user_recent: dict[_QueueScopeKey, deque[float]] = defaultdict(deque)
+        self._user_pending: dict[_QueueScopeKey, int] = defaultdict(int)
+        self._user_slots: dict[_QueueScopeKey, asyncio.Semaphore] = {}
+        self._user_submit_locks: dict[_QueueScopeKey, asyncio.Lock] = {}
+        self._request_refs: dict[tuple[_QueueScopeKey, str], int] = defaultdict(int)
+
+        self._processing_samples: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=metric_window))
+        self._queue_wait_samples: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=metric_window))
+        self._last_scale_action = 0.0
+        self._scale_cooldown_seconds = max(1.0, float(DOWNLOAD_QUEUE_SCALE_COOLDOWN_SECONDS))
+        self._idle_scale_down_seconds = max(5.0, float(DOWNLOAD_QUEUE_IDLE_SCALE_DOWN_SECONDS))
+        self._last_non_empty_queue = time.monotonic()
+        self._last_scope_prune = time.monotonic()
+        self._completed_jobs = 0
+        self._active_jobs = 0
+
+    @property
+    def active_workers(self) -> int:
+        return len(self._workers)
+
+    def load_snapshot(self) -> QueueLoadSnapshot:
+        return QueueLoadSnapshot(
+            queued_jobs=self._queue.qsize(),
+            active_jobs=max(0, self._active_jobs),
+            active_workers=self.active_workers,
+        )
+
+    async def submit(
+        self,
+        runner: Callable[[], Awaitable[T]],
+        *,
+        priority: int,
+        source: str,
+        user_id: Optional[int] = None,
+        chat_id: Optional[int] = None,
+        request_id: Optional[str] = None,
+        on_queued: Optional[Callable[[QueueTicket], Awaitable[None] | None]] = None,
+    ) -> T:
+        await self._ensure_started()
+        submit_started_at = time.perf_counter()
+
+        reserved_user_slot = False
+        queued = False
+        scope_key: Optional[_QueueScopeKey] = None
+        request_key: Optional[tuple[_QueueScopeKey, str]] = None
+        if user_id is not None:
+            scope_key = self._build_scope_key(user_id, chat_id)
+            if request_id:
+                request_key = (scope_key, str(request_id))
+
+            submit_lock = self._user_submit_locks.setdefault(scope_key, asyncio.Lock())
+            async with submit_lock:
+                if request_key is not None:
+                    refs = self._request_refs.get(request_key, 0)
+                    if refs <= 0:
+                        self._enforce_rate_limit(scope_key)
+                        await self._reserve_user_slot(scope_key)
+                        reserved_user_slot = True
+                    self._request_refs[request_key] = refs + 1
+                else:
+                    self._enforce_rate_limit(scope_key)
+                    await self._reserve_user_slot(scope_key)
+                    reserved_user_slot = True
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[T] = loop.create_future()
+        try:
+            async with self._lock:
+                if self._stopping or not self._started:
+                    raise QueueShutdownError("Download queue is shutting down")
+                if self._queue.qsize() >= self.max_queue_size:
+                    raise QueueBackpressureError(position=self._queue.qsize() + 1)
+
+                job = _QueuedJob(
+                    priority=int(priority),
+                    order=next(self._sequence),
+                    created_at=time.monotonic(),
+                    source=source or "generic",
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    scope_key=scope_key,
+                    request_key=request_key,
+                    runner=runner,
+                    future=future,
+                )
+                self._queue.put_nowait(job)
+            queued = True
+            self._last_non_empty_queue = time.monotonic()
+            logging.event(
+                "queue_job_queued",
+                source=source or "generic",
+                user_id=user_id,
+                chat_id=chat_id,
+                request_id=request_id,
+                queue_depth=self._queue.qsize(),
+                priority=int(priority),
+            )
+            await self._maybe_autotune()
+
+            if on_queued:
+                ticket = QueueTicket(
+                    position=self._queue.qsize(),
+                    queue_size=self._queue.qsize(),
+                    active_workers=self.active_workers,
+                )
+                try:
+                    maybe = on_queued(ticket)
+                    if isawaitable(maybe):
+                        await maybe
+                except Exception as exc:
+                    logging.debug(
+                        "Queue on_queued callback failed: source=%s user_id=%s error=%s",
+                        source,
+                        user_id,
+                        exc,
+                    )
+
+            result = await future
+            logging.perf(
+                "queue_job_total",
+                duration_ms=(time.perf_counter() - submit_started_at) * 1000.0,
+                source=source or "generic",
+                user_id=user_id,
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            return result
+        except Exception:
+            if user_id is not None and not queued:
+                if request_key is not None:
+                    self._decrement_request_ref(
+                        request_key,
+                        scope_key,
+                        release_slot_if_last=reserved_user_slot,
+                    )
+                elif reserved_user_slot:
+                    assert scope_key is not None
+                    self._release_user_slot(scope_key)
+            raise
+
+    async def metrics_snapshot(self) -> dict[str, QueueMetricSnapshot]:
+        snapshot: dict[str, QueueMetricSnapshot] = {}
+        for source in set(self._processing_samples.keys()) | set(self._queue_wait_samples.keys()):
+            processing = list(self._processing_samples[source])
+            waiting = list(self._queue_wait_samples[source])
+            count = max(len(processing), len(waiting))
+            snapshot[source] = QueueMetricSnapshot(
+                count=count,
+                processing_p50_ms=self._percentile(processing, 0.50) * 1000.0,
+                processing_p95_ms=self._percentile(processing, 0.95) * 1000.0,
+                queue_wait_p50_ms=self._percentile(waiting, 0.50) * 1000.0,
+                queue_wait_p95_ms=self._percentile(waiting, 0.95) * 1000.0,
+            )
+        return snapshot
+
+    async def shutdown(self) -> None:
+        async with self._lock:
+            if not self._started and not self._workers:
+                return
+            if not self._stopping:
+                self._stopping = True
+                for _ in range(len(self._workers)):
+                    self._queue.put_nowait(
+                        _QueuedJob(
+                            priority=10**9,
+                            order=next(self._sequence),
+                            created_at=time.monotonic(),
+                            source="system",
+                            user_id=None,
+                            stop_worker=True,
+                        )
+                    )
+            workers = tuple(self._workers.values())
+
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
+        async with self._lock:
+            self._workers.clear()
+            self._started = False
+            self._stopping = False
+
+    async def _ensure_started(self) -> None:
+        if self._started and not self._stopping:
+            return
+
+        async with self._lock:
+            if self._stopping:
+                raise QueueShutdownError("Download queue is shutting down")
+            if self._started:
+                return
+            for _ in range(self.min_workers):
+                self._spawn_worker_locked()
+            self._started = True
+            logging.event(
+                "queue_started",
+                workers=self.min_workers,
+                max_workers=self.max_workers,
+                queue_cap=self.max_queue_size,
+            )
+
+    def _spawn_worker_locked(self) -> None:
+        worker_id = next(self._worker_sequence)
+        task = asyncio.create_task(self._worker_loop(worker_id), name=f"download-queue-worker-{worker_id}")
+        self._workers[worker_id] = task
+
+        def _cleanup(_task: asyncio.Task, wid: int = worker_id) -> None:
+            self._workers.pop(wid, None)
+
+        task.add_done_callback(_cleanup)
+
+    async def _worker_loop(self, worker_id: int) -> None:
+        while True:
+            job = await self._queue.get()
+            if job.stop_worker:
+                self._queue.task_done()
+                return
+
+            started = time.monotonic()
+            queue_wait = max(0.0, started - job.created_at)
+            self._active_jobs += 1
+
+            try:
+                assert job.runner is not None
+                result = await job.runner()
+            except Exception as exc:
+                if job.future and not job.future.done():
+                    job.future.set_exception(exc)
+            else:
+                if job.future and not job.future.done():
+                    job.future.set_result(result)
+            finally:
+                self._active_jobs = max(0, self._active_jobs - 1)
+                self._queue.task_done()
+                if job.scope_key is not None:
+                    if job.request_key is not None:
+                        self._decrement_request_ref(
+                            job.request_key,
+                            job.scope_key,
+                            release_slot_if_last=True,
+                        )
+                    else:
+                        self._release_user_slot(job.scope_key)
+
+                processing = max(0.0, time.monotonic() - started)
+                self._record_metric(job.source, queue_wait, processing)
+                await self._maybe_autotune()
+
+    async def _reserve_user_slot(self, scope_key: _QueueScopeKey) -> None:
+        semaphore = self._user_slots.get(scope_key)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(self.per_user_max_pending)
+            self._user_slots[scope_key] = semaphore
+
+        timeout = self.per_user_pending_timeout_seconds
+        if timeout > 0:
+            try:
+                await asyncio.wait_for(semaphore.acquire(), timeout=timeout)
+            except asyncio.TimeoutError as exc:
+                pending = max(1, self._user_pending.get(scope_key, self.per_user_max_pending))
+                raise QueueBackpressureError(position=pending + 1) from exc
+        else:
+            await semaphore.acquire()
+
+        self._user_pending[scope_key] += 1
+
+    def _release_user_slot(self, scope_key: _QueueScopeKey) -> None:
+        semaphore = self._user_slots.get(scope_key)
+        if semaphore is not None:
+            semaphore.release()
+
+        remaining = self._user_pending.get(scope_key, 0) - 1
+        if remaining <= 0:
+            self._user_pending.pop(scope_key, None)
+            return
+        self._user_pending[scope_key] = remaining
+
+    def _decrement_request_ref(
+        self,
+        request_key: tuple[_QueueScopeKey, str],
+        scope_key: Optional[_QueueScopeKey],
+        *,
+        release_slot_if_last: bool,
+    ) -> None:
+        refs = self._request_refs.get(request_key, 0) - 1
+        if refs <= 0:
+            self._request_refs.pop(request_key, None)
+            if release_slot_if_last and scope_key is not None:
+                self._release_user_slot(scope_key)
+            return
+        self._request_refs[request_key] = refs
+
+
+    def _record_metric(self, source: str, queue_wait: float, processing: float) -> None:
+        source_key = source or "generic"
+        self._queue_wait_samples[source_key].append(queue_wait)
+        self._processing_samples[source_key].append(processing)
+        self._completed_jobs += 1
+
+        if self._completed_jobs % 25 == 0:
+            snap = self._build_global_snapshot()
+            logging.perf(
+                "queue_metrics_snapshot",
+                duration_ms=snap.processing_p95_ms,
+                jobs=self._completed_jobs,
+                workers=self.active_workers,
+                depth=self._queue.qsize(),
+                queue_wait_p50_ms=round(snap.queue_wait_p50_ms, 2),
+                queue_wait_p95_ms=round(snap.queue_wait_p95_ms, 2),
+                processing_p50_ms=round(snap.processing_p50_ms, 2),
+                processing_p95_ms=round(snap.processing_p95_ms, 2),
+                message=(
+                    "Queue metrics snapshot: jobs=%s workers=%s depth=%s "
+                    "queue_wait_p95=%.0fms processing_p95=%.0fms"
+                )
+                % (
+                    self._completed_jobs,
+                    self.active_workers,
+                    self._queue.qsize(),
+                    snap.queue_wait_p95_ms,
+                    snap.processing_p95_ms,
+                ),
+            )
+
+    async def _maybe_autotune(self) -> None:
+        if self._stopping:
+            return
+        now = time.monotonic()
+        if now - self._last_scope_prune >= _SCOPE_PRUNE_INTERVAL_SECONDS:
+            self._last_scope_prune = now
+            self._prune_idle_scopes()
+        if now - self._last_scale_action < self._scale_cooldown_seconds:
+            return
+
+        async with self._lock:
+            if self._stopping:
+                return
+            now = time.monotonic()
+            if now - self._last_scale_action < self._scale_cooldown_seconds:
+                return
+
+            current_workers = len(self._workers)
+            if current_workers <= 0:
+                self._spawn_worker_locked()
+                self._last_scale_action = now
+                return
+
+            queue_depth = self._queue.qsize()
+            snap = self._build_global_snapshot()
+            wait_p95 = snap.queue_wait_p95_ms / 1000.0
+
+            scale_up = (
+                current_workers < self.max_workers
+                and (queue_depth > current_workers * 2 or wait_p95 > 2.0)
+            )
+            if scale_up:
+                self._spawn_worker_locked()
+                self._last_scale_action = now
+                logging.event(
+                    "queue_scale_up",
+                    workers=len(self._workers),
+                    depth=queue_depth,
+                    wait_p95_s=round(wait_p95, 2),
+                )
+                return
+
+            idle_for = now - self._last_non_empty_queue
+            scale_down = (
+                current_workers > self.min_workers
+                and queue_depth == 0
+                and wait_p95 < 0.25
+                and idle_for > self._idle_scale_down_seconds
+            )
+            if scale_down:
+                self._queue.put_nowait(
+                    _QueuedJob(
+                        priority=10**9,
+                        order=next(self._sequence),
+                        created_at=time.monotonic(),
+                        source="system",
+                        user_id=None,
+                        stop_worker=True,
+                    )
+                )
+                self._last_scale_action = now
+                logging.event(
+                    "queue_scale_down_requested",
+                    workers=max(self.min_workers, current_workers - 1),
+                    idle_for_s=round(idle_for, 2),
+                )
+
+    def _enforce_rate_limit(self, scope_key: _QueueScopeKey) -> None:
+        now = time.monotonic()
+        bucket = self._user_recent[scope_key]
+        while bucket and now - bucket[0] > self.per_user_window_seconds:
+            bucket.popleft()
+
+        if len(bucket) >= self.per_user_rate_limit:
+            retry_after = self.per_user_window_seconds - (now - bucket[0])
+            raise QueueRateLimitError(retry_after=retry_after)
+
+        bucket.append(now)
+
+    def _prune_idle_scopes(self) -> None:
+        """Drop per-scope rate/slot/lock state that is no longer in use.
+
+        Without this, _user_recent/_user_slots/_user_submit_locks gain an
+        entry per unique (user_id, chat_id) forever. Only fully idle scopes
+        are removed: no pending jobs, no in-flight request refs, an unheld
+        submit lock and an expired rate window — which also rules out tasks
+        that were woken on the lock/semaphore but have not resumed yet.
+        This runs synchronously on the event loop, so it cannot interleave
+        with submit()'s critical sections.
+        """
+        now = time.monotonic()
+        for scope_key, bucket in list(self._user_recent.items()):
+            while bucket and now - bucket[0] > self.per_user_window_seconds:
+                bucket.popleft()
+            if not bucket:
+                del self._user_recent[scope_key]
+
+        active_request_scopes = {request_key[0] for request_key in self._request_refs}
+        for scope_key in self._user_slots.keys() | self._user_submit_locks.keys():
+            if not self._scope_is_idle(scope_key, active_request_scopes):
+                continue
+            self._user_slots.pop(scope_key, None)
+            self._user_submit_locks.pop(scope_key, None)
+
+    def _scope_is_idle(
+        self,
+        scope_key: _QueueScopeKey,
+        active_request_scopes: set[_QueueScopeKey],
+    ) -> bool:
+        if self._user_pending.get(scope_key, 0) > 0:
+            return False
+        if scope_key in active_request_scopes:
+            return False
+        if scope_key in self._user_recent:
+            return False
+        lock = self._user_submit_locks.get(scope_key)
+        return lock is None or not lock.locked()
+
+    @staticmethod
+    def _build_scope_key(user_id: int, chat_id: Optional[int]) -> _QueueScopeKey:
+        return _QueueScopeKey(
+            user_id=int(user_id),
+            chat_id=int(chat_id) if chat_id is not None else None,
+        )
+
+    def _build_global_snapshot(self) -> QueueMetricSnapshot:
+        all_processing: list[float] = []
+        all_waiting: list[float] = []
+        for values in self._processing_samples.values():
+            all_processing.extend(values)
+        for values in self._queue_wait_samples.values():
+            all_waiting.extend(values)
+
+        count = max(len(all_processing), len(all_waiting))
+        return QueueMetricSnapshot(
+            count=count,
+            processing_p50_ms=self._percentile(all_processing, 0.50) * 1000.0,
+            processing_p95_ms=self._percentile(all_processing, 0.95) * 1000.0,
+            queue_wait_p50_ms=self._percentile(all_waiting, 0.50) * 1000.0,
+            queue_wait_p95_ms=self._percentile(all_waiting, 0.95) * 1000.0,
+        )
+
+    @staticmethod
+    def _percentile(values: list[float], q: float) -> float:
+        if not values:
+            return 0.0
+        if len(values) == 1:
+            return values[0]
+
+        ordered = sorted(values)
+        idx = max(0, min(len(ordered) - 1, int(round(q * (len(ordered) - 1)))))
+        return ordered[idx]
+
+
+_download_queue: Optional[AdaptiveDownloadQueue] = None
+
+
+def get_download_queue() -> AdaptiveDownloadQueue:
+    global _download_queue
+    if _download_queue is None:
+        _download_queue = AdaptiveDownloadQueue(
+            min_workers=DOWNLOAD_QUEUE_MIN_WORKERS,
+            max_workers=DOWNLOAD_QUEUE_MAX_WORKERS,
+            max_queue_size=DOWNLOAD_QUEUE_MAX_SIZE,
+            per_user_rate_limit=DOWNLOAD_QUEUE_PER_USER_RATE_LIMIT,
+            per_user_window_seconds=DOWNLOAD_QUEUE_PER_USER_WINDOW_SECONDS,
+            per_user_max_pending=DOWNLOAD_QUEUE_PER_USER_MAX_PENDING,
+            per_user_pending_timeout_seconds=DOWNLOAD_QUEUE_PER_USER_PENDING_TIMEOUT_SECONDS,
+        )
+    return _download_queue
+
+
+async def shutdown_download_queue() -> None:
+    global _download_queue
+    if _download_queue is not None:
+        await _download_queue.shutdown()
+    _download_queue = None

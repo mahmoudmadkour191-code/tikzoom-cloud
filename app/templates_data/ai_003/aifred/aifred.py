@@ -1,0 +1,1445 @@
+"""
+AIfred Intelligence - Reflex Edition
+
+Full Gradio-Style UI with Single Column Layout
+"""
+
+import reflex as rx
+from .state import AIState, ChatHistoryState
+from .theme import COLORS
+from .lib.config import (
+    UI_CHAT_HISTORY_MAX_HEIGHT_DESKTOP,
+    UI_CHAT_HISTORY_MAX_HEIGHT_MOBILE,
+    UI_THINKING_MAX_HEIGHT_DESKTOP,
+    UI_THINKING_MAX_HEIGHT_MOBILE,
+    UI_DEBUG_CONSOLE_MAX_HEIGHT,
+    UI_SANDBOX_MAX_HEIGHT,
+    UI_MOBILE_BREAKPOINT,
+)
+
+# UI modules (extracted from this file)
+from .ui.helpers import t, left_column  # noqa: F401
+from .ui.modals import (  # noqa: F401
+    multi_agent_help_modal, research_help_modal, reasoning_thinking_help_modal,
+    model_lifecycle_help_modal,
+    login_dialog, crop_modal, image_lightbox_modal,
+    document_manager_page, channel_credentials_page, audit_log_modal,
+    bundle_export_modal, bundle_import_modal,
+)
+from .ui.chat_display import (  # noqa: F401
+    session_list_display, chat_history_display,
+)
+from .ui.input_sections import debug_console  # noqa: F401
+from .ui.settings_accordion import settings_accordion  # noqa: F401
+from .ui.agent_editor import agent_editor_page  # noqa: F401
+from .ui.file_picker import file_picker_modal  # noqa: F401
+from .ui.audio_settings import audio_settings_page, audio_help_modal  # noqa: F401
+from .ui.vision_settings import vision_settings_modal  # noqa: F401
+from .ui.personarium import personarium_modal  # noqa: F401
+from .ui.casus import casus_modal, casus_help_modal  # noqa: F401
+from .ui.multipose import multipose_modal  # noqa: F401
+from .ui.vigilantia_feed import vigilantia_feed_popover, vigilantia_help_modal  # noqa: F401
+from .ui.vision_preview import vision_preview_page  # noqa: F401
+
+
+def _audio_player_element() -> rx.Component:
+    """HTML5 audio element used by TTS + audio_player tool.
+
+    Returns one of two variants depending on whether a source is available:
+    - With `src=...` when tts_audio_path or media_audio_url is set.
+    - Without `src` attribute when both are empty (avoids React warning
+      `An empty string ("") was passed to the src attribute` and the
+      bandwidth-wasting page-URL fetch the browser triggers in that case).
+
+    Both variants share the same DOM type (`<audio>`), so React reconciles
+    props in place — no remount when transitioning between them.
+    """
+    common_kwargs: dict = dict(
+        id="tts-audio-player",
+        controls=True,
+        # autoPlay only for non-streaming TTS (single-shot tts_audio_path).
+        # Media is delivered via the Browser Push Bus and started by JS — the
+        # SSE-event-handler runs in the user-gesture chain from
+        # startBrowserStream, so player.play() is allowed without React
+        # autoPlay. Letting React control autoPlay for media would
+        # double-trigger (React load + JS load).
+        autoPlay=AIState.tts_autoplay & (AIState.tts_audio_path != ""),
+        # Force remount only on TTS counter changes — never on
+        # media_state_key. If audio_play fires while TTS is still
+        # streaming we MUST NOT remount (would kill the current chunk).
+        key="audio-" + AIState.tts_trigger_counter.to(str),
+        style={
+            "width": "100%",
+            "height": "40px",
+            "margin_top": "8px",
+            "display": rx.cond(
+                AIState.tts_player_visible | (AIState.media_audio_url != ""),
+                "block",
+                "none",
+            ),
+        },
+    )
+    data_attrs = {
+        "data-playback-rate": AIState.tts_playback_rate,
+        # data-media-url is NOT a trigger anymore (Audio Bus owns that).
+        # Kept as a read-only snapshot so JS can recover the current URL
+        # after a re-render or re-mount without losing context.
+        "data-media-url": AIState.media_audio_url,
+        "data-media-state-key": AIState.media_state_key,
+        "data-media-is-stream": rx.cond(AIState.media_is_stream, "true", "false"),
+        "data-media-paused-for-tts": rx.cond(
+            AIState.media_paused_for_tts, "true", "false"
+        ),
+        "data-media-pause-pos": AIState.media_pause_pos_sec.to(str),
+        # JSON-array of {audio_url, state_key} items for sequential playback
+        # (audio_play_folder). custom.js reads this on update + advances on
+        # media-ended. Empty for single-track playback.
+        "data-media-queue": AIState.media_queue_json,
+    }
+    # ``src`` is bound to React ONLY for non-streaming TTS (single-shot
+    # tts_audio_path). For media-URLs, JS owns the src — React-binding
+    # would race with the Audio-Bus-triggered player.src=… and cause
+    # double-load (audible doubled playback) plus stop/pause control loss
+    # because React would re-set src on every re-render.
+    return rx.cond(
+        AIState.tts_audio_path != "",
+        rx.el.audio(
+            src=AIState.tts_audio_path,
+            **common_kwargs,
+            **data_attrs,  # type: ignore[arg-type]
+        ),
+        rx.el.audio(
+            **common_kwargs,
+            **data_attrs,  # type: ignore[arg-type]
+        ),
+    )
+
+
+# ============================================================
+# MAIN PAGE
+# ============================================================
+
+@rx.page(route="/", on_load=AIState.on_load, title="AIfred Intelligence")
+def index() -> rx.Component:
+    """Main page with single column layout for mobile optimization"""
+
+    # Inline JavaScript for auto-scroll (must be inline to ensure execution)
+    autoscroll_js = """
+console.log('🔧 Autoscroll script loaded');
+
+// Make all external links open in new tab
+function makeLinksOpenInNewTab() {
+    const links = document.querySelectorAll('a[href^="http"]');
+    links.forEach(link => {
+        if (!link.hasAttribute('target')) {
+            link.setAttribute('target', '_blank');
+            link.setAttribute('rel', 'noopener noreferrer');
+        }
+    });
+}
+
+// Force-scroll chat and debug to bottom (called after Hub updates)
+function forceScrollToBottom() {
+    if (!isAutoScrollEnabled()) return;
+    requestAnimationFrame(() => {
+        const chatBox = document.getElementById('chat-history-box');
+        if (chatBox) {
+            chatBox.scrollTop = chatBox.scrollHeight;
+            trackScrollState(chatBox);
+        }
+        const debugBox = document.getElementById('debug-console-box');
+        if (debugBox) {
+            debugBox.scrollTop = debugBox.scrollHeight;
+            trackScrollState(debugBox);
+        }
+    });
+}
+
+function isAutoScrollEnabled() {
+    const sw = document.getElementById('autoscroll-switch');
+    if (!sw) return true; // Default: enabled if switch not found
+    // Radix UI setzt data-state auf den Button innerhalb des Switch-Containers
+    const button = sw.querySelector('button[role="switch"]');
+    if (!button) return sw.getAttribute('data-state') === 'checked'; // Fallback
+    return button.getAttribute('data-state') === 'checked';
+}
+
+// Track scroll position BEFORE mutations happen via scroll events.
+// The MutationObserver fires AFTER DOM changes, so checking isNearBottom
+// inside the callback fails when a single mutation adds >150px of content
+// (scrollHeight grows, distance to bottom exceeds threshold → no scroll).
+var scrollState = new Map();  // element id → wasAtBottom (var statt const: idempotent bei Multi-Route-Re-Mount)
+
+function trackScrollState(element) {
+    if (!element || !element.id) return;
+    const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+    scrollState.set(element.id, distance < 150);
+}
+
+function wasAtBottom(element) {
+    if (!element || !element.id) return true;
+    const state = scrollState.get(element.id);
+    return state !== undefined ? state : true;  // default: scroll
+}
+
+function autoScrollElement(element) {
+    if (!element) return;
+    if (wasAtBottom(element)) {
+        element.scrollTop = element.scrollHeight;
+        // Update tracked state after scrolling
+        trackScrollState(element);
+    }
+}
+
+function attachScrollTracker(element) {
+    if (!element || element._scrollTrackerAttached) return;
+    element.addEventListener('scroll', () => trackScrollState(element), { passive: true });
+    trackScrollState(element);  // initial state
+    element._scrollTrackerAttached = true;
+}
+
+// Observer für Debug-Console und Chat-History Updates
+// characterData NOT set — rx.text() streaming uses text node updates (not childList).
+// A separate polling interval handles autoscroll during streaming.
+var observerConfig = { childList: true, subtree: true };
+
+// Track if chat-history-box observer is already running
+var chatObserverAttached = false;
+
+// Streaming autoscroll: poll-based scroll during active streaming.
+// MutationObserver misses rx.text() updates (characterData only, not childList).
+// Behavior: scroll down while user is near bottom. If user scrolls up, pause.
+// If user scrolls back to bottom, resume. Same as Claude Code terminal behavior.
+var streamingScrollInterval = null;
+function startStreamingScroll() {
+    if (streamingScrollInterval) return;
+    streamingScrollInterval = setInterval(() => {
+        if (!isAutoScrollEnabled()) return;
+        const box = document.getElementById('chat-history-box');
+        if (!box) return;
+        // Only scroll if user is near the bottom (within 150px)
+        // User scrolls up → distance grows → no auto-scroll
+        // User scrolls back down → distance shrinks → auto-scroll resumes
+        const distance = box.scrollHeight - box.scrollTop - box.clientHeight;
+        if (distance < 150) {
+            box.scrollTop = box.scrollHeight;
+        }
+    }, 120);
+}
+function stopStreamingScroll() {
+    if (streamingScrollInterval) {
+        clearInterval(streamingScrollInterval);
+        streamingScrollInterval = null;
+    }
+}
+
+var callback = function(mutationsList, observer) {
+    const enabled = isAutoScrollEnabled();
+
+    // Make all links open in new tab (always, regardless of auto-scroll)
+    makeLinksOpenInNewTab();
+
+    // Get elements once
+    const chatBox = document.getElementById('chat-history-box');
+
+    // Lazy-attach observer to chat-history-box when it appears
+    // (it's conditionally rendered after backend_initializing=False)
+    // Also re-attach after reconnect (container gets destroyed + recreated)
+    if (chatBox && (!chatObserverAttached || !chatBox._observerAttached)) {
+        const chatObserver = new MutationObserver(callback);
+        chatObserver.observe(chatBox, observerConfig);
+        attachScrollTracker(chatBox);
+        chatBox._observerAttached = true;
+        chatObserverAttached = true;
+        // Scroll to bottom on (re)attach — catches reconnect scenario.
+        // Poll until content stabilizes (same approach as page-load).
+        let _reattachLastH = 0;
+        let _reattachStable = 0;
+        const _reattachScroll = setInterval(() => {
+            const cb = document.getElementById('chat-history-box');
+            const db = document.getElementById('debug-console-box');
+            if (cb) cb.scrollTop = cb.scrollHeight;
+            if (db) db.scrollTop = db.scrollHeight;
+            const h = cb ? cb.scrollHeight : 0;
+            if (h === _reattachLastH) { _reattachStable++; } else { _reattachStable = 0; }
+            _reattachLastH = h;
+            if (_reattachStable >= 3) {
+                clearInterval(_reattachScroll);
+                if (cb) { cb.scrollTop = cb.scrollHeight; trackScrollState(cb); }
+                if (db) { db.scrollTop = db.scrollHeight; trackScrollState(db); }
+            }
+        }, 300);
+        setTimeout(() => clearInterval(_reattachScroll), 10000);
+    }
+
+    // Start/stop streaming scroll based on whether streaming box exists
+    const streamingBox = document.getElementById('streaming-box');
+    if (streamingBox) {
+        startStreamingScroll();
+    } else if (streamingScrollInterval) {
+        // Streaming just ended → Markdown rendering will change scrollHeight.
+        // Force a final scroll-to-bottom after a short delay to account for
+        // content shrinking when streaming text gets replaced by rendered Markdown.
+        stopStreamingScroll();
+        setTimeout(() => {
+            const box = document.getElementById('chat-history-box');
+            if (box && isAutoScrollEnabled()) {
+                box.scrollTop = box.scrollHeight;
+                trackScrollState(box);
+            }
+        }, 300);
+    }
+
+    // Only scroll if auto-scroll is enabled
+    if (!enabled) {
+        return;
+    }
+
+    // Auto-scroll Debug Console
+    const debugBox = document.getElementById('debug-console-box');
+    if (debugBox) {
+        attachScrollTracker(debugBox);
+        autoScrollElement(debugBox);
+    }
+
+    // Auto-scroll Chat History
+    if (chatBox) {
+        autoScrollElement(chatBox);
+    }
+};
+
+// Debug Console height is now controlled by CSS Grid (flex: 1)
+// No manual JavaScript height sync needed - removed to prevent conflicts
+
+function setupObservers() {
+    console.log('🚀 Setting up observers...');
+
+    const debugBox = document.getElementById('debug-console-box');
+    if (debugBox) {
+        console.log('✅ Found debug-console-box');
+        const observer = new MutationObserver(callback);
+        observer.observe(debugBox, observerConfig);
+        attachScrollTracker(debugBox);
+    } else {
+        console.warn('❌ debug-console-box not found');
+    }
+
+    // Chat History - JavaScript-basiertes Autoscroll (statt rx.auto_scroll)
+    // May not exist yet if backend is still initializing (rx.cond renders it later)
+    if (!chatObserverAttached) {
+        const chatBox = document.getElementById('chat-history-box');
+        if (chatBox) {
+            console.log('✅ Found chat-history-box');
+            const chatObserver = new MutationObserver(callback);
+            chatObserver.observe(chatBox, observerConfig);
+            attachScrollTracker(chatBox);
+            chatObserverAttached = true;
+        } else {
+            console.warn('❌ chat-history-box not found (will attach via debug-console callback)');
+        }
+    }
+
+    // Sync heights on accordion open/close - observe settings-accordion by ID
+    const settingsAccordion = document.getElementById('settings-accordion');
+    if (settingsAccordion) {
+        // Height sync removed - CSS Grid handles it automatically via flex: 1
+
+        // Accordion observer removed - no manual height sync needed
+
+        // Click handler removed - CSS Grid auto-adjusts height
+
+        console.log('✅ Height sync observers attached to settings-accordion');
+    } else {
+        console.warn('⚠️ settings-accordion not found for observers');
+    }
+
+    // Window resize handler removed - CSS Grid handles responsive height
+}
+
+// Prevent page-level scroll jumps during State updates.
+// When Reflex re-renders, the browser may scroll the page to the focused element.
+// This preserves the page scroll position across re-renders.
+var _pageScrollLock = false;
+function enablePageScrollLock() {
+    if (_pageScrollLock) return;
+    _pageScrollLock = true;
+    const savedY = window.scrollY;
+    requestAnimationFrame(() => {
+        if (window.scrollY !== savedY) {
+            window.scrollTo(0, savedY);
+        }
+        _pageScrollLock = false;
+    });
+}
+// Observe body for childList changes (Reflex re-renders) and restore scroll
+var _bodyObserver = new MutationObserver(() => enablePageScrollLock());
+_bodyObserver.observe(document.body, { childList: true, subtree: false });
+
+// Initialize immediately or wait for DOMContentLoaded
+function initialize() {
+    console.log('📄 Initializing autoscroll...');
+
+    // Make existing links open in new tab
+    makeLinksOpenInNewTab();
+
+    setupObservers();
+
+    // Height sync removed - CSS Grid handles it automatically
+
+    // Einmaliger Retry nach 1.5s für Elemente die erst nach Backend-Init erscheinen
+    // (chat-history-box wird durch rx.cond erst gerendert wenn backend_initializing=False)
+    setTimeout(() => {
+        setupObservers();
+        makeLinksOpenInNewTab();
+    }, 1500);
+
+    // On page load/reload: scroll chat + debug to bottom once content stabilizes.
+    // Polls every 300ms until scrollHeight stops changing, then does one final scroll.
+    let _lastChatHeight = 0;
+    let _lastDebugHeight = 0;
+    let _stableCount = 0;
+    const _loadScrollInterval = setInterval(() => {
+        const chatBox = document.getElementById('chat-history-box');
+        const debugBox = document.getElementById('debug-console-box');
+        const chatH = chatBox ? chatBox.scrollHeight : 0;
+        const debugH = debugBox ? debugBox.scrollHeight : 0;
+
+        // Scroll on every check (smooth catch-up)
+        if (chatBox) { chatBox.scrollTop = chatBox.scrollHeight; }
+        if (debugBox) { debugBox.scrollTop = debugBox.scrollHeight; }
+
+        // Check if heights stabilized
+        if (chatH === _lastChatHeight && debugH === _lastDebugHeight) {
+            _stableCount++;
+        } else {
+            _stableCount = 0;
+        }
+        _lastChatHeight = chatH;
+        _lastDebugHeight = debugH;
+
+        // Stop after 3 stable checks (~900ms of no change) or max 10s
+        if (_stableCount >= 3) {
+            clearInterval(_loadScrollInterval);
+            // Final scroll + track state
+            if (chatBox) { chatBox.scrollTop = chatBox.scrollHeight; trackScrollState(chatBox); }
+            if (debugBox) { debugBox.scrollTop = debugBox.scrollHeight; trackScrollState(debugBox); }
+        }
+    }, 300);
+    // Safety: stop after 10s regardless
+    setTimeout(() => clearInterval(_loadScrollInterval), 10000);
+}
+
+// Note: NO periodic setInterval for auto-scroll. The MutationObserver
+// (childList + subtree) fires when React/Reflex replaces DOM subtrees
+// during streaming. A permanent interval would prevent manual scroll-up
+// because it re-enforces scrollTop every 200ms.
+
+// Check if DOM is already loaded (script loaded late)
+if (document.readyState === 'loading') {
+    // DOM not yet loaded, wait for it
+    document.addEventListener('DOMContentLoaded', initialize);
+} else {
+    // DOM already loaded, run immediately
+    initialize();
+}
+"""
+
+    # Paste handler for image support (desktop)
+    paste_handler_js = """
+console.log('📋 Image paste handler loaded');
+
+// Global paste event handler for images
+document.addEventListener('paste', async function(e) {
+    console.log('📋 Paste event detected');
+    const items = e.clipboardData.items;
+    const imageFiles = [];
+
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith('image/')) {
+            console.log('🖼️ Image found in clipboard:', item.type);
+            const file = item.getAsFile();
+            if (file) {
+                imageFiles.push(file);
+            }
+        }
+    }
+
+    if (imageFiles.length > 0) {
+        e.preventDefault();
+        console.log('📸 Triggering upload for', imageFiles.length, 'image(s)');
+
+        // Trigger Reflex upload handler
+        const uploadEl = document.getElementById('image-upload');
+        if (uploadEl) {
+            // Simulate file drop event
+            const dataTransfer = new DataTransfer();
+            imageFiles.forEach(f => dataTransfer.items.add(f));
+
+            const dropEvent = new DragEvent('drop', {
+                dataTransfer: dataTransfer,
+                bubbles: true,
+                cancelable: true
+            });
+
+            uploadEl.dispatchEvent(dropEvent);
+            console.log('✅ Upload event dispatched');
+        } else {
+            console.error('❌ Upload element not found');
+        }
+    }
+});
+
+console.log('✅ Paste handler initialized');
+"""
+
+    # JavaScript für Crop-Funktionalität
+    crop_js = """
+console.log('✂️ Crop handler loaded');
+
+// Crop-Box Drag-Funktionalität
+(function() {
+    let isDragging = false;
+    let dragType = null; // 'move', 'nw', 'ne', 'sw', 'se', 'n', 's', 'w', 'e'
+    let startX, startY;
+    let startBox = { x: 0, y: 0, width: 100, height: 100 };
+    let currentBox = { x: 0, y: 0, width: 100, height: 100 };
+    let listenersAdded = false;
+
+    function initCrop() {
+        const overlay = document.getElementById('crop-overlay');
+        const cropBox = document.getElementById('crop-box');
+        const image = document.getElementById('crop-image');
+        const container = document.getElementById('crop-container');
+
+        if (!overlay || !cropBox || !image || !container) {
+            return; // Modal nicht offen
+        }
+
+        // WICHTIG: Body-Scroll blockieren und nach oben scrollen
+        document.body.style.overflow = 'hidden';
+        document.documentElement.style.overflow = 'hidden';
+        window.scrollTo(0, 0);  // Scroll nach oben
+        console.log('✂️ Body scroll disabled, scrolled to top');
+
+        // Positioniere Overlay auf Bildgröße (wichtig für object-fit: contain)
+        function positionOverlay() {
+            const containerRect = container.getBoundingClientRect();
+            const imageRect = image.getBoundingClientRect();
+
+            // Berechne Offset des Bildes innerhalb des Containers
+            const offsetLeft = imageRect.left - containerRect.left;
+            const offsetTop = imageRect.top - containerRect.top;
+
+            overlay.style.left = offsetLeft + 'px';
+            overlay.style.top = offsetTop + 'px';
+            overlay.style.width = imageRect.width + 'px';
+            overlay.style.height = imageRect.height + 'px';
+
+            console.log('✂️ Overlay positioned on image:', imageRect.width.toFixed(0), 'x', imageRect.height.toFixed(0));
+        }
+
+        // Warte auf Bild-Load
+        if (image.complete && image.naturalWidth > 0) {
+            setTimeout(positionOverlay, 50); // Kurze Verzögerung für Layout
+        } else {
+            image.onload = () => setTimeout(positionOverlay, 50);
+        }
+
+        // Initial: Ganzes Bild selektiert
+        currentBox = { x: 0, y: 0, width: 100, height: 100 };
+        updateCropBoxUI();
+
+        // Nur einmal Listener hinzufügen
+        if (listenersAdded) return;
+        listenersAdded = true;
+
+        // Event Listener für Crop-Box (move)
+        cropBox.addEventListener('mousedown', (e) => {
+            if (e.target === cropBox) {
+                startDrag(e, 'move');
+                e.preventDefault();
+            }
+        });
+        cropBox.addEventListener('touchstart', (e) => {
+            if (e.target === cropBox) {
+                startDrag(e.touches[0], 'move');
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, { passive: false });
+
+        // Event Listener für Handles
+        const handles = ['nw', 'ne', 'sw', 'se', 'n', 's', 'w', 'e'];
+        handles.forEach(h => {
+            const handle = document.getElementById('crop-' + h);
+            if (handle) {
+                handle.addEventListener('mousedown', (e) => {
+                    startDrag(e, h);
+                    e.preventDefault();
+                    e.stopPropagation();
+                });
+                handle.addEventListener('touchstart', (e) => {
+                    startDrag(e.touches[0], h);
+                    e.preventDefault();
+                    e.stopPropagation();
+                }, { passive: false });
+            }
+        });
+
+        // Global mouse/touch events
+        document.addEventListener('mousemove', onDrag);
+        document.addEventListener('mouseup', endDrag);
+        document.addEventListener('touchmove', (e) => {
+            if (isDragging) {
+                onDrag(e.touches[0]);
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, { passive: false });
+        document.addEventListener('touchend', endDrag);
+        document.addEventListener('touchcancel', endDrag);
+
+        console.log('✂️ Crop initialized with touch support');
+    }
+
+    function startDrag(e, type) {
+        isDragging = true;
+        dragType = type;
+        startX = e.clientX;
+        startY = e.clientY;
+        startBox = { ...currentBox };
+        // Verhindere Selektion während Drag
+        document.body.style.userSelect = 'none';
+        document.body.style.webkitUserSelect = 'none';
+    }
+
+    function onDrag(e) {
+        if (!isDragging) return;
+
+        const overlay = document.getElementById('crop-overlay');
+        if (!overlay) return;
+
+        const rect = overlay.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+
+        const deltaX = ((e.clientX - startX) / rect.width) * 100;
+        const deltaY = ((e.clientY - startY) / rect.height) * 100;
+
+        let newBox = { ...startBox };
+
+        switch(dragType) {
+            case 'move':
+                newBox.x = Math.max(0, Math.min(100 - startBox.width, startBox.x + deltaX));
+                newBox.y = Math.max(0, Math.min(100 - startBox.height, startBox.y + deltaY));
+                break;
+            case 'nw':
+                newBox.x = Math.max(0, Math.min(startBox.x + startBox.width - 10, startBox.x + deltaX));
+                newBox.y = Math.max(0, Math.min(startBox.y + startBox.height - 10, startBox.y + deltaY));
+                newBox.width = startBox.width - (newBox.x - startBox.x);
+                newBox.height = startBox.height - (newBox.y - startBox.y);
+                break;
+            case 'ne':
+                newBox.y = Math.max(0, Math.min(startBox.y + startBox.height - 10, startBox.y + deltaY));
+                newBox.width = Math.max(10, Math.min(100 - startBox.x, startBox.width + deltaX));
+                newBox.height = startBox.height - (newBox.y - startBox.y);
+                break;
+            case 'sw':
+                newBox.x = Math.max(0, Math.min(startBox.x + startBox.width - 10, startBox.x + deltaX));
+                newBox.width = startBox.width - (newBox.x - startBox.x);
+                newBox.height = Math.max(10, Math.min(100 - startBox.y, startBox.height + deltaY));
+                break;
+            case 'se':
+                newBox.width = Math.max(10, Math.min(100 - startBox.x, startBox.width + deltaX));
+                newBox.height = Math.max(10, Math.min(100 - startBox.y, startBox.height + deltaY));
+                break;
+            case 'n':
+                newBox.y = Math.max(0, Math.min(startBox.y + startBox.height - 10, startBox.y + deltaY));
+                newBox.height = startBox.height - (newBox.y - startBox.y);
+                break;
+            case 's':
+                newBox.height = Math.max(10, Math.min(100 - startBox.y, startBox.height + deltaY));
+                break;
+            case 'w':
+                newBox.x = Math.max(0, Math.min(startBox.x + startBox.width - 10, startBox.x + deltaX));
+                newBox.width = startBox.width - (newBox.x - startBox.x);
+                break;
+            case 'e':
+                newBox.width = Math.max(10, Math.min(100 - startBox.x, startBox.width + deltaX));
+                break;
+        }
+
+        currentBox = newBox;
+        updateCropBoxUI();
+    }
+
+    function endDrag() {
+        if (isDragging) {
+            isDragging = false;
+            dragType = null;
+            document.body.style.userSelect = '';
+            document.body.style.webkitUserSelect = '';
+        }
+    }
+
+    function updateCropBoxUI() {
+        const cropBox = document.getElementById('crop-box');
+        if (cropBox) {
+            cropBox.style.left = currentBox.x + '%';
+            cropBox.style.top = currentBox.y + '%';
+            cropBox.style.width = currentBox.width + '%';
+            cropBox.style.height = currentBox.height + '%';
+        }
+    }
+
+    // Reset bei Modal-Schließung
+    function resetCrop() {
+        currentBox = { x: 0, y: 0, width: 100, height: 100 };
+        listenersAdded = false;
+        isDragging = false;
+        // Body-Scroll wieder aktivieren — idempotent: nur schreiben wenn nötig.
+        // The MutationObserver below fires on EVERY body mutation (which is also
+        // triggered by Reflex's 500ms refresh tick), so resetCrop() runs constantly.
+        // An unconditional style write here is itself a DOM mutation that wipes
+        // any active text selection inside chat bubbles.
+        const needsBodyReset = document.body.style.overflow !== '';
+        const needsDocReset = document.documentElement.style.overflow !== '';
+        if (needsBodyReset) document.body.style.overflow = '';
+        if (needsDocReset) document.documentElement.style.overflow = '';
+        if (needsBodyReset || needsDocReset) {
+            console.log('✂️ Body scroll re-enabled');
+        }
+    }
+
+    // Observer für Modal-Öffnung/Schließung
+    const observer = new MutationObserver((mutations) => {
+        const overlay = document.getElementById('crop-overlay');
+        if (overlay) {
+            initCrop();
+        } else {
+            resetCrop();
+        }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+"""
+
+    # SSoT-Loader: lädt /custom.js GENAU EINMAL. React re-mountet dieses
+    # Inline-Script bei Re-Renders, was zuvor /custom.js jedes Mal neu
+    # ausführte und jeden Listener/Observer/Interval darin stapelte (Symptom:
+    # „ein Tastendruck = 3 Bilder"). Der ID-Check macht das Laden idempotent —
+    # das angehängte <script> liegt außerhalb von Reacts Baum, überlebt
+    # Remounts und wird nur einmal hinzugefügt. Bei custom.js-Änderungen
+    # ?v= hochzählen (Cache-Bust).
+    custom_js_loader = """
+(function() {
+    if (document.getElementById('aifred-custom-js')) return;
+    var s = document.createElement('script');
+    s.id = 'aifred-custom-js';
+    s.src = '/custom.js?v=30';
+    document.head.appendChild(s);
+})();
+"""
+
+    # Lightbox für Content-Bilder: in der Bubble verkleinert (CSS), Klick
+    # öffnet die VOLLE Auflösung als Overlay (Klick/Escape schließt).
+    # Greift nur auf /_upload/-Bilder (Kamera-Fotos, Uploads, Crops) —
+    # Emojis/Icons bleiben unberührt. window-Flag macht den Listener
+    # idempotent gegen React-Remounts (gleiche Falle wie beim custom_js).
+    lightbox_js = """
+(function() {
+    if (window.__aifredLightbox) return;
+    window.__aifredLightbox = true;
+    var st = document.createElement('style');
+    st.textContent = 'img[src*="/_upload/"]{max-height:320px;max-width:100%;width:auto;object-fit:contain;cursor:zoom-in;border-radius:8px;}'
+        + '.aifred-thumbrow{display:flex;flex-wrap:wrap;gap:6px;align-items:flex-start;}'
+        + '.aifred-thumbrow img{width:50px;height:50px;object-fit:cover;border-radius:4px;margin:0;}';
+    document.head.appendChild(st);
+    document.addEventListener('click', function(e) {
+        var img = e.target.closest && e.target.closest('img[src*="/_upload/"]');
+        if (!img || img.closest('#aifred-lightbox')) return;
+        var ov = document.createElement('div');
+        ov.id = 'aifred-lightbox';
+        var big = document.createElement('img');
+        big.src = img.src;
+        var fitted = true;
+        // Zwei Modi: eingepasst (96vw/96vh, zentriert) und 1:1-Pixelansicht
+        // (Bild in nativer Größe, Overlay scrollt → Schwenken). Flex-Zentrierung
+        // muss im 1:1-Modus weg, sonst sind die linken/oberen Ränder nicht
+        // erreichbar (Flexbox-Overflow-Falle).
+        function applyMode() {
+            ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10000;overflow:auto;cursor:zoom-out;'
+                + (fitted ? 'display:flex;align-items:center;justify-content:center;' : 'display:block;');
+            big.style.cssText = fitted
+                ? 'max-width:96vw;max-height:96vh;object-fit:contain;cursor:zoom-in;box-shadow:0 0 40px rgba(0,0,0,0.8);'
+                : 'width:' + big.naturalWidth + 'px;max-width:none;max-height:none;display:block;cursor:zoom-out;';
+        }
+        big.addEventListener('click', function(ev) {
+            var zoomable = big.naturalWidth > ov.clientWidth + 8 || big.naturalHeight > ov.clientHeight + 8;
+            if (fitted && !zoomable) { close(); return; }
+            ev.stopPropagation();
+            var rx = ev.offsetX / big.clientWidth, ry = ev.offsetY / big.clientHeight;
+            fitted = !fitted;
+            applyMode();
+            if (!fitted) {
+                // Klickstelle in die Bildschirmmitte scrollen
+                ov.scrollLeft = rx * big.naturalWidth - ov.clientWidth / 2;
+                ov.scrollTop = ry * big.naturalHeight - ov.clientHeight / 2;
+            }
+        });
+        function esc(ev) { if (ev.key === 'Escape') close(); }
+        function close() { ov.remove(); document.removeEventListener('keydown', esc); }
+        ov.addEventListener('click', close);
+        document.addEventListener('keydown', esc);
+        ov.appendChild(big);
+        document.body.appendChild(ov);
+        applyMode();
+    });
+})();
+"""
+
+    return rx.box(
+        # Sperrt die UI, solange der Reflex-State-Socket (/_event/) getrennt
+        # ist — z.B. direkt nach einem systemctl-Restart, wenn granian noch
+        # hochfährt und der WS 502 liefert. Ohne das wirken Enter/Paste „tot"
+        # (die custom.js-Handler feuern, aber die ausgelösten Reflex-Events
+        # erreichen das Backend nicht). Blendet sich beim Reconnect aus.
+        rx.connection_modal(),
+
+        # Inline JavaScript (guaranteed to execute)
+        rx.script(autoscroll_js),
+        rx.script(paste_handler_js),
+        rx.script(crop_js),
+        rx.script(lightbox_js),
+
+        # custom.js wird über den idempotenten Loader genau einmal geladen
+        # (nicht via rx.script(src=…), das React bei jedem Remount neu
+        # ausführen würde). head_components-Variante fällt weiterhin aus:
+        # synchrone Auswertung VOR React-Hydration löste Browser-Hänger aus.
+        # Im Popup wird der SSE-Manager separat per Inline-Script geladen.
+        rx.script(custom_js_loader),
+
+        # Hidden flags element — always present in the DOM, regardless of
+        # chat state. custom.js reads UI toggles from here. Currently:
+        #   data-enter-sends — Enter key sends the message (vs. newline).
+        # Other always-on flags can be added here later. (Used to live on
+        # #tts-queue-data, but that element is conditionally rendered, so
+        # the flag was missing on a fresh chat — Enter never sent.)
+        rx.el.div(
+            id="ui-flags",
+            **{  # type: ignore[arg-type]  # dict-Invarianz vs. Var-Werte
+                "data-enter-sends": rx.cond(
+                    AIState.enter_sends_message, "true", "false"
+                ),
+            },
+            style={"display": "none"},
+        ),
+
+        # Login Dialog (rendered but hidden until needed)
+        login_dialog(),
+
+        # Crop Modal (rendered but hidden until open)
+        crop_modal(),
+
+        # Image Lightbox Modal (for viewing history images full-size)
+        image_lightbox_modal(),
+
+        # Vigilantia-Plugin Settings Modal (gear icon next to "Vigilantia")
+        vision_settings_modal(),
+
+        # Casus — Ereignis-Verwaltung (vom Vigilantia-Settings-Modal aus
+        # aufgerufen, chronologische Filter-/Tag-Tabelle)
+        casus_modal(),
+        casus_help_modal(),
+
+        # Personarium — Identitäten-Verwaltung. BEWUSST NACH casus_modal
+        # gemountet: bei gleichem z-index gewinnt das spätere DOM-Element,
+        # und der Personarium-Button im Casus muss das Personarium ÜBER
+        # dem Casus öffnen (aus den Settings heraus stapelt es ohnehin).
+        personarium_modal(),
+
+        # Multi-Pose-Lern-Modal — geführte Enrollment-Aufnahme mit
+        # mehreren Kopf-Posen für robustere Face-Recognition. Nach dem
+        # Personarium gemountet (wird von dort geöffnet).
+        multipose_modal(),
+
+        # Vigilantia-Hilfe-Modal — Übersicht „was bedeutet was".
+        # Geöffnet über die Glühbirne neben dem Auge in der Modus-
+        # Zeile.
+        vigilantia_help_modal(),
+
+        # Multi-Agent Help Modal (Diskussionsmodi-Übersicht)
+        multi_agent_help_modal(),
+
+        # Research Mode Help Modal
+        research_help_modal(),
+
+        # Reasoning/Thinking Help Modal
+        reasoning_thinking_help_modal(),
+
+        # Model Lifecycle Help Modal (base/VLM/TTS/LLM — when does what load)
+        model_lifecycle_help_modal(),
+
+        # Agent Editor: lebt seit dem Multi-Route-Split auf /agent-editor
+        # als eigene Page (Code-Splitting fuer ~258 KB JSX). Nicht mehr
+        # hier eingebettet — Buttons im Chat triggern jetzt rx.redirect.
+
+        # Document-Manager: lebt seit dem Multi-Route-Split auf /documents
+        # als eigene Page (Code-Splitting fuer ~40 KB JSX). Buttons triggern
+        # rx.redirect("/documents") statt Modal-Open.
+
+        # Channel-Credentials: lebt seit dem Multi-Route-Split auf
+        # /credentials als eigene Page (Code-Splitting fuer ~50 KB JSX).
+        audit_log_modal(),
+
+        # Agent Bundle Export / Import
+        bundle_export_modal(),
+        bundle_import_modal(),
+
+        # Generic file/folder picker (used by multiple callers)
+        file_picker_modal(),
+
+        # Audio-Player plugin settings (sources + index) lebt seit dem
+        # Multi-Route-Split auf /audio-settings als eigene Page (Code-
+        # Splitting fuer ~46 KB JSX). Audio-Help-Modal mit ausgelagert.
+        # Buttons im Plugin-Tab triggern jetzt rx.redirect statt Modal-Open.
+
+        # Hidden element to trigger camera detection on mount
+        rx.box(
+            id="camera-detector",
+            display="none",
+            on_mount=[
+                # Camera Detection
+                rx.call_script(
+                    """
+                    (async () => {
+                        try {
+                            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                                const devices = await navigator.mediaDevices.enumerateDevices();
+                                const hasCamera = devices.some(device => device.kind === 'videoinput');
+                                console.log('📷 Camera detected:', hasCamera);
+                                return hasCamera;
+                            }
+                        } catch (err) {
+                            console.log('⚠️ Camera detection failed:', err);
+                        }
+                        return false;
+                    })()
+                    """,
+                    callback=AIState.set_camera_available
+                ),
+                # Mobile Detection (User-Agent + Touch)
+                rx.call_script(
+                    """
+                    (() => {
+                        // Check User-Agent for mobile devices
+                        const userAgent = navigator.userAgent || navigator.vendor || window.opera;
+                        const mobileRegex = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile/i;
+                        const isMobileUA = mobileRegex.test(userAgent.toLowerCase());
+
+                        // Check for touch support
+                        const hasTouch = ('ontouchstart' in window) ||
+                                        (navigator.maxTouchPoints > 0) ||
+                                        (navigator.msMaxTouchPoints > 0);
+
+                        // Mobile = Mobile UA + Touch support
+                        const isMobile = isMobileUA && hasTouch;
+
+                        console.log('📱 Mobile detection:', {
+                            userAgent: userAgent,
+                            isMobileUA: isMobileUA,
+                            hasTouch: hasTouch,
+                            maxTouchPoints: navigator.maxTouchPoints,
+                            isMobile: isMobile
+                        });
+
+                        return isMobile;
+                    })()
+                    """,
+                    callback=AIState.set_is_mobile
+                )
+            ]
+        ),
+
+        rx.vstack(
+            # Header with title and user info
+            rx.hstack(
+                # Left side: Title and subtitle
+                rx.vstack(
+                    rx.hstack(
+                        rx.image(src="/AIfred-Zylinder.png", width="32px", height="32px"),
+                        rx.heading("AIfred Intelligence", size="6"),
+                        align="center",
+                        spacing="2",
+                        margin_bottom="2",
+                    ),
+                    rx.text(
+                        t("subtitle"),
+                        color=COLORS["text_secondary"],
+                        font_size="12px",
+                        font_style="italic",
+                    ),
+                    align_items="flex-start",
+                    spacing="0",
+                ),
+                rx.spacer(),
+                # Right side: Agent editor + User info + logout (only when logged in)
+                rx.cond(
+                    AIState.logged_in_user != "",
+                    rx.hstack(
+                        # Settings menu button (Agent Editor + Memory + Database)
+                        rx.tooltip(
+                            rx.icon(
+                                "menu",
+                                size=18,
+                                color="#d98030",
+                                cursor="pointer",
+                                on_click=AIState.open_agent_editor,
+                                style={
+                                    "transition": "color 0.2s ease",
+                                    "&:hover": {"color": "#FFD700"},
+                                },
+                            ),
+                            content=t("settings_menu_title"),
+                        ),
+                        rx.text(
+                            AIState.logged_in_user,
+                            font_size="14px",
+                            font_weight="500",
+                            color=COLORS["text_primary"],
+                        ),
+                        rx.button(
+                            t("logout"),
+                            on_click=AIState.do_logout,
+                            size="1",
+                            variant="soft",
+                            color_scheme="gray",
+                            cursor="pointer",
+                        ),
+                        spacing="3",
+                        align="center",
+                    ),
+                ),
+                width="100%",
+                align="center",
+                margin_bottom="4",
+            ),
+
+            # Session Picker (saved chats) - collapsible, above chat history
+            session_list_display(),
+
+            # Chat History (top - read conversation first)
+            # NOTE: Failed sources are now displayed inline within each message (persistent)
+            # NOTE: Sokrates now streams directly into chat_history (no separate panel)
+            chat_history_display(),
+
+            # Audio Player — shared by TTS and audio_player tool (SSOT).
+            # Visible when TTS enabled (chat existing) OR a media item is loaded.
+            rx.cond(
+                (AIState.enable_tts & (ChatHistoryState.chat_history.length() > 0))
+                | (AIState.media_audio_url != ""),
+                rx.box(
+                    rx.hstack(
+                        rx.text("🔊", font_size="18px"),
+                        rx.text(t("tts_player_label"), font_weight="bold", font_size="13px", color=COLORS["accent_blue"]),
+                        rx.spacer(),
+                        # Regenerate ALL TTS Button - re-synthesize all bubbles with current voice settings
+                        rx.button(
+                            rx.cond(
+                                AIState.tts_regenerating,
+                                rx.hstack(
+                                    rx.spinner(size="1"),
+                                    rx.text(t("tts_regenerate_all")),
+                                    spacing="2",
+                                    align="center",
+                                ),
+                                rx.text(t("tts_regenerate_all")),
+                            ),
+                            on_click=AIState.resynthesize_all_tts,
+                            size="1",
+                            variant="soft",
+                            color_scheme="blue",
+                            cursor="pointer",
+                            disabled=AIState.tts_regenerating,
+                            # Slight transparency when regenerating (not full loading state)
+                            opacity=rx.cond(AIState.tts_regenerating, "0.7", "1"),
+                        ),
+                        spacing="2",
+                        align="center",
+                    ),
+                    # HTML5 Audio Element — SSOT for TTS and audio_player tool.
+                    # `src` priority: TTS speech wins over media (LLM voice has priority).
+                    # When TTS clears (tts_audio_path=""), src falls back to media_audio_url.
+                    # When BOTH are empty, the element is rendered without a `src`
+                    # attribute — passing src="" makes the browser fetch the page URL
+                    # itself (React warns about it, wastes bandwidth).
+                    _audio_player_element(),
+                    # Hidden element for TTS queue data - JavaScript reads this to update local queue
+                    # The MutationObserver in custom.js watches for changes to data-queue attribute
+                    # data-polling triggers start/stop of SSE for streaming TTS.
+                    # Wir koppeln NICHT an is_generating: TTS-Tasks laufen bis zu
+                    # 10s laenger als die LLM-Antwort (XTTS-Synthese). Frueher
+                    # wurde SSE bei is_generating=False geschlossen → Pushes
+                    # an tote Queue ('No SSE connections at all') → Browser
+                    # hat nichts gehoert. Jetzt: SSE offen solange TTS+
+                    # Streaming aktiviert sind.
+                    rx.el.div(
+                        id="tts-queue-data",
+                        **{
+                            "data-queue": AIState.tts_queue_json,
+                            "data-version": AIState.tts_queue_version.to(str),
+                            "data-autoplay": rx.cond(AIState.tts_autoplay, "true", "false"),
+                            "data-polling": rx.cond(
+                                AIState.enable_tts & AIState.tts_streaming_enabled,
+                                "true",
+                                "false"
+                            ),
+                            # "true" solange noch TTS-Sentences kommen koennen.
+                            # custom.js audioOnEnded blockiert media-resume bis
+                            # dieses Flag false ist — verhindert dass die
+                            # letzten Worte einer Antwort durch das gestartete
+                            # Hoerbuch unterbrochen werden.
+                            "data-tts-active": rx.cond(
+                                AIState.tts_streaming_in_flight, "true", "false"
+                            ),
+                        },
+                        style={"display": "none"},
+                    ),
+                    # Placeholder when no audio yet - shows hint (inverse visibility)
+                    rx.text(
+                        t("tts_regenerate_hint"),
+                        font_size="11px",
+                        color="#888",
+                        margin_top="8px",
+                        font_style="italic",
+                        display=rx.cond(
+                            AIState.tts_player_visible | (AIState.media_audio_url != ""),
+                            "none",
+                            "block",
+                        ),
+                    ),
+                    padding="3",
+                    background_color="rgba(66, 135, 245, 0.08)",
+                    border_radius="8px",
+                    border=f"1px solid {COLORS['accent_blue']}",
+                    width="100%",
+                    margin_top="4",
+                    margin_bottom="4",
+                ),
+            ),
+
+            # Input controls (below chat history for easy access after reading)
+            rx.box(
+                left_column(),
+                padding="4",
+                background_color=COLORS["card_bg"],
+                border_radius="12px",
+                border=f"1px solid {COLORS['border']}",
+                width="100%",
+            ),
+
+            # Debug Console & Settings side-by-side (bottom)
+            # Desktop: Debug Console flexibel (1fr), Settings schmaler (max 360px)
+            # Mobile: Automatisches Umbrechen via CSS Container Query (custom.css)
+            rx.box(
+                rx.box(
+                    debug_console(),
+                    settings_accordion(),
+                    class_name="debug-settings-grid",
+                    width="100%",
+                ),
+                class_name="debug-settings-container",
+                width="100%",
+            ),
+
+            spacing="4",
+            width="100%",
+            padding="16",  # Padding rundherum (64px) - deutlich größer!
+            max_width="1200px",  # Festgelegte maximale Breite
+            margin="0 auto",  # Zentriert
+            background_color=COLORS["page_bg"],  # Explizite Hintergrundfarbe
+        ),
+
+        width="100%",
+        min_height="100vh",
+        background_color=COLORS["page_bg"],
+        display="flex",
+        justify_content="center",
+    )
+
+
+# ==============================================================
+# Note: Automatik-LLM Preloading moved to State.on_load()
+# ==============================================================
+# Model preloading now happens in state.py initialize_backend()
+# when the user first opens the page. This ensures:
+# 1. Models are loaded from State settings (not hardcoded)
+# 2. Available models list is populated before preloading
+# 3. Everything happens in one place (cleaner architecture)
+
+
+# ============================================================
+# Agent Editor — eigene Route mit automatischem Code-Splitting
+# ============================================================
+# Reflex + React Router 7 (flatRoutes) splittet jede @rx.page in einen
+# eigenen Lazy-Chunk. Die ~258 KB JSX des Agent-Editors landen damit
+# in einem separaten Bundle — das Initial-`_index.jsx` wird dadurch
+# klein genug fuer den Babel-Limit von 500 KB, was die periodischen
+# Bun-Frontend-Crashes loest.
+
+@rx.page(
+    route="/agent-editor",
+    on_load=AIState.on_load_agent_editor,
+    title="Agent Editor — AIfred",
+)
+def agent_editor_route() -> rx.Component:
+    # vision_settings_modal hier mit-mounten, weil das Plugin-Tab im
+    # Agent-Editor steht und das Modal sonst nicht im DOM ist, wenn
+    # der User auf das Vigilantia-Zahnrad klickt.
+    from .ui.modals.narrator_settings import narrator_settings_modal
+    return rx.fragment(
+        agent_editor_page(),
+        vision_settings_modal(),
+        # Reihenfolge = Stapel-Reihenfolge (späteres DOM-Element liegt
+        # oben): Casus < Personarium < Multi-Pose, wie im Haupt-Mount.
+        casus_modal(),
+        personarium_modal(),
+        multipose_modal(),
+        vigilantia_help_modal(),
+        # Narrator gear icon in the plugin tab opens this
+        narrator_settings_modal(),
+    )
+
+
+@rx.page(
+    route="/vision-preview-popup",
+    on_load=AIState.on_load_vision_preview,
+    title="Vigilantia Live — AIfred",
+)
+def vision_preview_popup_route() -> rx.Component:
+    """Eigenes Browser-Fenster (via window.open) für Live-Preview.
+
+    Personarium + Multi-Pose werden mitgemountet, damit der
+    Personarium-Button im „Erkannte Personen"-Panel auch in diesem
+    Fenster ein Modal öffnen kann (gleicher Client-Token → geteilter
+    State mit dem Hauptfenster)."""
+    return rx.fragment(
+        vision_preview_page(),
+        personarium_modal(),
+        multipose_modal(),
+    )
+
+
+@rx.page(
+    route="/audio-settings",
+    on_load=AIState.on_load_audio_settings,
+    title="Audio Settings — AIfred",
+)
+def audio_settings_route() -> rx.Component:
+    # audio_help_modal bleibt ein Overlay-Modal innerhalb der Audio-Settings-
+    # Page (rx.cond auf audio_settings_help_open) — kommt mit auf die Route.
+    return rx.fragment(audio_settings_page(), audio_help_modal())
+
+
+
+
+@rx.page(
+    route="/documents",
+    on_load=AIState.on_load_document_manager,
+    title="Documents — AIfred",
+)
+def document_manager_route() -> rx.Component:
+    return document_manager_page()
+
+
+@rx.page(
+    route="/credentials",
+    title="Channel Credentials — AIfred",
+)
+def channel_credentials_route() -> rx.Component:
+    # Kein on_load-Setup noetig: open_channel_credentials(channel_name) hat
+    # den ganzen State (Felder, OAuth-Status, Werte) bereits gesetzt
+    # bevor es per rx.redirect("/credentials") hierher navigiert.
+    return channel_credentials_page()
+
+
+# Create app (API routes are mounted separately below)
+app = rx.App(
+    stylesheets=[
+        "/custom.css",  # Custom CSS for dark theme
+    ],
+    head_components=[
+        # SVG Favicon - uses system emoji font for consistent 🎩 display
+        rx.el.link(rel="icon", type="image/svg+xml", href="/favicon.svg"),
+        # CSS Custom Properties - inject UI layout constants from config.py
+        rx.el.style(f"""
+            :root {{
+                --chat-max-height-desktop: {UI_CHAT_HISTORY_MAX_HEIGHT_DESKTOP};
+                --chat-max-height-mobile: {UI_CHAT_HISTORY_MAX_HEIGHT_MOBILE};
+                --thinking-max-height-desktop: {UI_THINKING_MAX_HEIGHT_DESKTOP};
+                --thinking-max-height-mobile: {UI_THINKING_MAX_HEIGHT_MOBILE};
+                --debug-max-height: {UI_DEBUG_CONSOLE_MAX_HEIGHT};
+                --sandbox-max-height: {UI_SANDBOX_MAX_HEIGHT};
+                --mobile-breakpoint: {UI_MOBILE_BREAKPOINT};
+            }}
+        """),
+    ],
+)
+
+# Mount REST API routes directly on Reflex's backend
+# This avoids the "ASGI flow error: Connection already upgraded" bug
+# that occurs when using api_transformer with WebSocket connections
+from .lib.api import api_app  # noqa: E402
+assert app._api is not None
+app._api.mount("/api", api_app)
+
+# Mount static file directories from data/
+# All user data is stored in data/ which is excluded from hot-reload
+from starlette.staticfiles import StaticFiles  # noqa: E402
+
+from .lib.authenticated_static import AuthenticatedStaticFiles  # noqa: E402
+from .lib.config import DATA_DIR  # noqa: E402
+
+# Regel für /_upload/*: ALLE Mounts sind cookie-pflichtig
+# (AuthenticatedStaticFiles) — einzige Ausnahme ist html_preview, dessen
+# Zweck das Teilen an Empfänger OHNE AIfred-Login ist (Share-Funktion).
+#
+# User uploads (mobile camera + file picker) live under data/upload/images/
+# and are served at /_upload/images/.
+upload_images_dir = DATA_DIR / "upload" / "images"
+upload_images_dir.mkdir(parents=True, exist_ok=True)
+app._api.mount(
+    "/_upload/images",
+    AuthenticatedStaticFiles(directory=str(upload_images_dir)),
+    name="uploaded_images",
+)
+
+# Surveillance captures live under data/vigilantia/ — on-demand tool-call
+# snapshots (toolcall/<session>/) and background motion frames
+# (motion/<cam>/<date>/) — served at /_upload/vigilantia/.
+vigilantia_dir = DATA_DIR / "vigilantia"
+vigilantia_dir.mkdir(parents=True, exist_ok=True)
+app._api.mount(
+    "/_upload/vigilantia",
+    AuthenticatedStaticFiles(directory=str(vigilantia_dir)),
+    name="vigilantia_images",
+)
+
+# Mount html_preview directory for share_chat feature.
+# BEWUSST OHNE Cookie-Pflicht: Share-Links sollen von Empfängern ohne
+# AIfred-Login geöffnet werden können; der Inhalt wird durch bewusste
+# User-Aktion publiziert. Von außen schützt weiterhin nginx-Basic-Auth.
+html_preview_dir = DATA_DIR / "html_preview"
+html_preview_dir.mkdir(parents=True, exist_ok=True)
+app._api.mount("/_upload/html_preview", StaticFiles(directory=str(html_preview_dir)), name="html_preview")
+
+# Mount sandbox_output directory for interactive code execution results
+sandbox_output_dir = DATA_DIR / "sandbox_output"
+sandbox_output_dir.mkdir(parents=True, exist_ok=True)
+app._api.mount(
+    "/_upload/sandbox_output",
+    AuthenticatedStaticFiles(directory=str(sandbox_output_dir)),
+    name="sandbox_output",
+)
+
+# Mount tts_audio directory for TTS playback (temporary chunks).
+# Cookie-pflichtig ist OK: FreeEcho liest die WAVs direkt von Platte
+# (URL→Pfad-Konvertierung im Channel), nicht über diesen Mount.
+tts_audio_dir = DATA_DIR / "tts_audio"
+tts_audio_dir.mkdir(parents=True, exist_ok=True)
+app._api.mount(
+    "/_upload/tts_audio",
+    AuthenticatedStaticFiles(directory=str(tts_audio_dir)),
+    name="tts_audio",
+)
+
+# Mount audio directory for permanent session audio (replay button)
+session_audio_dir = DATA_DIR / "audio"
+session_audio_dir.mkdir(parents=True, exist_ok=True)
+app._api.mount(
+    "/_upload/audio",
+    AuthenticatedStaticFiles(directory=str(session_audio_dir)),
+    name="session_audio",
+)
+
+# Face-Crops für die „Erkannte Personen"-Box im Live-Preview-Popup.
+# Pro Identity (face_id für known/unsure, Pseudo-Id für unknowns)
+# genau eine Datei, periodisch via vision_cleanup-Task aufgeräumt.
+face_crops_dir = DATA_DIR / "vision" / "faces"
+face_crops_dir.mkdir(parents=True, exist_ok=True)
+app._api.mount(
+    "/_upload/face_crops",
+    AuthenticatedStaticFiles(directory=str(face_crops_dir)),
+    name="face_crops",
+)
+
+# Mount documents directory for document download (RAG-Dokumente —
+# sensibelster Inhalt; Workspace-iframe ist same-origin, Cookie kommt mit)
+documents_dir = DATA_DIR / "documents"
+documents_dir.mkdir(parents=True, exist_ok=True)
+app._api.mount(
+    "/_upload/documents",
+    AuthenticatedStaticFiles(directory=str(documents_dir)),
+    name="uploaded_documents",
+)
+
+# ---------------------------------------------------------------------------
+# Message Hub — background workers for channel listeners (email, discord, …)
+# ---------------------------------------------------------------------------
+import contextlib  # noqa: E402
+
+
+@contextlib.asynccontextmanager
+async def _message_hub_lifespan():
+    """Start Message Hub on ASGI startup, stop on shutdown.
+
+    This handles the initial start. on_load() provides a safety net
+    for Granian worker respawns where the lifespan doesn't re-run.
+    """
+    from .lib.message_hub import message_hub, register_channel_workers  # noqa: E402
+    from .lib.scheduler import scheduler_loop  # noqa: E402
+
+    register_channel_workers(message_hub)
+    if not message_hub.is_running("scheduler"):
+        message_hub.register("scheduler", scheduler_loop)
+    await message_hub.start_all()
+    # Vigilantia: Hintergrund-Watcher für Quellen mit auto_start=True.
+    # Läuft unabhängig vom Browser-Tab — solange der AIfred-Service da
+    # ist, ist die Detection scharf.
+    try:
+        from .lib.vision_autostart import (
+            ensure_schedule_supervisor,
+            start_all_background_watchers,
+        )
+        await start_all_background_watchers()
+        # Dauer-Supervisor: startet/stoppt die Watcher an den Pro-Kamera-
+        # Zeitfenster-Grenzen (z.B. Stopp um 06:00). Lief bisher nie, weil
+        # nur start_all aufgerufen wurde — Kameras blieben nach Fenster-Ende
+        # scharf. Idempotent (Granian-Respawn-sicher).
+        ensure_schedule_supervisor()
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning(
+            "vigilantia autostart failed: %s", e
+        )
+    try:
+        yield
+    finally:
+        await message_hub.stop_all()
+        try:
+            from .lib.vision_watcher import get_default_watcher
+            await get_default_watcher().shutdown()
+        except Exception:  # noqa: BLE001
+            pass
+        # Geteilte Kamera-Snap-/AI-Clients sauber abmelden (Reolink-Logout →
+        # gibt die Session frei). Gegen Token-Leaks bei Service-Neustarts,
+        # die sonst das „max session"-Kontingent der Kamera füllen.
+        try:
+            from .lib.vision_snap import close_clients
+            await close_clients()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+app.register_lifespan_task(_message_hub_lifespan)

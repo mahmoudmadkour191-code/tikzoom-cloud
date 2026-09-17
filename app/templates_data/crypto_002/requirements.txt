@@ -1,0 +1,6 @@
+# auto-added by TikZoom curator
+python-telegram-bot
+matplotlib
+numpy
+pandas
+websocket-client

@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <h3 style="margin:0;">Товары</h3>
+    <div class="row" style="gap:8px;">
+      <a class="btn btn-primary" href="/admin/items/new" title="Добавить">Добавить</a>
+      <a class="btn" href="/admin/items/backup" title="Скачать бекап">⬇️ Бекап</a>
+      <form method="post" action="/admin/items/restore" enctype="multipart/form-data" class="row" style="gap:8px;">
+        <input type="file" name="file" accept=".zip" />
+        <button class="btn" title="Загрузить бекап">⬆️ Восстановить</button>
+      </form>
+    </div>
+  </div>
+  {% if error %}
+    <div class="row" style="margin-top:12px; color:#fca5a5;">{{ error }}</div>
+  {% endif %}
+  <table style="margin-top:16px;">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Название</th>
+        <th>Тип</th>
+        <th>Цена</th>
+        <th>Остаток</th>
+        <th style="width:460px; text-align:right;">Действия</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i in items %}
+      <tr>
+        <td>{{ i.id }}</td>
+        <td>{{ i.title }}</td>
+        <td>{{ i.item_type.value }}</td>
+        <td>{{ '%.2f' % (i.price_minor/100) }} ₽</td>
+        <td>
+          {% if i.item_type.value == 'digital' %}
+            {{ i.codes_left if i.codes_left is defined else '-' }}
+          {% else %}
+            —
+          {% endif %}
+        </td>
+        <td style="text-align:right;">
+          <div class="row" style="justify-content:flex-end; gap:8px; flex-wrap:wrap;">
+            <a class="btn btn-icon" href="/admin/items/{{ i.id }}" title="Редактировать">✏️</a>
+            <form method="post" action="/admin/items/{{ i.id }}/delete" style="display:inline;">
+              <button type="submit" class="btn btn-danger btn-icon" title="Удалить" onclick="return confirm('Удалить товар?');">🗑️</button>
+            </form>
+            <form method="post" action="/admin/items/{{ i.id }}/toggle_visibility" style="display:inline;">
+              {% if i.is_visible %}
+                <button type="submit" class="btn btn-secondary btn-icon" title="Скрыть">🙈</button>
+              {% else %}
+                <button type="submit" class="btn btn-success btn-icon" title="Показать">👀</button>
+              {% endif %}
+            </form>
+            {% if i.item_type.value == 'digital' %}
+              <button class="btn btn-icon" title="Догрузить TXT" onclick="openCodesModal({{ i.id }})">➕TXT</button>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="row" style="justify-content:space-between; margin-top:12px;">
+    <div style="color:#9aa4b2; font-size:12px;">Всего: {{ total }}</div>
+    <div class="row" style="gap:8px;">
+      {% set prev = page-1 %}
+      {% set next = page+1 %}
+      {% if page > 1 %}
+        <a class="btn" href="/admin/items?page={{ prev }}">Назад</a>
+      {% endif %}
+      {% if page*page_size < total %}
+        <a class="btn" href="/admin/items?page={{ next }}">Вперёд</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Модалка догрузки TXT кодов -->
+<div id="codesModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); align-items:center; justify-content:center;">
+  <div style="background:#111827; border:1px solid #1f2937; padding:20px; border-radius:12px; width:420px; box-shadow:0 10px 30px rgba(0,0,0,0.4);">
+    <h3>Догрузить TXT к товару</h3>
+    <p style="color:#9aa4b2; font-size:13px; margin-top:6px;">Каждая строка — отдельная позиция.</p>
+    <input id="codesFile" type="file" accept=".txt" style="margin:12px 0; width:100%" />
+    <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
+      <button class="btn btn-secondary" onclick="closeCodesModal()">Отмена</button>
+      <button class="btn btn-primary" onclick="submitCodes()">Загрузить</button>
+    </div>
+    <div id="codesMsg" style="margin-top:10px; font-size:13px;"></div>
+  </div>
+  <input type="hidden" id="codesItemId" />
+  
+</div>
+
+<script>
+  function openCodesModal(itemId){
+    document.getElementById('codesItemId').value = itemId;
+    document.getElementById('codesFile').value = '';
+    document.getElementById('codesMsg').textContent = '';
+    document.getElementById('codesModal').style.display = 'flex';
+  }
+  function closeCodesModal(){
+    document.getElementById('codesModal').style.display = 'none';
+  }
+  async function submitCodes(){
+    const fileInp = document.getElementById('codesFile');
+    const itemId = document.getElementById('codesItemId').value;
+    const msg = document.getElementById('codesMsg');
+    if(!fileInp.files || fileInp.files.length === 0){
+      msg.textContent = 'Выберите TXT-файл.';
+      msg.style.color = '#fca5a5';
+      return;
+    }
+    const fd = new FormData();
+    fd.append('file', fileInp.files[0]);
+    msg.textContent = 'Загрузка...';
+    msg.style.color = '#9aa4b2';
+    try{
+      const resp = await fetch(`/admin/items/${itemId}/add_codes`, { method: 'POST', body: fd });
+      const data = await resp.json();
+      if(data.ok){
+        msg.textContent = `Добавлено: ${data.added}`;
+        msg.style.color = '#86efac';
+        setTimeout(()=>{ location.reload(); }, 800);
+      }else{
+        msg.textContent = data.error || 'Ошибка загрузки.';
+        msg.style.color = '#fca5a5';
+      }
+    }catch(e){
+      msg.textContent = 'Ошибка сети.';
+      msg.style.color = '#fca5a5';
+    }
+  }
+</script>
+{% endblock %}

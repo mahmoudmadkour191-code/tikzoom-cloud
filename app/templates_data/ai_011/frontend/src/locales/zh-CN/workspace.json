@@ -1,0 +1,1656 @@
+{
+  "status": {
+    "active": "运行中",
+    "stopped": "已停止",
+    "failed": "错误",
+    "deleting": "删除中"
+  },
+  "policy": {
+    "agent": "Agent",
+    "relaxed": "宽松",
+    "strict": "严格"
+  },
+  "statusChip": {
+    "active": "Claude Code 沙盒"
+  },
+  "list": {
+    "sectionTitle": "CC 工作区",
+    "total": "共 {{count}} 个",
+    "createBtn": "创建工作区",
+    "loadError": "加载工作区列表失败：{{message}}",
+    "statCards": {
+      "total": "全部工作区",
+      "active": "运行中",
+      "stopped": "已停止",
+      "failed": "异常"
+    },
+    "empty": {
+      "title": "暂无工作区",
+      "hint": "点击「创建工作区」开始使用"
+    },
+    "batchSelect": "批量选择",
+    "selectAll": "全选",
+    "deselectAll": "取消全选",
+    "batchBar": {
+      "selected": "已选 {{count}} 个",
+      "cancel": "取消",
+      "start": "启动",
+      "stop": "停止",
+      "restart": "重启",
+      "rebuild": "重建",
+      "resetSession": "重置会话",
+      "setPreset": "设置模型组"
+    },
+    "batchConfirm": {
+      "title": "确认批量操作",
+      "content": "确认对选中的 {{count}} 个工作区执行「{{op}}」操作？",
+      "cancel": "取消",
+      "confirm": "确认"
+    },
+    "batchPreset": {
+      "title": "批量设置 CC 模型组",
+      "hint": "将对选中的 {{count}} 个工作区设置相同的 CC 模型组。选择「清空」可移除现有绑定。",
+      "selectLabel": "CC 模型组",
+      "clearHint": "留空以清除绑定",
+      "noPresets": "暂无可用模型组",
+      "cancel": "取消",
+      "confirm": "应用",
+      "success": "已成功更新 {{count}} 个工作区的模型组"
+    }
+  },
+  "card": {
+    "noDescription": "暂无描述",
+    "defaultImage": "默认镜像",
+    "image": "镜像",
+    "container": "容器",
+    "createdAt": "创建",
+    "enter": "进入",
+    "delete": "删除",
+    "channels": "频道",
+    "channelMore": "等{{n}}个",
+    "model": "模型",
+    "skillMcp": "Skill/MCP",
+    "ccActive": "CC 执行中",
+    "runtime": {
+      "queued": "排队中",
+      "running": "执行中",
+      "responding": "回传结果",
+      "completed": "已完成",
+      "failed": "执行失败",
+      "cancelled": "已中止",
+      "queue": "队列 {{count}}",
+      "blocks": "{{count}} 块"
+    }
+  },
+  "createDialog": {
+    "title": "创建工作区",
+    "nameLabel": "工作区名称",
+    "descLabel": "描述",
+    "policyLabel": "运行策略",
+    "policyAgent": "Agent（代理模式）",
+    "policyRelaxed": "Relaxed（宽松模式）",
+    "policyStrict": "Strict（严格模式）",
+    "randomNameTooltip": "随机生成名称",
+    "cancel": "取消",
+    "create": "创建",
+    "nameRequired": "工作区名称不能为空",
+    "createSuccess": "工作区 \"{{name}}\" 创建成功",
+    "createFailed": "创建失败：{{message}}"
+  },
+  "deleteDialog": {
+    "title": "确认删除",
+    "content": "确定要删除工作区 {{name}} 吗？此操作不可撤销。",
+    "cancel": "取消",
+    "delete": "删除",
+    "deleteSuccess": "工作区已删除",
+    "deleteFailed": "删除失败：{{message}}"
+  },
+  "ccModels": {
+    "alert": {
+      "providerSupportBefore": "CC 模型组支持任意 Anthropic 兼容模型供应商（如官方 Anthropic 等）。如果您没有可用供应商或想支持我们，可访问 ",
+      "providerSupportLink": "NekroAI 中转",
+      "providerSupportAfter": " 获取专属密钥哦～"
+    },
+    "createBtn": "新建模型组",
+    "actions": {
+      "searchPlaceholder": "搜索模型组、地址或描述",
+      "clearSelection": "清空选择",
+      "batchTest": "批量测试模型（{{count}}）"
+    },
+    "table": {
+      "headers": {
+        "name": "模型组名称",
+        "desc": "描述",
+        "type": "类型",
+        "model": "模型",
+        "baseUrl": "Base URL",
+        "usage": "工作区引用",
+        "health": "测速",
+        "actions": "操作"
+      },
+      "empty": "暂无匹配的模型组",
+      "defaultChip": "默认",
+      "typePreset": "预设",
+      "typeManual": "手动",
+      "multiModel": "(多模型)",
+      "usageBound": "已绑定 {{count}} 个",
+      "usageIdle": "未绑定",
+      "tooltips": {
+        "edit": "编辑",
+        "copy": "复制",
+        "test": "测试模型",
+        "testDisabled": "请先补全 Base URL、Auth Token 和可测试模型",
+        "delete": "删除",
+        "defaultCannotDelete": "默认模型组不可删除",
+        "boundCannotDelete": "已有 {{count}} 个工作区绑定，不能直接删除"
+      }
+    },
+    "health": {
+      "notTested": "未测试",
+      "testing": "测试中",
+      "ok": "{{ms}}ms",
+      "failed": "失败",
+      "tooltipPassed": "模型测试通过",
+      "tooltipFailed": "模型测试失败",
+      "tooltipModel": "实际模型：{{model}}",
+      "tooltipLatency": "耗时：{{ms}}ms",
+      "tooltipTokens": "Token：输入 {{input}} / 输出 {{output}}",
+      "tooltipReply": "模型回复：{{text}}",
+      "tooltipError": "错误信息：{{error}}"
+    },
+    "dialog": {
+      "titleCreate": "新建 CC 模型组",
+      "titleEdit": "编辑 CC 模型组",
+      "titleCopy": "复制 CC 模型组",
+      "name": "模型组名称",
+      "nameReadonly": "名称创建后不可修改",
+      "desc": "描述",
+      "sectionApi": "API 配置",
+      "sourcePreset": "来源模板",
+      "sourcePresetHint": "自动填充官方确认的 Base URL 与推荐模型映射，随后只需填写密钥即可",
+      "sourcePresetCustom": "自定义（不套用模板）",
+      "timeout": "超时 (ms)",
+      "sectionModel": "模型配置",
+      "modelType": "模型类型",
+      "modelTypePreset": "预设模式（使用预设名称）",
+      "modelTypeManual": "手动模式（分别指定各角色模型）",
+      "presetModel": "预设模型",
+      "presetModelHint": "model 字段值",
+      "emptyMeans": "留空则不设置",
+      "sectionEnv": "自定义附加变量",
+      "envAdd": "添加",
+      "envEmpty": "暂无自定义变量，点击「添加」新增键值对",
+      "sectionPreview": "生成的配置 JSON 预览",
+      "cancel": "取消",
+      "save": "保存",
+      "create": "创建",
+      "test": "测试模型",
+      "testNeedsConfig": "请先填写 Base URL、Auth Token 和至少一个模型名称",
+      "fetchModels": "获取模型列表",
+      "fetchingModels": "获取中…",
+      "fetchModelsNeedConfig": "请先填写 Base URL 和 Auth Token"
+    },
+    "deleteDialog": {
+      "title": "确认删除模型组",
+      "content": "确定要删除模型组 {{name}} 吗？此操作不可撤销。",
+      "boundHint": "当前仍有 {{count}} 个工作区绑定：{{names}}",
+      "cancel": "取消",
+      "delete": "删除"
+    },
+    "notifications": {
+      "created": "模型组已创建",
+      "createFailed": "创建失败：{{message}}",
+      "saved": "模型组已保存",
+      "saveFailed": "保存失败：{{message}}",
+      "deleted": "模型组已删除",
+      "deleteFailed": "删除失败：{{message}}",
+      "noTestableGroups": "当前选择中没有可测试的 CC 模型组",
+      "testNoResults": "模型测试未返回结果，请检查请求链路",
+      "testAllPassed": "模型测试通过",
+      "testCompleted": "模型测试完成，请查看结果",
+      "testFailed": "模型测试失败"
+    }
+  },
+  "skills": {
+    "pageTitle": "技能库",
+    "pageDesc": "管理 Claude Code 可用的技能，标记自动注入的技能将在新建工作区时自动启用",
+    "statBuiltin": "内置技能",
+    "statUser": "用户技能",
+    "statRepo": "仓库技能",
+    "statAutoInject": "自动注入",
+    "search": {
+      "placeholder": "搜索技能名称或描述..."
+    },
+    "filter": {
+      "all": "全部",
+      "builtin": "内置",
+      "user": "用户",
+      "repo": "仓库"
+    },
+    "toolbar": {
+      "cardView": "卡片视图",
+      "listView": "列表视图",
+      "refresh": "刷新",
+      "uploadTooltip": "上传 Skill（.zip 格式）",
+      "uploadBtn": "上传",
+      "addBtn": "添加 Skill",
+      "clearFilters": "清除筛选"
+    },
+    "empty": {
+      "title": "技能库为空",
+      "hint": "点击「添加 Skill」从 Git 仓库克隆，或上传 ZIP 包",
+      "noMatch": "没有匹配的技能"
+    },
+    "content": {
+      "noContent": "暂无内容",
+      "allowedTools": "允许工具:",
+      "loading": "加载中..."
+    },
+    "autoInject": {
+      "on": "自动注入",
+      "off": "非自动注入",
+      "tooltip": "开启后，新建工作区时将自动添加此技能",
+      "badge": "自动注入"
+    },
+    "card": {
+      "viewTooltip": "查看详情",
+      "deleteTooltip": "删除",
+      "pullTooltip": "拉取更新",
+      "sourceBuiltin": "内置",
+      "sourceUser": "用户",
+      "sourceRepo": "仓库"
+    },
+    "drawer": {
+      "title": "技能详情",
+      "close": "关闭",
+      "source": "来源",
+      "directory": "目录名",
+      "autoInject": "自动注入",
+      "syncToWorkspaces": "同步此技能到所有引用它的工作区",
+      "noContent": "暂无 SKILL.md 内容",
+      "files": "文件",
+      "preview": "预览",
+      "source_code": "源码",
+      "edit": "编辑",
+      "save": "保存",
+      "saving": "保存中...",
+      "cancel_edit": "取消",
+      "readOnly": "只读",
+      "modified": "已修改",
+      "saveSuccess": "文件已保存",
+      "saveFailed": "保存失败：{{message}}",
+      "loadFailed": "加载文件失败",
+      "binaryFile": "二进制文件，无法预览",
+      "emptyDir": "空目录",
+      "unsavedConfirm": "当前文件已修改，确定放弃更改吗？",
+      "unsavedTitle": "未保存的更改",
+      "discard": "放弃",
+      "keepEditing": "继续编辑",
+      "skillMd": "SKILL.md（主文件）",
+      "fileCount": "{{count}} 个文件"
+    },
+    "error": {
+      "loadFailed": "加载技能库失败：{{message}}"
+    },
+    "cloneDialog": {
+      "title": "添加 Skill",
+      "urlLabel": "Git 仓库地址",
+      "dirLabel": "保存目录名",
+      "dirHintSaving": "将保存到：skills/{{dir}}",
+      "dirHintAuto": "自动生成自仓库名，可手动修改",
+      "cancel": "取消",
+      "cloneBtn": "克隆",
+      "cloning": "克隆中..."
+    },
+    "deleteDialog": {
+      "title": "确认删除",
+      "content": "确定要删除 {{name}} 吗？此操作不可撤销，目录下的所有文件将被永久删除。",
+      "cancel": "取消",
+      "delete": "删除"
+    },
+    "notifications": {
+      "deleted": "Skill 已删除",
+      "deleteFailed": "删除失败：{{message}}",
+      "cloned": "已克隆到 {{dir}}",
+      "cloneFailed": "克隆失败：{{message}}",
+      "uploaded": "Skill 上传成功",
+      "uploadFailed": "上传失败：{{message}}",
+      "pullSuccess": "更新完成：{{output}}",
+      "pullUpToDate": "已是最新",
+      "pullFailed": "更新失败：{{message}}",
+      "invalidFile": "请选择 .zip 格式的文件",
+      "autoInjectUpdated": "自动注入设置已更新",
+      "autoInjectFailed": "自动注入设置失败：{{message}}",
+      "syncSuccess": "已同步到 {{count}} 个工作区",
+      "syncFailed": "同步失败：{{message}}"
+    }
+  },
+  "mcpServices": {
+    "pageTitle": "MCP 服务",
+    "pageDesc": "管理自动注入到新工作区的 MCP 服务，所有工作区创建时将自动添加这些服务",
+    "stats": {
+      "total": "自动注入总数",
+      "stdio": "STDIO",
+      "sse": "SSE",
+      "http": "HTTP"
+    },
+    "search": {
+      "placeholder": "搜索服务名称或命令..."
+    },
+    "filter": {
+      "all": "全部",
+      "stdio": "STDIO",
+      "sse": "SSE",
+      "http": "HTTP"
+    },
+    "toolbar": {
+      "fromTemplate": "从模板添加",
+      "addManual": "手动添加",
+      "refresh": "刷新",
+      "cardView": "卡片视图",
+      "listView": "列表视图",
+      "clearFilters": "清除筛选",
+      "jsonView": "JSON 视图",
+      "jsonViewTitle": "自动注入配置（JSON）",
+      "jsonViewHint": "此视图为只读，展示当前自动注入 MCP 服务的 JSON 配置，可复制到 Claude Desktop 等工具使用",
+      "readOnly": "只读",
+      "autoInjectTooltip": "开启后，新建工作区时将自动添加此 MCP 服务",
+      "autoInjectOn": "自动注入",
+      "autoInjectOff": "非自动注入",
+      "autoInject": "自动注入",
+      "addBtn": "添加服务",
+      "importJson": "从 JSON 导入"
+    },
+    "import": {
+      "title": "从 JSON 导入 MCP 服务",
+      "hint": "粘贴 Claude Desktop 格式的 MCP 配置 JSON（支持 JSONC 注释），将自动解析并添加到自动注入列表。已存在同名服务将被跳过。",
+      "importBtn": "导入",
+      "parseError": "JSON 解析失败，请检查格式",
+      "formatError": "格式不正确，需要 { mcpServers: { ... } } 或 { name: { ... } } 格式",
+      "emptyError": "未找到可导入的服务",
+      "allLocalFileError": "所有 STDIO 服务均引用了本地文件路径，无法导入。仅支持 npx/uvx 等包管理器命令",
+      "success": "成功导入 {{count}} 个服务",
+      "successWithSkip": "成功导入 {{count}} 个服务，跳过 {{skipped}} 个已存在的服务"
+    },
+    "empty": {
+      "title": "暂无自动注入的 MCP 服务",
+      "hint": "点击「手动添加」或「从模板添加」添加第一个自动注入服务",
+      "noMatch": "没有匹配的服务"
+    },
+    "notifications": {
+      "addSuccess": "MCP 服务已添加到自动注入列表",
+      "addFailed": "添加失败：{{message}}",
+      "updateSuccess": "MCP 服务已更新",
+      "updateFailed": "更新失败：{{message}}",
+      "deleteSuccess": "MCP 服务已从自动注入列表移除",
+      "deleteFailed": "移除失败：{{message}}",
+      "toggleSuccess": "已更新启用状态"
+    },
+    "deleteDialog": {
+      "title": "移除自动注入服务",
+      "content": "确定要从自动注入列表中移除「{{name}}」吗？已有工作区中的配置不受影响。"
+    },
+    "validate": {
+      "button": "验证连接",
+      "pending": "正在握手…",
+      "success": "{{name}} {{version}} 握手成功",
+      "toolsAndLatency": "提供 {{count}} 个工具，耗时 {{latency}}ms",
+      "errorKind": {
+        "schema": "配置不合法",
+        "spawn_failed": "进程启动失败（检查 command 与 args）",
+        "handshake_timeout": "握手超时（检查服务器是否启动 / 网络可达）",
+        "transport_error": "传输层错误（连接失败 / URL 不可达）",
+        "container_not_running": "工作区容器未运行，stdio 类型需先启动工作区",
+        "invalid_response": "握手响应无效（对方可能不是 MCP 服务）"
+      },
+      "chip": {
+        "validated": "已验证",
+        "unvalidated": "未验证",
+        "failed": "验证失败",
+        "validatedTooltip": "已通过验证 · {{time}} UTC · {{tools}} 个工具。已写入 .mcp.json，CC 可见。",
+        "unvalidatedTooltip": "尚未通过验证。点击 ▶ 按钮发起一次握手；未验证的服务器不会写入 .mcp.json，CC 不可见。",
+        "failedTooltip": "最近一次验证失败，未写入 .mcp.json"
+      }
+    }
+  },
+  "detail": {
+    "header": {
+      "backTooltip": "返回列表",
+      "ccWorking": "CC 执行中",
+      "ccQueued": "排队中",
+      "ccRunning": "执行中",
+      "ccResponding": "回传结果",
+      "ccCompleted": "已完成",
+      "ccFailed": "执行失败",
+      "ccCancelled": "已中止",
+      "ccElapsed": "{{seconds}}s",
+      "ccQueuedCount": "队列 {{count}}",
+      "ccBlockCount": "累计块 {{count}}",
+      "viewSandboxTooltip": "查看沙盒容器"
+    },
+    "tabs": {
+      "overview": "概览",
+      "sandbox": "沙盒容器",
+      "comm": "沙盒通讯",
+      "memory": "记忆图谱",
+      "knowledge": "知识库",
+      "extensions": "扩展能力",
+      "mcp": "MCP 服务",
+      "resources": "资源挂载",
+      "prompt": "协作上下文",
+      "config": "配置"
+    },
+    "overview": {
+      "noDescription": "暂无描述",
+      "statCards": {
+        "channels": "绑定频道",
+        "skills": "已启用技能",
+        "resources": "资源挂载",
+        "memory": "记忆内容",
+        "mcp": "MCP 服务",
+        "comm": "通讯记录"
+      },
+      "suffixes": {
+        "count": "个",
+        "messages": "条"
+      },
+      "sections": {
+        "basicInfo": "工作区基本信息",
+        "sandboxStatus": "沙盒运行状态",
+        "naContext": "协作现状摘要",
+        "channels": "绑定频道摘要"
+      },
+      "manage": "管理",
+      "viewEdit": "查看编辑",
+      "noContext": "当前还没有协作现状摘要。",
+      "noChannels": "当前未绑定频道。",
+      "contextUpdated": "最近更新：{{time}}",
+      "dynamicSkillSuffix": "动态技能 {{count}} 个",
+      "reinforcement7dSuffix": "近 7 天强化 {{count}} 次",
+      "memoryNotEnabled": "记忆系统当前未启用，概览中不展示记忆统计。",
+      "commStatus": {
+        "active": "当前执行中",
+        "idle": "当前空闲"
+      },
+      "infoRows": {
+        "id": "ID",
+        "policy": "运行策略",
+        "image": "沙盒镜像",
+        "createdAt": "创建时间",
+        "updatedAt": "更新时间",
+        "sandboxStatus": "运行状态",
+        "containerName": "容器名称",
+        "hostPort": "主机端口",
+        "sessionId": "Session ID",
+        "versionInfo": "版本信息",
+        "ccVersion": "沙盒版本",
+        "claudeCodeVersion": "Claude Code",
+        "modelGroup": "模型组",
+        "ccRuntime": "CC 状态",
+        "lastHeartbeat": "最近心跳"
+      },
+      "defaultImage": "默认镜像",
+      "notConfigured": "未配置",
+      "loading": "加载中…",
+      "defaultTag": "(默认)",
+      "tooltips": {
+        "switchConfig": "在配置页切换",
+        "managePresets": "管理模型预设"
+      },
+      "ccPluginAlert": {
+        "message": "内置插件“Claude Code 协作”当前未启用，主 Agent 无法完整接入 CC Workspace 的任务委托、文件传递与状态查询能力。请先前往插件管理启用该插件，以使用 CC 沙盒的完整协作功能。",
+        "action": "前往启用"
+      },
+      "channels": {
+        "title": "绑定频道",
+        "searchPlaceholder": "搜索并选择频道",
+        "noOptions": "暂无频道",
+        "bound": "已绑定",
+        "bind": "绑定",
+        "noChannels": "暂无绑定频道。选择并绑定频道后，该工作区将为这些会话提供 CC 沙盒能力。",
+        "channelHint": "绑定频道后，该工作区将为这些会话提供 CC 沙盒能力",
+        "disabled": "已禁用",
+        "unbindTooltip": "解绑",
+        "bindSuccess": "频道已绑定",
+        "bindFailed": "绑定失败：{{message}}",
+        "unbindSuccess": "频道已解绑",
+        "unbindFailed": "解绑失败：{{message}}",
+        "annotationFailed": "注解更新失败：{{message}}",
+        "primaryTag": "主频道",
+        "setPrimaryTooltip": "设为主频道",
+        "isPrimaryTooltip": "当前主频道",
+        "primaryAutoTooltip": "单频道时自动作为主频道",
+        "descPlaceholder": "添加频道用途说明（可选）..."
+      }
+    },
+    "sandbox": {
+      "title": "沙盒容器",
+      "transitioning": "操作中，请稍候...",
+      "buttons": {
+        "start": "启动",
+        "starting": "启动中",
+        "stop": "停止",
+        "stopping": "停止中",
+        "restart": "重启",
+        "restarting": "重启中",
+        "rebuild": "重建",
+        "resetSession": "重置会话"
+      },
+      "statusRows": {
+        "containerName": "容器名称",
+        "hostPort": "主机端口",
+        "sessionId": "Session ID"
+      },
+      "logError": "沙盒错误：",
+      "notifications": {
+        "startSuccess": "沙盒已启动",
+        "startFailed": "启动失败：{{message}}",
+        "stopSuccess": "沙盒已停止",
+        "stopFailed": "停止失败：{{message}}",
+        "restartSuccess": "沙盒已重启",
+        "restartFailed": "重启失败：{{message}}",
+        "rebuildSuccess": "容器重建中...",
+        "rebuildFailed": "重建失败：{{message}}",
+        "resetSessionSuccess": "会话已重置",
+        "resetSessionFailed": "重置失败：{{message}}"
+      },
+      "rebuildDialog": {
+        "title": "确认重建容器",
+        "content": "重建会销毁当前容器并重新创建，已有运行状态将丢失。确定继续？",
+        "cancel": "取消",
+        "rebuild": "重建"
+      },
+      "logs": {
+        "title": "容器日志",
+        "clearTooltip": "清空",
+        "waiting": "等待日志输出...",
+        "disconnected": "[日志流连接中断]",
+        "lines": "{{count}} 行"
+      },
+      "terminal": {
+        "title": "沙盒终端",
+        "connected": "已连接",
+        "connecting": "连接中...",
+        "disconnected": "未连接",
+        "notRunning": "沙盒未运行",
+        "connect": "连接",
+        "reconnect": "重连",
+        "startFirst": "请先启动沙盒以使用终端",
+        "wsConnected": "已连接",
+        "wsDisconnected": "[连接已断开]",
+        "wsError": "[连接错误]"
+      }
+    },
+    "memory": {
+      "treeTitle": "记忆文件",
+      "contentTitle": "编辑记忆文件",
+      "toggleTitleTooltip_title": "切换为标题显示",
+      "toggleFileTooltip_filename": "切换为文件名显示",
+      "refreshTooltip": "刷新",
+      "newFileTooltip": "新建记忆文件",
+      "emptyHint": "暂无记忆文件",
+      "editorHint": "选择左侧文件进行编辑，或点击「+」新建记忆文件",
+      "metadata": {
+        "title": "标题",
+        "shared": "共享给 NA",
+        "yes": "是",
+        "no": "否",
+        "category": "分类",
+        "tags": "标签",
+        "sharedToNA": "已共享给 NA"
+      },
+      "charCount": "{{count}}/600 字",
+      "buttons": {
+        "save": "保存",
+        "delete": "删除",
+        "cancel": "取消",
+        "resetMemory": "重置记忆库",
+        "confirmClear": "确认清空",
+        "create": "创建"
+      },
+      "notifications": {
+        "saveSuccess": "记忆文件已保存",
+        "saveFailed": "保存失败",
+        "deleteSuccess": "记忆文件已删除",
+        "deleteFailed": "删除失败",
+        "resetSuccess": "记忆库已清空",
+        "resetFailed": "重置失败",
+        "createSuccess": "记忆文件已创建",
+        "createFailed": "创建失败"
+      },
+      "newFileDialog": {
+        "title": "新建记忆文件",
+        "categoryLabel": "分类",
+        "fileNameLabel": "文件名（不含 .md）",
+        "fileNamePlaceholder": "例如：python-style",
+        "willCreate": "将创建：{{path}}",
+        "cancel": "取消",
+        "create": "创建"
+      },
+      "deleteDialog": {
+        "title": "确认删除",
+        "content": "确定要删除记忆文件 {{path}} 吗？此操作不可撤销。",
+        "cancel": "取消",
+        "delete": "删除"
+      },
+      "resetDialog": {
+        "title": "⚠ 重置记忆库",
+        "warning": "此操作将永久删除该工作区的所有记忆文件，且无法恢复！",
+        "content": "清空记忆库后，CC 沙盒将失去所有学习到的用户偏好、任务记录和知识积累。该工作区将从零开始重建记忆。",
+        "hint": "建议在以下情况使用：工作区行为异常、需要彻底重置 CC 沙盒人格。",
+        "cancel": "取消",
+        "confirm": "确认清空"
+      }
+    },
+    "extensions": {
+      "skillsTitle": "Skills（{{total}} 个可用，{{enabled}} 个已启用）",
+      "skillsEmpty": "Skills 库为空，请先在「Skills」管理页上传 Skill 文件。",
+      "skillsSave": "保存",
+      "skillsSaveSuccess": "Skills 已保存",
+      "skillsSaveFailed": "保存失败：{{message}}",
+      "readmeNoContent": "暂无 README",
+      "mcpTitle": "MCP 配置",
+      "mcpSave": "保存",
+      "mcpSaveSuccess": "MCP 配置已保存",
+      "mcpSaveFailed": "保存失败：{{message}}",
+      "mcpJsonError": "JSON 格式错误",
+      "mcpJsonErrorFix": "请先修复 JSON 格式错误",
+      "skillsCardTitle": "扩展技能",
+      "syncBtn": "同步到沙盒",
+      "addSkillBtn": "添加技能",
+      "deployedLabel": "已部署（{{count}}）",
+      "deployedEmpty": "暂未部署任何技能，点击「添加技能」从内置或技能库中挑选",
+      "skillChipBuiltin": "内置",
+      "skillChipUser": "技能库",
+      "skillChipRepo": "仓库",
+      "skillChipPending": "待同步",
+      "skillChipAutoInject": "自动注入",
+      "removeTooltip": "从已部署列表移除（点击「同步到沙盒」生效）",
+      "ccCreatedLabel": "CC 创建（{{count}}）",
+      "ccCreatedEmpty": "暂无动态技能",
+      "skillChipCC": "CC创建",
+      "skillChipPromoted": "已晋升",
+      "viewDetailTooltip": "查看详情",
+      "editSkillTooltip": "编辑 SKILL.md",
+      "promoteTooltip": "晋升到技能库",
+      "updateLibraryTooltip": "更新到技能库",
+      "deleteTooltip": "删除",
+      "refreshDynamicTooltip": "刷新动态技能列表",
+      "ccDesignBtn": "让 CC 设计新技能",
+      "mcpFormatHint": "支持 JSONC 格式（// 和 /* */ 注释），保存时自动转换为 JSON",
+      "fillTemplateTooltip": "填充常用 MCP 服务配置模板（会覆盖现有内容）",
+      "fillTemplateBtn": "填充模板",
+      "addSkillDialog": {
+        "title": "添加技能",
+        "searchPlaceholder": "搜索技能名称或描述…",
+        "filterAll": "全部",
+        "filterBuiltin": "内置",
+        "filterUser": "技能库",
+        "filterRepo": "仓库",
+        "allAdded": "所有技能均已添加",
+        "noMatch": "无匹配结果",
+        "selectedCount": "已选 {{count}} 个",
+        "cancel": "取消",
+        "addBtn": "添加到列表"
+      },
+      "ccDesignDialog": {
+        "title": "让 CC 设计新技能",
+        "info": "点击确认后将跳转到「沙盒通讯」页，并预填充设计提示词。\n你可以在输入框中补充具体需求后再发送，与 CC 逐步交互打磨技能。",
+        "desc": "CC 会使用 skill-creator 技能指导，将设计好的技能保存在动态技能目录中，你可以随时从扩展能力页面查看、编辑或晋升。",
+        "cancel": "取消",
+        "confirmBtn": "前往沙盒通讯"
+      },
+      "editDynamicDialog": {
+        "title": "编辑动态技能 {{name}}",
+        "contentLabel": "SKILL.md 内容",
+        "cancel": "取消",
+        "save": "保存"
+      },
+      "deleteDynamicDialog": {
+        "title": "确认删除",
+        "content": "确定要删除动态技能 {{name}} 吗？此操作不可恢复。",
+        "cancel": "取消",
+        "delete": "删除"
+      },
+      "mcpTemplateDialog": {
+        "title": "填充 MCP 配置模板",
+        "warning": "此操作会覆盖现有 MCP 配置内容，请确认已备份或无需保留现有配置。",
+        "desc": "模板中包含常用 MCP 服务（Filesystem、GitHub、Brave Search、Fetch、Memory、PostgreSQL）的 JSONC 示例，默认均已注释，按需取消注释并填写参数即可。",
+        "cancel": "取消",
+        "confirm": "确认填充"
+      },
+      "notifications": {
+        "syncSuccess": "已同步到沙盒",
+        "syncFailed": "同步失败：{{message}}",
+        "deleteDynamicSuccess": "动态技能 {{name}} 已删除",
+        "deleteDynamicFailed": "删除失败：{{message}}",
+        "promoteSuccess": "动态技能 {{name}} 已晋升到技能库",
+        "promoteFailed": "晋升失败：{{message}}",
+        "updateLibrarySuccess": "动态技能 {{name}} 已更新到技能库",
+        "saveDynamicSuccess": "动态技能 {{name}} 已保存",
+        "saveDynamicFailed": "保存失败：{{message}}",
+        "loadContentFailed": "加载技能内容失败：{{message}}"
+      }
+    },
+    "comm": {
+      "loadMore": "加载更多历史消息",
+      "noMoreMessages": "已加载全部历史消息",
+      "noRecords": "暂无通讯记录",
+      "noRecordsHint": "NA 向 CC 发送任务时，记录将实时出现在此处",
+      "inputPlaceholderMac": "输入提示词（↩ 发送，⇧↩ 换行）",
+      "inputPlaceholderWin": "输入提示词（Enter 发送，Shift+Enter 换行）",
+      "sendWarning": "此操作直接发送给 CC 沙盒，CC 的响应不会经过 NA Agent 处理",
+      "sendTooltip": "发送",
+      "ccRunning": "CC 正在处理中，请等待回复完成后再发送…",
+      "ccRunningIndicator": "CC 正在工作",
+      "forceCancel": "强制中止当前 CC 任务",
+      "msgTypes": {
+        "USER_TO_CC": "用户 → CC",
+        "SYSTEM": "系统"
+      },
+      "expandArgs": "查看完整参数",
+      "collapseArgs": "收起参数",
+      "toolRunning": "执行中…",
+      "execFailed": "执行失败",
+      "execDone": "执行完成",
+      "collapse": "收起",
+      "expand": "展开（共 {{chars}} 字符）",
+      "notifications": {
+        "sendFailed": "发送失败：{{message}}",
+        "cancelSuccess": "已发送强制中止指令",
+        "cancelFailed": "强制中止失败：{{message}}"
+      }
+    },
+    "mcp": {
+      "title": "MCP 服务",
+      "empty": "本工作区还没有加入任何 MCP 服务",
+      "emptyHint": "点击「添加 MCP 服务」从全局 MCP 库挑选",
+      "workspaceHint": "共 {{total}} 个已加入，{{validated}} 个已通过验证",
+      "addBtn": "添加 MCP 服务",
+      "addSuccess": "MCP 服务已加入本工作区",
+      "addFailed": "添加失败：{{message}}",
+      "removeTooltip": "从本工作区移除（不删除全局库条目）",
+      "removeSuccess": "已从本工作区移除 {{name}}",
+      "removeFailed": "移除失败：{{message}}",
+      "manageLibrary": "管理 MCP 库",
+      "libraryEmpty": "全局 MCP 库还没有任何服务，请到「MCP 服务」管理页添加",
+      "autoInjectTooltip": "新建工作区时会自动启用此服务",
+      "addDialog": {
+        "title": "添加 MCP 服务",
+        "empty": "全局库中所有服务都已加入本工作区。如需更多，请到 MCP 库添加新服务。"
+      },
+      "fromTemplate": "从模板添加",
+      "addManual": "手动添加",
+      "addServer": "添加服务",
+      "syncToSandbox": "同步到沙盒",
+      "syncSuccess": "MCP 配置已同步到沙盒",
+      "syncFailed": "同步失败：{{message}}",
+      "switchToJson": "切换到 JSON 预览",
+      "switchToCards": "切换到卡片视图",
+      "switchToList": "切换到列表视图",
+      "save": "保存",
+      "saving": "保存中...",
+      "add": "添加",
+      "adding": "添加中...",
+      "edit": "编辑",
+      "delete": "删除",
+      "enable": "启用",
+      "disable": "禁用",
+      "addTitle": "添加 MCP 服务器",
+      "editTitle": "编辑 MCP 服务器",
+      "deleteTitle": "删除 MCP 服务器",
+      "deleteConfirm": "确定要删除 MCP 服务器「{{name}}」吗？",
+      "addSuccess": "MCP 服务器已添加",
+      "addFailed": "添加失败：{{message}}",
+      "updateSuccess": "MCP 服务器已更新",
+      "updateFailed": "更新失败：{{message}}",
+      "deleteSuccess": "MCP 服务器已删除",
+      "deleteFailed": "删除失败：{{message}}",
+      "saveSuccess": "MCP 配置已保存",
+      "saveFailed": "保存失败：{{message}}",
+      "jsonError": "JSON 格式错误",
+      "jsonErrorFix": "请先修复 JSON 格式错误",
+      "jsonHint": "支持 JSONC 格式（// 和 /* */ 注释），保存时自动转换为 JSON",
+      "form": {
+        "name": "服务器名称",
+        "command": "命令",
+        "args": "参数",
+        "argsHint": "以空格分隔多个参数",
+        "envLabel": "环境变量",
+        "url": "服务器 URL",
+        "headersLabel": "HTTP 请求头",
+        "cancel": "取消",
+        "stdioHint": "仅支持 npx / uvx 包管理器命令（CC 沙盒已预装 Node.js 20 与 astral-sh/uv），不支持引用宿主机本地文件路径",
+        "stdioCommandError": "仅支持 npx、uvx 命令"
+      },
+      "registry": {
+        "title": "从模板添加 MCP 服务器",
+        "search": "搜索模板...",
+        "empty": "没有匹配的模板"
+      },
+      "autoInject": "自动注入",
+      "setAutoInject": "设为自动注入",
+      "removeAutoInject": "取消自动注入",
+      "autoInjectSuccess": "已更新自动注入配置",
+      "autoInjectFailed": "更新自动注入配置失败：{{message}}"
+    },
+    "resources": {
+      "searchPlaceholder": "搜索资源名称、备注或资源标签",
+      "mountsTitle": "已挂载资源",
+      "mountsHint": "拖动可调整顺序。",
+      "libraryTitle": "资源库",
+      "libraryHint": "从资源库选择需要的资源挂载到当前工作区。",
+      "emptyMounted": "当前工作区还没有挂载任何资源。",
+      "emptyLibrary": "资源库为空，先创建第一条工作区资源。",
+      "noDescription": "暂无备注",
+      "fieldCount": "{{count}} 个字段",
+      "boundCount": "{{count}} 个工作区引用",
+      "stats": {
+        "total": "资源总数",
+        "shared": "跨工作区复用",
+        "compat": "带兼容变量名",
+        "mounted": "已挂载",
+        "available": "可选资源"
+      },
+      "meta": {
+        "tags": "资源标签",
+        "fields": "字段数量",
+        "compatEnvNames": "注入环境变量",
+        "usage": "工作区引用"
+      },
+      "tooltips": {
+        "noWorkspaceRef": "当前没有工作区引用",
+        "workspaceRefsTitle": "被 {{count}} 个工作区引用"
+      },
+      "valueKinds": {
+        "text": "文本",
+        "password": "密码/令牌",
+        "host": "主机地址",
+        "port": "端口",
+        "private_key": "私钥",
+        "username": "用户名",
+        "database": "数据库名",
+        "json": "JSON"
+      },
+      "actions": {
+        "refresh": "刷新",
+        "create": "新建资源",
+        "openCenter": "资源中心",
+        "mounted": "已挂载",
+        "mount": "挂载",
+        "unmount": "卸载"
+      },
+      "editor": {
+        "createTitle": "新建工作区资源",
+        "editTitle": "编辑工作区资源",
+        "createAction": "创建",
+        "saveAction": "保存",
+        "template": "初始化模板",
+        "templateSectionTitle": "模板预填充",
+        "templateSectionHint": "可在填写过程中随时套用模板，再继续按需调整。",
+        "templateAction": "选择模板",
+        "templateDialogTitle": "选择模板",
+        "templateDialogHint": "选择后会用模板内容填充当前表单。",
+        "templateOverwriteWarning": "应用模板会覆盖当前已填写的内容，请确认后继续。",
+        "templateApply": "确认应用",
+        "name": "资源名称",
+        "resourceNote": "资源备注",
+        "resourceTags": "资源标签",
+        "resourceTagsHint": "使用逗号分隔，例如 ssh, deploy, github",
+        "resourcePrompt": "资源提示",
+        "resourcePromptHelper": "这部分会进入 AI 上下文，告诉 CC 这条资源该在什么场景下使用，以及需要注意什么。",
+        "fields": "字段配置",
+        "fieldsHint": "拖动字段可以调整呈现顺序。",
+        "addField": "新增字段",
+        "removeField": "删除字段",
+        "unnamedField": "字段 {{index}}",
+        "fieldLabel": "字段名称",
+        "fieldDescription": "字段说明",
+        "valueKind": "字段类型",
+        "compatEnvNames": "注入环境变量",
+        "compatEnvNamesPlaceholder": "例如 GH_TOKEN, GITHUB_TOKEN",
+        "value": "字段值",
+        "secretValue": "敏感字段值",
+        "sensitive": "敏感信息",
+        "sensitiveHint": "开启后，该字段值不会以明文形式出现在提示词中，只通过环境变量提供给 CC 使用。"
+      },
+      "deleteDialog": {
+        "title": "确认删除资源",
+        "content": "确定删除资源“{{name}}”？此操作不可撤销。",
+        "contentWithBindings": "资源“{{name}}”当前已被 {{count}} 个工作区挂载。确认删除后，这些挂载会一并移除，且此操作不可撤销。",
+        "boundListTitle": "受影响的工作区",
+        "confirm": "删除资源"
+      },
+      "secretHealth": {
+        "title": "检测到资源敏感字段不可用",
+        "description": "{{count}} 条资源的敏感字段无法读取，通常是迁移设备后 NEKRO_JWT_SECRET_KEY 与旧环境不一致导致。",
+        "recoverAction": "使用旧密钥恢复",
+        "purgeAction": "抹除失效字段",
+        "recoverTitle": "使用旧密钥恢复资源",
+        "recoverContent": "请输入旧设备创建这些资源时使用的 NEKRO_JWT_SECRET_KEY。恢复成功后，旧密文会转换为当前版本可读取的明文 JSON。",
+        "recoverConfirm": "开始恢复",
+        "purgeTitle": "抹除失效敏感字段",
+        "purgeContent": "此操作会清空所有当前无法解密的敏感字段值，主机、用户名、备注等非敏感信息会保留。清空后需要重新编辑资源填写密码、令牌或私钥。",
+        "purgeConfirm": "确认抹除",
+        "recoverSuccess": "已恢复 {{count}} 条资源敏感字段",
+        "recoverFailed": "恢复失败：{{message}}",
+        "purgeSuccess": "已抹除 {{count}} 条失效敏感字段",
+        "purgeFailed": "抹除失败：{{message}}"
+      },
+      "notifications": {
+        "created": "资源已创建",
+        "createFailed": "创建失败：{{message}}",
+        "updated": "资源已更新",
+        "updateFailed": "更新失败：{{message}}",
+        "deleted": "资源已删除",
+        "deleteFailed": "删除失败：{{message}}",
+        "mounted": "资源已挂载到当前工作区",
+        "mountFailed": "挂载失败：{{message}}",
+        "mountConflict": "兼容变量名 {{env}} 与资源“{{name}}”冲突",
+        "unmounted": "资源已从当前工作区卸载",
+        "unmountFailed": "卸载失败：{{message}}",
+        "reorderFailed": "排序失败：{{message}}",
+        "workspaceRequired": "请先进入具体工作区后再执行此操作"
+      }
+    },
+    "prompt": {
+      "summaryCards": {
+        "naContext": {
+          "title": "协作现状",
+          "description": "记录当前状态与最新进展。"
+        },
+        "ccRules": {
+          "title": "执行规则",
+          "description": "分别管理 CC 与 NA 的长期要求。",
+          "subtitle": "CC / NA 分开配置",
+          "tooltip": "这里包含两层内容：给 CC 的执行规则，以及只给 NA 的表达与沟通规则。"
+        },
+        "sharedFacts": {
+          "title": "固定事实",
+          "description": "双方共用的稳定事实与约束。"
+        }
+      },
+      "systemPromptTitle": "系统提示词（只读）",
+      "systemPromptHint": "展开查看当前生效内容",
+      "expandTooltip": "展开预览",
+      "collapseTooltip": "收起预览",
+      "naContextTitle": "协作现状摘要（_na_context）",
+      "naContextHint": "当前状态、最新进展、临时说明",
+      "naContextDesc": "适合写高时效信息。后续任务中，这部分内容可能继续更新。",
+      "naContextPlaceholder": "例如：\n- 当前主要任务是整理工作区提示信息\n- 最近确认了新的页面入口和关键文件位置\n- 已经产出一份可供说明的文件，放在 shared 目录中",
+      "sharedFactsTitle": "共享固定事实",
+      "sharedFactsHint": "双方共用，默认保持稳定",
+      "sharedFactsDesc": "适合放长期有效的事实与约束。不希望被自动改动的内容建议写在这里。",
+      "sharedFactsPlaceholder": "例如：\n- 提交前必须完成前端检查\n- 主分支禁止直接推送\n- 页面文案应尽量直白，避免使用过多内部术语",
+      "extraTitle": "自定义追加提示词",
+      "extraHint": "仅对 CC 生效",
+      "ccRulesDesc": "适合放代码风格、交付偏好、输出格式等要求。",
+      "extraPlaceholder": "在此输入自定义指令，例如：\n\n## 个性化偏好\n\n- 代码注释使用中文\n- 优先使用 Python 解决问题",
+      "naRulesTitle": "NA 专属规则",
+      "naRulesHint": "仅 NA 可见",
+      "naRulesDesc": "适合放表达方式、转述边界、沟通偏好等要求。",
+      "naRulesPlaceholder": "例如：\n- 回复时先概括结论，再补充细节\n- 涉及协作现状摘要时，提醒用户该内容后续可能继续更新",
+      "editorGuideTitle": "编辑建议",
+      "editorGuideItems": [
+        "如果你是在更正“当前工作区现在是什么状态”，优先写到协作现状摘要。",
+        "如果你是在声明“以后都成立的稳定事实或硬约束”，优先写到共享固定事实。",
+        "如果你只是想约束 CC 的执行行为，请写到执行规则，不要混进 _na_context。"
+      ],
+      "naContextWarning": "_na_context 可由 CC 自动更新。若你不希望某段信息被改写，请改写到“共享固定事实”或“NA 专属规则”中。",
+      "saveBtn": "保存",
+      "notifications": {
+        "saveSuccess": "自定义提示词已保存",
+        "saveFailed": "保存失败：{{message}}",
+        "naContextSaveSuccess": "协作现状摘要已保存，下次委托 CC 时会提醒其先查看最新版本",
+        "sharedRulesSaveSuccess": "共享固定事实已保存",
+        "naRulesSaveSuccess": "NA 专属规则已保存"
+      }
+    },
+    "config": {
+      "sections": {
+        "basic": "基本设置",
+        "skills": "Skills",
+        "mcp": "MCP 配置",
+        "ccModel": "CC 模型配置",
+        "envVars": "环境变量",
+        "danger": "危险操作"
+      },
+      "fields": {
+        "name": "工作区名称",
+        "desc": "描述",
+        "policy": "运行策略",
+        "image": "沙盒镜像",
+        "imageHint": "留空使用默认镜像",
+        "imageHelperText": "留空时使用系统配置的默认镜像，版本固定为 :latest",
+        "ccModel": "选择 CC 模型预设",
+        "modelHelperText": "选择后将注入对应的环境配置到沙盒",
+        "generatedConfig": "生成的注入配置"
+      },
+      "policyOptions": {
+        "agent": "Agent — 明确工具白名单，禁用交互型工具",
+        "relaxed": "Relaxed — 宽松，无工具层面限制",
+        "strict": "Strict — 严格，禁用写文件/执行命令/网络"
+      },
+      "ccModelDefault": "(默认)",
+      "envVars": {
+        "hint": "变量将在每次与 CC 对话时注入到沙盒进程，并同步到 CLAUDE.md 环境感知章节（仅展示变量名和说明，不暴露值）",
+        "key": "变量名",
+        "value": "值",
+        "description": "说明",
+        "add": "添加变量",
+        "remove": "删除"
+      },
+      "dangerDesc": "删除工作区将同时停止沙盒容器并清除所有配置，此操作不可撤销。",
+      "deleteBtn": "删除此工作区",
+      "buttons": {
+        "save": "保存",
+        "saving": "保存中",
+        "delete": "删除",
+        "deleting": "删除中"
+      },
+      "notifications": {
+        "saveSuccess": "设置已保存",
+        "saveFailed": "保存失败：{{message}}",
+        "deleteSuccess": "工作区已删除",
+        "deleteFailed": "删除失败：{{message}}",
+        "ccPresetSuccess": "CC 模型预设已更新",
+        "ccPresetFailed": "设置失败：{{message}}",
+        "envVarsSaveSuccess": "环境变量已保存",
+        "envVarsSaveFailed": "保存失败：{{message}}"
+      },
+      "invalidId": "无效的工作区 ID",
+      "loadFailed": "加载失败：{{message}}",
+      "deleteDialog": {
+        "title": "确认删除工作区",
+        "content": "确定要删除工作区 {{name}} 吗？此操作不可撤销。",
+        "cancel": "取消",
+        "delete": "删除"
+      }
+    },
+    "errors": {
+      "imageNotFound": "镜像不存在，请先在概览页拉取镜像",
+      "image": {
+        "checking": "检查中",
+        "ready": "已就绪",
+        "notPulled": "未拉取",
+        "pullDialog": {
+          "title": "拉取沙盒镜像",
+          "confirmTitle": "拉取沙盒镜像",
+          "confirmHint": "将从 Docker Hub 拉取以下镜像，首次拉取需要一定时间，请确认网络畅通：",
+          "cancel": "取消",
+          "image": "镜像",
+          "pulling": "正在拉取...",
+          "success": "拉取完成",
+          "failed": "拉取失败",
+          "close": "关闭",
+          "retry": "重试",
+          "pullBtn": "开始拉取"
+        }
+      }
+    }
+  },
+  "knowledge": {
+    "title": "工作区知识库",
+    "description": "统一管理工作区内的静态知识文件，支持导入、搜索、查看全文和下载源文件。",
+    "actions": {
+      "addFile": "新增知识文件",
+      "refresh": "刷新",
+      "search": "搜索",
+      "clearSearch": "清空搜索",
+      "reindexAll": "全量重建索引",
+      "createText": "新建文本知识",
+      "uploadFile": "上传知识文件",
+      "batchUpload": "批量上传",
+      "cancel": "取消",
+      "close": "关闭",
+      "create": "创建",
+      "creating": "创建中...",
+      "upload": "上传",
+      "uploading": "上传中...",
+      "chooseFile": "选择文件",
+      "chooseFiles": "选择文件（支持多选）",
+      "reChooseFiles": "重新选择文件",
+      "importFolder": "导入文件夹",
+      "importZip": "导入 Zip 包",
+      "reChooseFolder": "重新选择文件夹",
+      "or": "或",
+      "startUpload": "开始上传（{{count}} 个文件）",
+      "cancelUpload": "取消上传",
+      "canceling": "取消中...",
+      "batchActions": "批量操作（{{count}}）",
+      "bulkDeleteReady": "批量删除已完成（{{count}}）",
+      "bulkDeleteSelected": "批量删除所选（{{count}}）",
+      "bulkReindexSelected": "批量重建索引（{{count}}）",
+      "bulkDisableSelected": "批量禁用索引（{{count}}）",
+      "removeFromQueue": "移出队列",
+      "reindex": "重建索引",
+      "reuseGlobal": "复用知识库",
+      "saveReuse": "保存复用",
+      "downloadRaw": "下载原文件",
+      "delete": "删除",
+      "remove": "移除",
+      "enable": "启用检索",
+      "disable": "禁用检索",
+      "enabled": "启用",
+      "disabled": "禁用",
+      "save": "保存",
+      "edit": "编辑"
+    },
+    "batchStatus": {
+      "waiting": "等待中",
+      "uploading": "上传中",
+      "done": "完成",
+      "error": "失败",
+      "edit": "编辑元数据"
+    },
+    "stats": {
+      "documents": "文档 {{count}}",
+      "ready": "已就绪 {{count}}",
+      "failed": "异常 {{count}}",
+      "reusedGlobal": "复用全局 {{count}}"
+    },
+    "status": {
+      "pending": "待处理",
+      "extracting": "抽取中",
+      "indexing": "索引中",
+      "ready": "已就绪",
+      "failed": "失败"
+    },
+    "badges": {
+      "extract": "抽取：{{status}}",
+      "sync": "索引：{{status}}"
+    },
+    "sections": {
+      "documents": "文档列表",
+      "searchResults": "搜索结果"
+    },
+    "list": {
+      "total": "共 {{count}} 份文档",
+      "noPreview": "暂无预览",
+      "globalBound": "已复用",
+      "viewFlat": "平铺列表",
+      "viewGrouped": "按分类分组",
+      "viewGraph": "知识图谱",
+      "uncategorized": "未分类"
+    },
+    "search": {
+      "placeholder": "搜索规则、FAQ、手册、设计文档...",
+      "empty": "没有匹配到知识条目",
+      "resultCount": "命中 {{count}} 条"
+    },
+    "empty": "当前工作区还没有知识文档，先创建文本知识或上传文件。",
+    "detail": {
+      "noSelection": "请选择左侧文档查看详情。",
+      "loadFailed": "知识库文档详情加载失败。",
+      "noSummary": "暂无摘要",
+      "noTags": "无标签",
+      "paths": "路径信息",
+      "sourcePath": "源文件相对路径",
+      "workspaceSourcePath": "工作区源文件路径",
+      "normalizedPath": "规范化全文路径",
+      "metadata": "文档元数据",
+      "category": "分类",
+      "fileName": "文件名",
+      "fileSize": "文件大小",
+      "chunkCount": "Chunk 数量",
+      "updatedAt": "更新时间",
+      "indexedAt": "最近索引时间",
+      "preview": "内容预览"
+    },
+    "preview": {
+      "normalized": "规范化全文",
+      "source": "源文本",
+      "empty": "当前视图暂无内容。"
+    },
+    "progress": {
+      "title": "索引进度",
+      "pending": "正在准备索引任务…",
+      "detail": "已处理 {{processed}} / {{total}} 个 chunk",
+      "phase": {
+        "queued": "排队中",
+        "extracting": "抽取中",
+        "chunking": "切块中",
+        "embedding": "向量化中",
+        "upserting": "写入索引中",
+        "ready": "已完成",
+        "failed": "失败"
+      }
+    },
+    "config": {
+      "embeddingRequired": "知识库 Embedding 模型组尚未配置或配置无效。请先前往系统设置确认 `KB_EMBEDDING_MODEL_GROUP` 存在且类型为 embedding，再创建、上传或重建知识库索引。"
+    },
+    "form": {
+      "title": "标题",
+      "format": "文本格式",
+      "sourcePath": "目标路径",
+      "sourcePathPlaceholder": "例如 faq/getting-started.md",
+      "supportedFormats": "支持上传的文件格式：{{formats}}",
+      "dirImportHint": "选择本地文件夹，自动按子目录名分类，文档路径结构完整保留",
+      "zipImportHint": "支持上传 zip 压缩包，自动解压并按目录结构导入（不支持加密压缩包）",
+      "dirImportModeHint": "文件夹导入模式：分类已按目录结构自动推断，可展开各文件修改",
+      "reuseSearch": "搜索全局知识标题、路径、分类或标签",
+      "fileName": "文件名",
+      "category": "分类",
+      "tags": "标签",
+      "tagsPlaceholder": "多个标签用逗号分隔",
+      "summary": "摘要",
+      "content": "正文内容",
+      "tagsHelper": "多个标签用逗号分隔"
+    },
+    "dialogs": {
+      "createTitle": "新建文本知识",
+      "uploadTitle": "上传知识文件",
+      "batchUploadTitle": "批量上传知识文件",
+      "dirImportTitle": "导入文件夹",
+      "reuseTitle": "从全局知识库添加",
+      "reuseHint": "选择要添加到当前工作区的全局知识文件。保存后，这些文件会与当前工作区建立绑定关系。",
+      "reuseEmpty": "没有匹配到可复用的全局知识文件。",
+      "deleteTitle": "确认删除",
+      "removeTitle": "确认移除",
+      "deleteContent": "确定要删除知识文档“{{title}}”吗？此操作不可恢复。",
+      "removeContent": "确定要将知识文件“{{title}}”从当前工作区移除吗？这不会删除全局源文件。",
+      "bulkDeleteReadyTitle": "批量删除已完成文件",
+      "bulkDeleteReadyContent": "将删除当前工作区中所有已完成的知识条目，共 {{count}} 项。其中知识文档 {{documentCount}} 项，复用的全局知识文件 {{assetCount}} 项。此操作不可恢复。",
+      "bulkDeleteSelectedTitle": "批量删除所选条目",
+      "bulkDeleteSelectedContent": "将删除当前选中的条目，共 {{count}} 项。其中知识文档 {{documentCount}} 项，复用的全局知识文件 {{assetCount}} 项。知识文档会被删除，复用的全局知识文件会从当前工作区移除。",
+      "editMetaTitle": "编辑元数据"
+    },
+    "notifications": {
+      "addSuccess": "知识文件已添加到当前工作区",
+      "addReusedSuccess": "检测到相同内容，本次上传已跳过；已复用现有知识文件并添加到当前工作区，本次填写的标题、分类、标签与摘要不会覆盖原资产",
+      "createSuccess": "知识文档已创建",
+      "createFailed": "创建失败：{{message}}",
+      "uploadSuccess": "知识文件已上传",
+      "uploadFailed": "上传失败：{{message}}",
+      "deleteSuccess": "知识文档已删除",
+      "deleteFailed": "删除失败：{{message}}",
+      "bulkDeleteReadySuccess": "已批量删除 {{count}} 个已完成条目",
+      "bulkDeleteReadyPartial": "批量删除完成：已删除 {{deleted}} 个，失败 {{failed}} 个",
+      "bulkDeleteSelectedSuccess": "已批量处理 {{count}} 个所选条目",
+      "bulkDeleting": "正在删除 {{count}} 个条目...",
+      "bulkDeleteSelectedPartial": "批量处理完成：已处理 {{deleted}} 个，失败 {{failed}} 个",
+      "bulkDisableSelectedSuccess": "已批量禁用 {{count}} 个所选条目的索引",
+      "bulkDisableSelectedPartial": "批量禁用索引完成：已处理 {{updated}} 个，失败 {{failed}} 个",
+      "reindexSuccess": "文档索引已重建",
+      "reindexFailed": "重建失败：{{message}}",
+      "bulkReindexSelectedSuccess": "已批量提交 {{count}} 个所选条目的重建索引任务",
+      "bulkReindexSelectedPartial": "批量重建索引完成：已提交 {{queued}} 个，失败 {{failed}} 个",
+      "reindexAllSuccess": "已触发全量重建：{{success}} 个已加入队列，{{failed}} 个已在处理中",
+      "reindexAllFailed": "全量重建失败：{{message}}",
+      "searchFailed": "搜索失败：{{message}}",
+      "updateSuccess": "知识文档已更新",
+      "updateFailed": "更新失败：{{message}}",
+      "reuseBindingsSuccess": "全局知识库复用关系已更新",
+      "reuseBindingsFailed": "更新复用关系失败：{{message}}",
+      "removeSuccess": "知识文件已从当前工作区移除",
+      "removeFailed": "移除知识文件失败：{{message}}",
+      "downloadFailed": "下载失败：{{message}}",
+      "unsupportedFormat": "文件 {{name}} 格式不受支持，仅支持：{{formats}}",
+      "dirImportSkipped": "已跳过 {{count}} 个不受支持格式的文件",
+      "dirImportNoSupported": "所选文件夹中没有受支持的文件，仅支持：{{formats}}",
+      "dirImportCategoryTooLong": "目录分组“{{category}}”长度为 {{length}}，超过上限 {{max}}。请缩短目录名称后再上传。",
+      "zipImportSuccess": "Zip 导入完成：成功 {{imported}} 个，复用 {{reused}} 个，跳过 {{skipped}} 个，失败 {{failed}} 个",
+      "zipImportPartial": "Zip 导入部分成功：成功 {{imported}} 个，复用 {{reused}} 个，跳过 {{skipped}} 个，失败 {{failed}} 个",
+      "zipImportNothingImported": "压缩包中没有受支持的可导入文件（支持：md/txt/html/json/yaml/csv/xlsx/pdf/docx）",
+      "zipImportFailed": "Zip 导入失败：{{message}}",
+      "zipImportFailedGeneric": "Zip 导入失败，请检查压缩包内容后重试",
+      "zipImportMoreErrors": "…等 {{count}} 条未显示"
+    },
+    "references": {
+      "title": "引用关系",
+      "referencesTo": "此文档引用了",
+      "referencedBy": "被以下文档引用",
+      "empty": "暂无引用关系",
+      "add": "添加引用",
+      "remove": "移除引用",
+      "editDesc": "编辑说明",
+      "addDialogTitle": "添加引用文档",
+      "editDialogTitle": "编辑引用说明",
+      "editingTarget": "目标文档：{{title}}",
+      "searchPlaceholder": "搜索文档标题、分类、摘要...",
+      "noCandidates": "没有可添加的文档。所有同类文档已被引用，或当前只有一篇文档。",
+      "descriptionLabel": "引用说明（可选）",
+      "descriptionPlaceholder": "简要说明被引用文档补充了哪些内容，例如：第三章详细展开了配置项说明",
+      "addSuccess": "引用关系已添加",
+      "addFailed": "添加引用失败：{{message}}",
+      "removeSuccess": "引用关系已移除",
+      "removeFailed": "移除引用失败：{{message}}",
+      "updateSuccess": "引用说明已更新",
+      "updateFailed": "更新失败：{{message}}",
+      "autoDetected": "由系统从文档内容自动检测"
+    },
+    "graph": {
+      "center": "知识库",
+      "entryCount": "{{count}} 项",
+      "totalCount": "{{count}} 项",
+      "categoryCount": "{{count}} 个分类",
+      "referenceCount": "{{count}} 条引用",
+      "referenceModeContext": "引用按需",
+      "referenceModeAll": "引用全显",
+      "collapsedCount": "{{count}} 类已收起",
+      "zoomIn": "放大",
+      "zoomOut": "缩小",
+      "fit": "适应屏幕",
+      "showAllReferences": "显示全部引用",
+      "showContextReferences": "仅按悬停显示引用",
+      "expandCategory": "展开分类 {{category}}",
+      "collapseCategory": "收起分类 {{category}}",
+      "hintContext": "滚轮缩放 · 拖拽平移 · 点击分类收起或展开 · 悬停节点查看相关引用 · 点击节点打开详情",
+      "hintAll": "滚轮缩放 · 拖拽平移 · 点击分类收起或展开 · 当前显示全部引用 · 点击节点打开详情"
+    },
+    "batchPanel": {
+      "inProgress": "上传中 {{done}}/{{total}}",
+      "done": "上传完成（共 {{total}} 个，失败 {{failed}} 个）"
+    }
+  },
+  "kbLibrary": {
+    "title": "全局知识库",
+    "description": "集中管理可被多个工作区复用的知识文件。文件只需导入一次，再按需绑定到不同工作区，减少重复上传和重复索引消耗。",
+    "actions": {
+      "addFile": "新增知识文件",
+      "refresh": "刷新",
+      "createText": "新建文本知识",
+      "create": "创建",
+      "creating": "创建中...",
+      "upload": "上传文件",
+      "batchUpload": "批量上传",
+      "chooseFile": "选择文件",
+      "chooseFiles": "选择文件（支持多选）",
+      "reChooseFiles": "重新选择文件",
+      "startUpload": "开始上传（{{count}} 个文件）",
+      "cancelUpload": "取消上传",
+      "canceling": "取消中...",
+      "batchActions": "批量操作（{{count}}）",
+      "bulkDeleteSelected": "批量删除所选（{{count}}）",
+      "bulkReindexSelected": "批量重建索引（{{count}}）",
+      "removeFromQueue": "移出队列",
+      "close": "关闭",
+      "clearFilters": "清空筛选",
+      "bind": "绑定工作区",
+      "saveBindings": "保存绑定",
+      "reindex": "重建索引",
+      "downloadRaw": "下载原文件",
+      "delete": "删除文件",
+      "cancel": "取消",
+      "edit": "编辑",
+      "save": "保存"
+    },
+    "batchStatus": {
+      "waiting": "等待中",
+      "uploading": "上传中",
+      "done": "完成",
+      "error": "失败",
+      "edit": "编辑元数据"
+    },
+    "stats": {
+      "total": "文件总数",
+      "ready": "可复用",
+      "indexing": "处理中",
+      "bindings": "工作区绑定"
+    },
+    "status": {
+      "all": "全部",
+      "ready": "已就绪",
+      "indexing": "处理中",
+      "failed": "失败"
+    },
+    "filter": {
+      "all": "全部",
+      "ready": "已就绪",
+      "indexing": "处理中",
+      "failed": "失败"
+    },
+    "search": {
+      "placeholder": "搜索标题、路径、分类、摘要或标签"
+    },
+    "toolbar": {
+      "cardView": "卡片视图",
+      "listView": "列表视图"
+    },
+    "list": {
+      "total": "共 {{count}} 份文件",
+      "bindingCount": "绑定 {{count}} 个工作区",
+      "noSummary": "暂无摘要"
+    },
+    "empty": {
+      "title": "还没有全局知识库文件",
+      "noMatch": "没有匹配到文件"
+    },
+    "detail": {
+      "noSelection": "请选择左侧文件查看详情。",
+      "loadFailed": "文件详情加载失败。",
+      "meta": "文件信息",
+      "chunkCount": "Chunk {{count}}",
+      "fileSize": "大小 {{value}}",
+      "updatedAt": "更新于 {{value}}",
+      "noTags": "无标签",
+      "noBindings": "尚未绑定任何工作区",
+      "preview": "内容预览"
+    },
+    "preview": {
+      "normalized": "规范化全文",
+      "source": "原始文本",
+      "empty": "当前视图暂无可展示内容。"
+    },
+    "progress": {
+      "title": "索引进度",
+      "pending": "正在准备索引任务…",
+      "detail": "已处理 {{processed}} / {{total}} 个 chunk",
+      "phase": {
+        "queued": "排队中",
+        "extracting": "抽取中",
+        "chunking": "切块中",
+        "embedding": "向量化中",
+        "upserting": "写入索引中",
+        "ready": "已完成",
+        "failed": "失败"
+      }
+    },
+    "config": {
+      "embeddingRequired": "知识库 Embedding 模型组尚未配置或配置无效。请先前往系统设置确认 `KB_EMBEDDING_MODEL_GROUP` 存在且类型为 embedding，再创建、上传或重建全局知识库索引。"
+    },
+    "form": {
+      "title": "标题",
+      "format": "文本格式",
+      "sourcePath": "目标路径",
+      "sourcePathPlaceholder": "例如 handbook/onboarding.md",
+      "category": "分类",
+      "fileName": "文件名",
+      "tags": "标签",
+      "tagsPlaceholder": "多个标签用逗号分隔",
+      "summary": "摘要",
+      "content": "正文内容",
+      "supportedFormats": "支持上传的文件格式：{{formats}}",
+      "bindWorkspaces": "绑定到工作区",
+      "tagsHelper": "多个标签用逗号分隔"
+    },
+    "dialogs": {
+      "createTitle": "新建全局文本知识",
+      "uploadTitle": "上传全局知识库文件",
+      "batchUploadTitle": "批量上传全局知识库文件",
+      "bindTitle": "绑定工作区",
+      "bindHint": "选择需要复用这份文件的工作区。绑定后，工作区即可直接使用该文件而无需再次上传。",
+      "deleteTitle": "删除全局知识库文件",
+      "bulkDeleteSelectedTitle": "批量删除所选文件",
+      "bulkDeleteSelectedContent": "将删除当前选中的 {{count}} 个文件。此操作不可恢复；若文件仍绑定工作区，删除会失败并保留该文件。",
+      "deleteContent": "确定要删除文件“{{title}}”吗？如果仍有工作区绑定，需要先解除绑定。",
+      "editMetaTitle": "编辑元数据"
+    },
+    "notifications": {
+      "createSuccess": "文本知识已创建并进入索引流程",
+      "createReused": "检测到相同内容，本次创建已跳过；已复用现有全局知识文件，本次填写的标题、分类、标签、摘要与启用状态不会覆盖原资产",
+      "createFailed": "创建失败：{{message}}",
+      "uploadSuccess": "文件已上传并进入索引流程",
+      "uploadReused": "检测到相同文件内容，本次上传已跳过；已复用现有全局知识文件，本次填写的标题、分类、标签、摘要与启用状态不会覆盖原资产",
+      "uploadFailed": "上传失败：{{message}}",
+      "reindexSuccess": "文件索引已进入重建流程",
+      "reindexFailed": "重建失败：{{message}}",
+      "bulkReindexSelectedSuccess": "已批量提交 {{count}} 个文件的重建索引任务",
+      "bulkReindexSelectedPartial": "批量重建索引完成：已提交 {{queued}} 个，失败 {{failed}} 个",
+      "deleteSuccess": "文件已删除",
+      "deleteFailed": "删除失败：{{message}}",
+      "bulkDeleteSelectedSuccess": "已批量删除 {{count}} 个文件",
+      "bulkDeleting": "正在删除 {{count}} 个文件...",
+      "bulkDeleteSelectedPartial": "批量删除完成：已删除 {{deleted}} 个，失败 {{failed}} 个",
+      "bindSuccess": "工作区绑定已更新",
+      "bindFailed": "绑定失败：{{message}}",
+      "downloadFailed": "下载失败：{{message}}",
+      "unsupportedFormat": "文件 {{name}} 格式不受支持，仅支持：{{formats}}",
+      "zipImportSuccess": "Zip 导入完成：成功 {{imported}} 个，复用 {{reused}} 个，跳过 {{skipped}} 个，失败 {{failed}} 个",
+      "zipImportPartial": "Zip 导入部分成功：成功 {{imported}} 个，复用 {{reused}} 个，跳过 {{skipped}} 个，失败 {{failed}} 个",
+      "zipImportNothingImported": "压缩包中没有受支持的可导入文件（支持：md/txt/html/json/yaml/csv/xlsx/pdf/docx）",
+      "zipImportFailed": "Zip 导入失败：{{message}}",
+      "zipImportFailedGeneric": "Zip 导入失败，请检查压缩包内容后重试",
+      "zipImportMoreErrors": "…等 {{count}} 条未显示"
+    },
+    "batchPanel": {
+      "inProgress": "上传中 {{done}}/{{total}}",
+      "done": "上传完成（共 {{total}} 个，失败 {{failed}} 个）"
+    }
+  },
+  "timers": {
+    "title": "定时任务",
+    "description": "统一查看一次性提醒与周期任务，并按工作区联动管理。",
+    "loading": "正在加载定时任务...",
+    "healthHint": "当前有 {{count}} 个需关注任务，建议优先检查失败或自动暂停的周期任务。",
+    "stats": {
+      "total": "全部任务",
+      "activeRecurring": "活跃周期任务",
+      "paused": "已暂停任务",
+      "upcoming24h": "24h 内触发",
+      "errors": "异常任务"
+    },
+    "actions": {
+      "refresh": "刷新",
+      "onlyErrors": "仅看异常",
+      "resetFilters": "重置筛选",
+      "view": "查看详情",
+      "runNow": "立即执行",
+      "pause": "暂停",
+      "resume": "恢复",
+      "delete": "删除",
+      "cancel": "取消",
+      "viewWorkspace": "查看工作区",
+      "viewChannel": "查看频道"
+    },
+    "filters": {
+      "searchPlaceholder": "搜索任务标题、ID、工作区或频道",
+      "workspace": "工作区",
+      "allWorkspaces": "全部工作区",
+      "type": "类型",
+      "allTypes": "全部类型",
+      "status": "状态",
+      "allStatuses": "全部状态",
+      "timeRange": "时间范围",
+      "sortBy": "排序",
+      "totalCount": "共 {{count}} 个任务"
+    },
+    "types": {
+      "oneShot": "一次性",
+      "recurring": "周期",
+      "oneShotTemporary": "临时自唤醒"
+    },
+    "status": {
+      "active": "活跃",
+      "paused": "暂停",
+      "error": "异常"
+    },
+    "timeRange": {
+      "all": "全部",
+      "today": "今日",
+      "next24h": "24h 内",
+      "next7d": "近 7 天",
+      "overdue": "已过期"
+    },
+    "sort": {
+      "nextRun": "下次触发最早",
+      "recentUpdate": "最近更新",
+      "recentRun": "最近执行",
+      "errorFirst": "异常优先"
+    },
+    "table": {
+      "task": "任务",
+      "type": "类型",
+      "status": "状态",
+      "workspace": "工作区",
+      "channel": "频道",
+      "rule": "调度规则",
+      "nextRun": "下次触发",
+      "lastRun": "上次执行",
+      "issue": "异常",
+      "actions": "操作"
+    },
+    "detail": {
+      "basic": "基本信息",
+      "schedule": "调度配置",
+      "health": "异常与执行状态",
+      "linkage": "联动关系",
+      "source": "来源",
+      "tags": "标记",
+      "createdAt": "创建时间",
+      "updatedAt": "更新时间",
+      "triggerAt": "触发时间",
+      "workdayMode": "触发日模式",
+      "scheduleTags": "调度标签",
+      "timezone": "时区",
+      "healthTags": "健康标签",
+      "failureCount": "连续失败次数",
+      "failureCountChip": "失败 {{count}} 次",
+      "lastError": "最近错误",
+      "temporary": "是否临时",
+      "linkageTags": "联动标签",
+      "healthStateNormal": "状态正常",
+      "healthStateAbnormal": "存在异常",
+      "healthAlertNormal": "当前任务状态正常，可继续按计划执行。",
+      "healthAlertError": "当前任务存在异常，需要人工检查。"
+    },
+    "source": {
+      "agent": "Agent 创建",
+      "system": "系统任务",
+      "unknown": "未知来源"
+    },
+    "workdayMode": {
+      "none": "按 Cron 原样触发",
+      "mon_fri": "周一至周五",
+      "weekend": "周末",
+      "cn_workday": "法定工作日",
+      "cn_restday": "法定休息日"
+    },
+    "misc": {
+      "untitled": "未命名任务",
+      "noDescription": "无描述",
+      "unknownChannel": "未知频道",
+      "unlinkedWorkspace": "未关联工作区",
+      "primaryChannel": "主频道",
+      "hasError": "存在错误",
+      "failureCount": "失败 {{count}} 次",
+      "yes": "是",
+      "no": "否",
+      "oneShotRule": "一次性提醒"
+    },
+    "empty": {
+      "title": "还没有定时任务",
+      "description": "当前系统中暂无可展示的定时任务，后续 AI 或系统创建后会显示在这里。",
+      "filteredTitle": "没有符合条件的任务",
+      "filteredDescription": "尝试调整筛选条件，或清空筛选后重新查看。"
+    },
+    "deleteDialog": {
+      "title": "确认删除任务",
+      "content": "确定要删除任务 “{{name}}” 吗？此操作不可撤销。"
+    },
+    "pluginAlert": {
+      "message": "内置插件“定时器工具集”当前未启用，AI 无法直接为你创建新的定时任务。请先前往插件管理启用该插件。",
+      "action": "前往启用"
+    },
+    "notifications": {
+      "runNowSuccess": "任务已立即执行",
+      "runNowFailed": "执行失败：{{message}}",
+      "pauseSuccess": "任务已暂停",
+      "pauseFailed": "暂停失败：{{message}}",
+      "resumeSuccess": "任务已恢复",
+      "resumeFailed": "恢复失败：{{message}}",
+      "deleteSuccess": "任务已删除",
+      "deleteFailed": "删除失败：{{message}}"
+    }
+  }
+}

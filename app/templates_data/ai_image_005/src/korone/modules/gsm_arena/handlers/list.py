@@ -1,0 +1,53 @@
+from typing import TYPE_CHECKING, cast
+
+from aiogram import flags
+from aiogram.exceptions import TelegramBadRequest
+
+from korone.logger import get_logger
+from korone.modules.gsm_arena.callbacks import DevicePageCallback
+from korone.modules.gsm_arena.utils.keyboard import create_pagination_layout
+from korone.modules.gsm_arena.utils.session import get_search_session
+from korone.utils.handlers import KoroneCallbackQueryHandler
+from korone.utils.i18n import gettext as _
+from korone.utils.telegram_errors import is_message_not_modified_error
+
+if TYPE_CHECKING:
+    from aiogram.dispatcher.event.handler import CallbackType
+
+logger = get_logger(__name__)
+
+
+@flags.help(exclude=True)
+class DeviceListCallbackHandler(KoroneCallbackQueryHandler):
+    @classmethod
+    def filters(cls) -> tuple[CallbackType, ...]:
+        return (DevicePageCallback.filter(),)
+
+    async def handle(self) -> None:
+        await self.check_for_message()
+
+        callback_data = cast("DevicePageCallback", self.callback_data)
+
+        if self.event.from_user.id != callback_data.user_id:
+            await self.event.answer(_("You are not allowed to use this button."), show_alert=True)
+            return
+
+        devices = await get_search_session(callback_data.token)
+        if devices is None:
+            await self.event.answer(_("Search session expired. Please run /device again."), show_alert=True)
+            return
+
+        if not devices:
+            await self.event.answer(_("No devices found"), show_alert=True)
+            return
+
+        keyboard = create_pagination_layout(devices, callback_data.token, callback_data.page, callback_data.user_id)
+        message = self.message
+
+        try:
+            await message.edit_reply_markup(reply_markup=keyboard)
+        except TelegramBadRequest as err:
+            if not is_message_not_modified_error(err):
+                raise
+
+        await self.event.answer()

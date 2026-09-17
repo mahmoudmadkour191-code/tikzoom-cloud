@@ -1,0 +1,80 @@
+line-length = 120
+preview = true
+show-fixes = true
+
+[format]
+docstring-code-format = true
+skip-magic-trailing-comma = true
+
+[lint]
+select = [
+    "ANN",
+    "ASYNC",
+    "BLE",
+    "FBT",
+    "A",
+    "C4",
+    # "CPY",
+    "DTZ",
+    "EM",
+    "FA",
+    "INT",
+    "ISC",
+    "LOG",
+    "G",
+    "INP",
+    "PIE",
+    "T20",
+    "PYI",
+    "Q",
+    "RET",
+    "SIM",
+    "SLOT",
+    "TID",
+    "TC",
+    "PTH",
+    "I",
+    "N",
+    "PERF",
+    "E",
+    "W",
+    "F",
+    "PL",
+    "UP",
+    "FURB",
+    "RUF",
+    "TRY",
+    "FLY",
+]
+ignore = [
+    "ambiguous-unicode-character-string",
+    "ambiguous-unicode-character-docstring",
+    "ambiguous-unicode-character-comment",
+    "non-empty-init-module",
+    "dunder-function-name",
+    "import-private-name",
+    "magic-value-comparison",
+    "too-many-positional-arguments",
+    "too-many-arguments",
+    "too-many-locals",
+    "too-many-return-statements",
+    "too-many-branches",
+    "too-many-statements",
+    "too-many-statements-in-try-clause",
+]
+per-file-ignores = { "alembic/env.py" = [
+    "implicit-namespace-package",
+], "alembic/versions/*.py" = [
+    "implicit-namespace-package",
+], "src/korone/middlewares/*" = [
+    "any-type",
+], "src/korone/utils/cached.py" = [
+    "any-type",
+] }
+
+[lint.isort]
+split-on-trailing-comma = false
+known-first-party = ["korone"]
+
+[lint.flake8-tidy-imports]
+ban-relative-imports = "parents"

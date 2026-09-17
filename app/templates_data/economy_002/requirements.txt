@@ -1,0 +1,12 @@
+# auto-added by TikZoom curator
+APScheduler
+SQLAlchemy
+colorama
+fastapi
+psutil
+rich
+uvicorn
+uvloop
+
+# auto-added by TikZoom curator
+pytz

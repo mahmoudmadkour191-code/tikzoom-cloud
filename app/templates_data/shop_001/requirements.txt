@@ -1,0 +1,30 @@
+aiogram==2.25.2
+aiogram
+colorlog
+requests
+bs4
+beautifulsoup4
+pyQiwiP2P
+aiohttp
+APScheduler==3.9.1
+colorama
+async_class
+yoomoney
+geopy
+coinbase
+base58
+tronpy
+
+# auto-added by TikZoom curator
+python-telegram-bot
+SQLAlchemy
+googletrans==4.0.0rc1
+pandas
+selenium
+tenacity
+tqdm
+
+# auto-added by TikZoom curator
+googletrans==4.0.0rc1
+pyrogram
+pytz

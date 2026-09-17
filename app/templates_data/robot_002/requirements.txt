@@ -1,0 +1,14 @@
+# auto-added by TikZoom curator
+APScheduler
+emoji
+gTTS
+pydantic-settings
+pymongo
+redis
+rich
+sentry-sdk
+telegramify-markdown
+tenacity
+
+# auto-added by TikZoom curator
+pytz

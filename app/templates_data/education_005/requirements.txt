@@ -1,0 +1,16 @@
+beautifulsoup4==4.4.1
+certifi==2021.10.8
+cycler==0.10.0
+future==0.15.2
+lxml==3.6.0
+Pillow==3.3.0
+pyparsing==2.1.5
+python-dateutil==2.5.3
+python-telegram-bot==4.3.1
+pytz==2016.4
+requests==2.10.0
+six==1.10.0
+urllib3==1.16
+
+# auto-added by TikZoom curator
+matplotlib

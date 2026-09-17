@@ -1,0 +1,923 @@
+"""
+Reflex State Management for AIfred Intelligence
+
+Main state for chat, settings, and backend management
+"""
+
+
+from ..lib.config import LLAMASWAP_BACKENDS
+import re
+import reflex as rx
+from typing import List, Any, Dict, TypedDict
+import os
+import asyncio
+from ..lib import (
+    log_message,
+    console_separator
+)
+from ..lib.logging_utils import CONSOLE_SEPARATOR
+
+
+# Pattern for structured data that STT likely transcribes incorrectly.
+# Whisper often transcribes "@" as "at" and "." as "punkt"/"dot".
+_STRUCTURED_DATA_RE = re.compile(
+    r"@"                                    # email: literal @
+    r"|\bat\b.*\b(?:punkt|dot)\b"           # email: "at ... punkt/dot" (STT transcription)
+    r"|www\s*\.\s*"                         # URL: www. (with possible spaces)
+    r"|www\s+punkt\s+"                      # URL: "www punkt" (STT)
+    r"|\.\s*(?:com|de|org|net|io|edu)\b"    # URL: .com, .de etc.
+    r"|\bpunkt\s*(?:com|de|org|net|io|edu)\b"  # URL: "punkt de" (STT)
+    r"|https?\s*:\s*/\s*/"                  # URL: http(s)://
+)
+
+
+def _transcription_needs_review(text: str) -> bool:
+    """Check if STT transcription contains structured data that needs manual review."""
+    return bool(_STRUCTURED_DATA_RE.search(text.lower()))
+
+# ============================================================
+# TTS Audio Broker - Bridge between create_task and Frontend
+# ============================================================
+# TypedDicts for Reflex (foreach requires typed dicts)
+# ============================================================
+
+class ChatMessage(TypedDict):
+    """Single chat message in new dict-based format.
+
+    Each message is standalone - no more (user, ai) tuples.
+    User messages and assistant messages are separate entries.
+    """
+    role: str           # "user" | "assistant" | "system" (for summaries)
+    content: str        # Message content (with markers for UI display)
+    agent: str          # "" | "aifred" | "sokrates" | "salomo"
+    mode: str           # "" | "direct" | "synthesis" | "tribunal" | "refinement" | ...
+    round_num: int | None  # None/0 = no round, 1+ = round number
+    metadata: Dict[str, Any]  # ttft, inference_time, tokens_per_sec, etc.
+    timestamp: str      # ISO timestamp
+    # Web research sources (top-level for Reflex UI access - also in metadata for export)
+    used_sources: List[Dict[str, Any]]    # [{"url": str, "word_count": int}]
+    failed_sources: List[Dict[str, Any]]  # [{"url": str, "error": str, "method": str}]
+    # Audio replay (top-level for Reflex UI access)
+    has_audio: bool  # True if audio_urls is non-empty
+    audio_urls_json: str  # JSON string of audio URLs (for JS playback)
+
+# ============================================================
+# Module-Level Backend State (Global across all sessions)
+# ============================================================
+# Prevents re-initialization on page reload
+# Backend is initialized once at server startup
+_global_backend_initialized = False
+_global_backend_state: dict[str, Any] = {
+    "backend_type": None,
+    "backend_url": None,
+    "aifred_model": None,
+    "automatik_model": None,
+    "available_models": [],
+    "gpu_info": None,
+}
+
+# Lock to prevent race conditions during backend initialization
+# (e.g., two browser tabs starting simultaneously)
+_backend_init_lock = asyncio.Lock()
+
+# Strong references for fire-and-forget asyncio tasks that the rest of
+# the app doesn't await (e.g. queue_tts_for_agent in add_agent_panel).
+# Without this, asyncio.create_task()'s task object can be GC'd while
+# the coroutine is still running. A done-callback removes the entry
+# again so the set doesn't grow unbounded.
+_orphan_tasks: "set[asyncio.Task[Any]]" = set()
+
+
+def track_orphan_task(task: "asyncio.Task[Any]") -> None:
+    """Keep a strong reference to ``task`` until it finishes."""
+    _orphan_tasks.add(task)
+    task.add_done_callback(_orphan_tasks.discard)
+
+# ============================================================
+# Whisper STT — Docker service (aifred/lib/audio_processing.py)
+# ============================================================
+from ..lib.audio_processing import is_whisper_ready  # noqa: E402
+
+# Mixins
+from ._auth_mixin import AuthMixin  # noqa: E402
+from ._image_mixin import ImageMixin  # noqa: E402
+from ._document_mixin import DocumentMixin  # noqa: E402
+from ._export_mixin import ExportMixin  # noqa: E402
+from ._session_mixin import SessionMixin  # noqa: E402
+from ._tts_config_mixin import TTSConfigMixin  # noqa: E402
+from ._tts_streaming_mixin import TTSStreamingMixin  # noqa: E402
+from ._audio_player_mixin import AudioPlayerMixin  # noqa: E402
+from ._vision_settings_mixin import VisionSettingsMixin  # noqa: E402
+from ._vision_preview_mixin import VisionPreviewMixin  # noqa: E402
+from ._personarium_mixin import PersonariumMixin  # noqa: E402
+from ._casus_mixin import CasusMixin  # noqa: E402
+from ._storage_mixin import StorageMixin  # noqa: E402
+from ._stt_settings_mixin import STTSettingsMixin  # noqa: E402
+from ._multipose_mixin import MultiposeMixin  # noqa: E402
+from ._vigilantia_feed_mixin import VigilantiaFeedMixin  # noqa: E402
+from ._file_picker_mixin import FilePickerMixin  # noqa: E402
+from ._agent_config_mixin import AgentConfigMixin  # noqa: E402
+from ._agent_editor_mixin import AgentEditorMixin  # noqa: E402
+from ._memory_browser_mixin import MemoryBrowserMixin  # noqa: E402
+from ._settings_mixin import SettingsMixin  # noqa: E402
+from ._calibration_mixin import CalibrationMixin  # noqa: E402
+from ._backend_mixin import BackendMixin  # noqa: E402
+from ._chat_mixin import ChatMixin  # noqa: E402
+from ._ui_config_mixin import UIConfigMixin  # noqa: E402
+
+class AIState(  # type: ignore[misc]
+    AuthMixin,
+    ImageMixin,
+    DocumentMixin,
+    ExportMixin,
+    SessionMixin,
+    TTSConfigMixin,
+    TTSStreamingMixin,
+    AudioPlayerMixin,
+    VisionSettingsMixin,
+    VisionPreviewMixin,
+    PersonariumMixin,
+    CasusMixin,
+    StorageMixin,
+    STTSettingsMixin,
+    MultiposeMixin,
+    VigilantiaFeedMixin,
+    FilePickerMixin,
+    AgentConfigMixin,
+    AgentEditorMixin,
+    MemoryBrowserMixin,
+    SettingsMixin,
+    CalibrationMixin,
+    BackendMixin,
+    ChatMixin,
+    UIConfigMixin,
+    rx.State,
+):
+    """Main application state - composed from mixins.
+
+    State variables and methods are distributed across mixins:
+    - ChatMixin: message sending, streaming, agent panels, debug console
+    - BackendMixin: backend init, model selection, GPU detection
+    - TTSConfigMixin: TTS engine/voice configuration
+    - TTSStreamingMixin: TTS audio generation, streaming, queue
+    - AgentConfigMixin: personality, reasoning, thinking, sampling, multi-agent
+    - SettingsMixin: settings save/load, user preferences
+    - CalibrationMixin: context calibration, backend restart
+    - UIConfigMixin: temperature mode, context, research mode, whisper
+    - AuthMixin: login/logout, user authentication
+    - ImageMixin: image upload, crop, lightbox
+    - ExportMixin: chat export (HTML)
+    - SessionMixin: session management, persistence
+    """
+
+    # ── State Variables (only those NOT in any mixin) ────────────
+    # NOTE: chat_history and llm_history live in ChatHistoryState (separate React context)
+
+    # Web Research Sources State (for current request - shown in UI)
+    all_sources: List[Dict[str, Any]] = []
+    used_sources: List[Dict[str, Any]] = []
+    failed_sources: List[Dict[str, str]] = []
+    _pending_used_sources: List[Dict[str, Any]] = []
+    _pending_failed_sources: List[Dict[str, str]] = []
+
+    # Last detected language from Intent Detection (used across mixins)
+    _last_detected_language: str = ""
+
+    # ── SubState Accessors ─────────────────────────────────────────
+
+    def _chat_sub(self):
+        """Get ChatHistoryState substate instance (sync, for history access)."""
+        from aifred.state._chat_history_state import ChatHistoryState
+        return self._get_state_from_cache(ChatHistoryState)
+
+    def _log_history_utilization(self, effective_limit: int) -> None:
+        """Log history token utilization and compression warning to debug console."""
+        from ..lib.context_manager import estimate_tokens_from_llm_history
+        from ..lib.config import HISTORY_COMPRESSION_TRIGGER
+        from ..lib.formatting import format_number
+
+        _llm_hist = self._chat_sub().llm_history
+        if _llm_hist and effective_limit > 0:
+            estimated_tokens = estimate_tokens_from_llm_history(_llm_hist)
+            utilization = (estimated_tokens / effective_limit) * 100
+            self.add_debug(  # type: ignore[attr-defined]
+                f"   \u2514\u2500 History: {format_number(estimated_tokens)} / "
+                f"{format_number(effective_limit)} tok ({int(utilization)}%)"
+            )
+            if utilization >= HISTORY_COMPRESSION_TRIGGER * 100:
+                self.add_debug(  # type: ignore[attr-defined]
+                    f"\u26a0\ufe0f History compression will trigger on next message "
+                    f"(>{int(HISTORY_COMPRESSION_TRIGGER * 100)}%)"
+                )
+        elif not _llm_hist:
+            self.add_debug("   \u2514\u2500 History: empty")  # type: ignore[attr-defined]
+        else:
+            self.add_debug(f"   \u2514\u2500 Effective limit: {format_number(effective_limit)} tokens")  # type: ignore[attr-defined]
+
+    # ── Methods (only those NOT in any mixin) ────────────────────
+
+    def refresh_debug_console(self):
+        """
+        Refresh debug console to propagate background task updates
+
+        Background tasks (like InactivityMonitor) can modify self.debug_messages
+        but without yield, changes don't propagate to UI. This event handler
+        forces a UI refresh by yielding.
+
+        Called periodically from UI via rx.moment() interval.
+
+        Also checks for API update flags - if flag exists for this session_id,
+        triggers browser reload to sync session data from API changes.
+        """
+        # Vigilantia-Live-Feed mit-aktualisieren — kein eigener Timer,
+        # piggyback auf dem existierenden 500ms-Tick. Die Methode setzt
+        # state-Variablen, Reflex erkennt die Änderung und liefert ein
+        # Delta wenn was Neues da ist. Falls Mixin nicht im AIState
+        # gemounted ist (Tests), still no-op.
+        if getattr(self, "vigilantia_feed_visible", False):
+            try:
+                self._refresh_vigilantia_feed()
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Casus-Modal mit-aktualisieren (gleiches Piggyback-Muster):
+        # billiger max(id)-Check, Neuladen nur wenn neue Events da sind.
+        if getattr(self, "casus_open", False):
+            try:
+                self._casus_poll_new_events()
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Check if settings.json was modified (mtime-based, multi-browser safe)
+        # Each browser tracks its own last-seen mtime - no race conditions
+        import os
+        from ..lib.settings import SETTINGS_FILE
+        try:
+            current_mtime = os.path.getmtime(SETTINGS_FILE)
+            if current_mtime > self._last_settings_mtime:
+                self._reload_settings_from_file()
+                # Re-read mtime AFTER the reload: the reload can rewrite
+                # settings.json itself (stale-voice cleanup persists to file),
+                # bumping the mtime above a pre-reload value. Tracking the
+                # pre-reload mtime would then re-trigger the reload on every
+                # poll — an endless loop flooding the console. Reading it post-
+                # reload absorbs our own write.
+                try:
+                    self._last_settings_mtime = os.path.getmtime(SETTINGS_FILE)
+                except OSError:
+                    self._last_settings_mtime = current_mtime
+                self.add_debug("⚙️ Settings reloaded")
+                yield
+                return
+        except OSError:
+            pass  # File doesn't exist or not accessible
+
+        # Check for pending message from API (message injection)
+        if self.session_id and not self.is_generating:
+            from ..lib.session_storage import get_and_clear_pending_message
+            pending_msg = get_and_clear_pending_message(self.session_id)
+            if pending_msg:
+                self.current_user_input = pending_msg
+                self.add_debug(f"📨 API: Message injected ({len(pending_msg)} chars)")
+                yield  # Update UI with debug message and input field
+                # Trigger send_message as next event in chain
+                return AIState.send_message
+
+        # Check for global Message Hub notifications FIRST (toast should appear immediately)
+        from ..lib.message_processor import read_and_clear_hub_notification
+        from ..lib.i18n import t as _t
+        notification = read_and_clear_hub_notification()
+        toast_events: list = []
+        if notification:
+            channel = notification.get("channel", "?")
+            sender = notification.get("sender", "")
+            status = notification.get("status", "received")
+            self.refresh_session_list()
+
+            # Ghost browser controls as soon as Hub message arrives (not just processing).
+            # is_generating_hub tags this as a hub-triggered pipeline so the
+            # mtime-watch below still runs — without it the user would only
+            # see incoming chat bubbles after the whole pipeline finished.
+            if status in ("received", "processing"):
+                self.is_generating = True
+                self.is_generating_hub = True
+            elif status in ("done", "error"):
+                self.is_generating = False
+                self.is_generating_hub = False
+
+            # Phase-dependent toast. received/processing share id="hub" so each
+            # replaces the previous one. The terminal states (done/error) MUST
+            # explicitly dismiss "hub": the "processing" toast is a Sonner
+            # loading toast, which ignores its duration and lives until it is
+            # *resolved* — a success/error toast carrying the same id does NOT
+            # reliably replace a loading toast, so without the dismiss the
+            # spinner lingers indefinitely (observed: "Generiere Antwort…"
+            # stuck after a silent music reply finished). The terminal toast
+            # then uses a fresh (auto) id so it shows cleanly after the dismiss.
+            toast_style = {"width": "420px"}
+            hub_kwargs = dict(id="hub", position="top-center", style=toast_style)
+            final_kwargs = dict(position="top-center", style=toast_style)
+            if status == "received":
+                toast_msg = _t("hub_toast_received", lang=self.ui_language, channel=channel, sender=sender)
+                toast_events = [rx.toast.info(toast_msg, duration=120000, **hub_kwargs)]
+            elif status == "processing":
+                toast_msg = _t("hub_toast_processing", lang=self.ui_language, channel=channel, sender=sender)
+                toast_events = [rx.toast.loading(toast_msg, duration=120000, **hub_kwargs)]
+            elif status == "done":
+                toast_msg = _t("hub_toast_done", lang=self.ui_language, channel=channel, sender=sender)
+                toast_events = [rx.toast.dismiss("hub"), rx.toast.success(toast_msg, duration=5000, **final_kwargs)]
+            elif status == "error":
+                toast_msg = _t("hub_toast_error", lang=self.ui_language, channel=channel, sender=sender)
+                toast_events = [rx.toast.dismiss("hub"), rx.toast.error(toast_msg, duration=8000, **final_kwargs)]
+
+        # SSOT MTIME WATCH: Check if session file was modified externally
+        # (other tab, API, channel, message_processor, debug_bus).
+        #
+        # This is the single source of truth for detecting session changes —
+        # replaces the legacy update_flag mechanism. Every writer (browser,
+        # API, hub) updates the session file → mtime changes → all tabs
+        # detect and reload on the next tick.
+        #
+        # Skipped only during *local* browser generation, where state is
+        # ahead of disk (user message added before LLM call).  For
+        # hub-driven generation the hub is the sole writer, so the watch
+        # must keep running — otherwise bubbles appear only after the
+        # whole pipeline completes.
+        local_generation_blocks_sync = self.is_generating and not self.is_generating_hub
+        if self.session_id and not local_generation_blocks_sync:
+            from ..lib.session_storage import get_session_path, load_session
+            try:
+                session_path = get_session_path(self.session_id)
+                if session_path.exists():
+                    session_mtime = os.path.getmtime(session_path)
+                    if session_mtime > self._last_session_mtime:
+                        # External write detected → full session reload
+                        session = load_session(self.session_id)
+                        if session and session.get("data"):
+                            # Use file's debug_messages directly (no prepend of startup
+                            # messages which are already in browser memory).
+                            file_debug = session["data"].pop("debug_messages", None)
+                            if file_debug is not None:
+                                self.debug_messages = file_debug
+                            self._restore_session(session)
+                            msg_count = len(self._chat_sub().chat_history)
+                            self.add_debug(
+                                f"🔄 Session synced ({msg_count} messages)"
+                            )
+                        self._last_session_mtime = session_mtime
+                        # Force scroll + toast(s) (if any) in one yield
+                        for _ev in toast_events:
+                            yield _ev
+                        yield rx.call_script("forceScrollToBottom()")
+                        return
+            except (OSError, ValueError):
+                pass
+
+        # Toast without session change (notification for a different session)
+        if toast_events:
+            for _ev in toast_events:
+                yield _ev
+            return
+
+        # Background create_tasks (TTS finalize, title generation) append to
+        # debug_messages but never trigger a Reflex delta themselves. A bare
+        # yield only pushes vars Reflex flagged dirty in THIS event — so
+        # re-assign the list to force it dirty. This 500ms timer is what
+        # carries background-task lines to the rx.foreach debug console.
+        #
+        # Only reassign when the list has actually changed since the last
+        # tick we pushed to the browser — otherwise every tick produces a
+        # no-op state delta that React still has to reconcile, which wipes
+        # any active text selection inside chat bubbles every 500ms.
+        # ``_last_pushed_debug_len`` is declared in _settings_mixin so
+        # Reflex knows it's a tracked state var.
+        current_len = len(self.debug_messages)
+        if current_len != self._last_pushed_debug_len:
+            self.debug_messages = list(self.debug_messages)
+            self._last_pushed_debug_len = current_len
+            yield
+
+    # Image Handlers → ImageMixin
+    # ============================================================
+    # AUDIO UPLOAD HANDLER (STT)
+    # ============================================================
+
+    # Parked upload context while a confirm dialog is open (backend-only
+    # vars, never synced to the client). stt_confirm_result() and
+    # stt_unload_confirm_result() consume them.
+    _stt_pending_path: str = ""
+    _stt_pending_source: str = ""
+    _stt_pending_filename: str = ""
+    _stt_pending_size: str = ""
+
+    async def handle_audio_upload(self, files: List[rx.UploadFile]):
+        """Audio file upload (disc button) — transcript goes to a chat bubble."""
+        async for event in self._handle_audio(files, source="file"):
+            yield event
+
+    async def handle_audio_recording(self, files: List[rx.UploadFile]):
+        """Mic recording (MediaRecorder) — transcript goes to the input
+        field (edit toggle on) or straight to the AI (toggle off)."""
+        async for event in self._handle_audio(files, source="mic"):
+            yield event
+
+    async def _handle_audio(self, files: List[rx.UploadFile], source: str):
+        """Shared validation + device routing for both audio sources."""
+        # Check Whisper Docker service is ready
+        if not is_whisper_ready():
+            self.add_debug("🎤 Starting Whisper service...")
+            from ..lib.process_utils import ensure_whisper_ready
+            success, msg = ensure_whisper_ready(timeout=60)
+            if not success:
+                self.add_debug(f"❌ {msg}")
+                yield rx.toast.error(f"🎤 Whisper: {msg}", duration=8000, position="top-center")
+                return
+
+        # Validate file
+        if not files or len(files) == 0:
+            self.add_debug("⚠️ No audio file provided")
+            yield rx.toast.error("⚠️ Keine Audio-Datei erhalten", duration=5000, position="top-center")
+            return
+
+        file = files[0]  # Only process first file
+
+        # Validate audio file type
+        allowed_extensions = [".wav", ".mp3", ".m4a", ".ogg", ".flac", ".webm"]
+        file_ext = os.path.splitext(file.filename or "")[1].lower()
+        if file_ext not in allowed_extensions:
+            self.add_debug(f"⚠️ Unsupported audio format: {file_ext}")
+            yield rx.toast.error(
+                f"⚠️ Format {file_ext or '(ohne Endung)'} wird nicht unterstützt "
+                f"({', '.join(allowed_extensions)})",
+                duration=8000, position="top-center",
+            )
+            return
+
+        # Read file content
+        content = await file.read()
+        file_size_mb = len(content) / (1024 * 1024)
+
+        # Sanity cap only — local Whisper has no API limit (see config.py)
+        from ..lib.config import AUDIO_UPLOAD_MAX_MB
+        if file_size_mb > AUDIO_UPLOAD_MAX_MB:
+            from ..lib.formatting import format_number
+            msg = (f"Audio file too large: {format_number(file_size_mb, 1)} MB "
+                   f"(max {format_number(AUDIO_UPLOAD_MAX_MB, 0)} MB)")
+            self.add_debug(f"⚠️ {msg}")
+            yield rx.toast.error(f"⚠️ {msg}", duration=8000, position="top-center")
+            return
+
+        # Save to temporary file for Whisper processing
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as tmp_file:
+            tmp_file.write(content)
+            tmp_path = tmp_file.name
+
+        # Duration estimate — BEFORE the transcription try/finally, because
+        # a confirmation pause must not delete tmp_path. Device is always
+        # GPU-first (the Whisper service checks VRAM itself and answers 503
+        # if nothing fits); _run_transcription handles the fallback.
+        from ..lib.audio_processing import get_audio_duration
+        from ..lib.config import (
+            WHISPER_CONFIRM_THRESHOLD_S,
+            WHISPER_RTF_GPU,
+            WHISPER_TRANSCRIBE_TIMEOUT_S,
+        )
+        from ..lib.formatting import format_number
+        from ..lib.i18n import t as _t
+
+        # Show KB for small files, MB for larger files (German number format)
+        if file_size_mb < 1:
+            size_display = f"{format_number(len(content) / 1024, 0)} KB"
+        else:
+            size_display = f"{format_number(file_size_mb, 1)} MB"
+
+        duration_s = get_audio_duration(tmp_path)
+        estimate_s = duration_s * WHISPER_RTF_GPU
+        if duration_s:
+            self.add_debug(
+                f"🎤 Audio duration {format_number(duration_s / 60, 1)} min — "
+                f"estimated transcription ~{format_number(max(estimate_s, 6) / 60, 1)} min "
+                f"(GPU engine)"
+            )
+
+        if estimate_s > WHISPER_TRANSCRIBE_TIMEOUT_S:
+            # Cannot succeed — reject now instead of burning the full timeout.
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            self.add_debug(
+                f"⚠️ Estimated ~{round(estimate_s / 60)} min exceeds the "
+                f"{WHISPER_TRANSCRIBE_TIMEOUT_S // 60} min transcribe timeout — aborted"
+            )
+            yield rx.toast.error(
+                _t("stt_estimate_too_long", lang=self.ui_language,
+                   minutes=round(estimate_s / 60),
+                   limit=WHISPER_TRANSCRIBE_TIMEOUT_S // 60),
+                duration=12000, position="top-center",
+            )
+            return
+
+        if estimate_s > WHISPER_CONFIRM_THRESHOLD_S:
+            # Long but feasible — ask before starting. Context is parked in
+            # backend vars; stt_confirm_result() resumes or cleans up.
+            import json as _json
+            self._stt_pending_path = tmp_path
+            self._stt_pending_source = source
+            self._stt_pending_filename = file.filename or "audio"
+            self._stt_pending_size = size_display
+            question = _t(
+                "stt_confirm_long", lang=self.ui_language,
+                filename=file.filename or "audio",
+                minutes=round(estimate_s / 60),
+                engine="GPU",
+            )
+            yield rx.call_script(
+                f"window.confirm({_json.dumps(question)})",
+                callback=AIState.stt_confirm_result,
+            )
+            return
+
+        async for event in self._run_transcription(
+            tmp_path, file.filename or "audio", source, size_display
+        ):
+            yield event
+
+    def _consume_stt_pending(self) -> tuple[str, str, str, str]:
+        """Pop the parked confirm-dialog context (path, source, filename, size)."""
+        parked = (
+            self._stt_pending_path, self._stt_pending_source,
+            self._stt_pending_filename, self._stt_pending_size,
+        )
+        self._stt_pending_path = ""
+        self._stt_pending_source = ""
+        self._stt_pending_filename = ""
+        self._stt_pending_size = ""
+        return parked
+
+    async def stt_confirm_result(self, confirmed: bool):
+        """Resume or cancel a transcription parked for user confirmation."""
+        tmp_path, source, filename, size_display = self._consume_stt_pending()
+
+        if not tmp_path:
+            return
+        if not confirmed:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            from ..lib.i18n import t as _t
+            self.add_debug("🎤 Transcription cancelled by user")
+            yield rx.toast.info(
+                _t("stt_cancelled", lang=self.ui_language),
+                duration=5000, position="top-center",
+            )
+            return
+
+        async for event in self._run_transcription(tmp_path, filename, source, size_display):
+            yield event
+
+    async def stt_unload_confirm_result(self, confirmed: bool):
+        """Resume a big-file transcription parked on the 'unload LLM?'
+        question: unload the chat backend, then retry the GPU engine once."""
+        tmp_path, source, filename, size_display = self._consume_stt_pending()
+
+        if not tmp_path:
+            return
+        if not confirmed:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            from ..lib.i18n import t as _t
+            self.add_debug("🎤 Transcription cancelled by user (GPU busy, no LLM unload)")
+            yield rx.toast.info(
+                _t("stt_cancelled", lang=self.ui_language),
+                duration=5000, position="top-center",
+            )
+            return
+
+        self.add_debug(f"🎤 Unloading LLM backend ({self.backend_type}) for GPU transcription...")
+        yield
+        await self._unload_llm_for_stt()
+
+        async for event in self._run_transcription(
+            tmp_path, filename, source, size_display, allow_unload_prompt=False
+        ):
+            yield event
+
+    async def _unload_llm_for_stt(self) -> None:
+        """Unload the active chat backend's models so the Whisper GPU worker
+        fits. The LLM reloads automatically on the next chat request."""
+        from ..backends.ollama import wait_for_vram_stable
+
+        if self.backend_type in LLAMASWAP_BACKENDS:
+            # llama-swap: POST /unload stops all running instances (incl. vLLM)
+            import requests
+            from ..lib.config import BACKEND_URLS
+            base = BACKEND_URLS["llamacpp"].removesuffix("/v1")
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None, lambda: requests.post(f"{base}/unload", timeout=30),
+            )
+            stabilized, wait_s, free_mb = await wait_for_vram_stable()
+            self.add_debug(
+                f"🎤 llama-swap unloaded — {free_mb} MiB VRAM free "
+                f"after {wait_s:.1f}s{'' if stabilized else ' (still settling)'}"
+            )
+        elif self.backend_type == "ollama":
+            from ..backends import BackendFactory
+            backend = BackendFactory.create("ollama")
+            try:
+                success, unloaded = await backend.unload_all_models(wait_for_stability=True)
+                self.add_debug(f"🎤 Ollama unloaded: {', '.join(unloaded) if unloaded else 'nothing loaded'}")
+            finally:
+                await backend.client.aclose()
+
+    async def _run_transcription(
+        self, tmp_path: str, filename: str, source: str, size_display: str,
+        allow_unload_prompt: bool = True,
+    ):
+        """Whisper call + result handling; deletes tmp_path when done
+        (unless the context gets parked for an unload-confirm dialog)."""
+        parked = False
+        try:
+            from ..lib.audio_processing import transcribe_audio_auto
+            from ..lib.formatting import format_number
+
+            self.add_debug(
+                f"🎤 Transcribing audio: {filename} ({size_display}, GPU engine)..."
+            )
+            # File uploads get a persistent chat bubble so the upload is
+            # visible in the history — mic dictations stay quiet (their text
+            # lands in the chat anyway).
+            if source == "file":
+                from ..lib.i18n import t as _t
+                self.add_agent_panel(  # type: ignore[attr-defined]
+                    agent="aifred",
+                    content=_t("stt_bubble_started", lang=self.ui_language,
+                               filename=filename, size=size_display, engine="GPU"),
+                    mode="standard",
+                    sync_llm_history=False,
+                    generate_tts=False,
+                )
+            yield  # flush debug line before the long-running transcription
+
+            # Whisper call is a blocking HTTP request that can run for minutes
+            # on long recordings — keep it off the event loop.
+            # Language: file uploads (meetings) use auto-detect so the
+            # transcript keeps its ORIGINAL language — forcing the UI language
+            # makes Whisper translate on the fly, which is worse than a proper
+            # second-step translation (translate_file → DeepL). Mic dictations
+            # keep the UI language (fast, and the assumption is correct).
+            from ..lib.audio_processing import WhisperGPUUnavailable
+            stt_language = "auto" if source == "file" else self.ui_language
+            loop = asyncio.get_running_loop()
+            try:
+                try:
+                    # GPU-first + small-file CPU fallback live in the helper
+                    # (SSOT with the FreeEcho.2 channel); only the big-file
+                    # case (WhisperGPUUnavailable) surfaces here.
+                    # Speaker labels only for uploaded files: those are
+                    # recordings (interviews, meetings) where knowing who
+                    # speaks carries the meaning. A mic dictation has one
+                    # speaker and would only pay the extra model load.
+                    want_diarize = source == "file"
+                    user_text, stt_time, stt_device = await loop.run_in_executor(
+                        None,
+                        lambda: transcribe_audio_auto(
+                            tmp_path, language=stt_language, diarize=want_diarize,
+                        ),
+                    )
+                    if stt_device == "cpu":
+                        self.add_debug("⚠️ No GPU with free VRAM — transcribed on CPU engine (slower)")
+                except WhisperGPUUnavailable:
+                    # Big file, all GPUs occupied (e.g. big LLM loaded) —
+                    # CPU would take >30 min, offer to unload the LLM instead.
+                    from ..lib.i18n import t as _t
+                    if allow_unload_prompt and self.backend_type in ("llamacpp", "vllm", "ollama"):
+                        # Park context and ask: unload the LLM to free VRAM?
+                        # stt_unload_confirm_result() resumes or cleans up.
+                        import json as _json
+                        self._stt_pending_path = tmp_path
+                        self._stt_pending_source = source
+                        self._stt_pending_filename = filename
+                        self._stt_pending_size = size_display
+                        parked = True
+                        question = _t(
+                            "stt_gpu_busy_unload_confirm", lang=self.ui_language,
+                            filename=filename, size=size_display,
+                        )
+                        self.add_debug("⚠️ No GPU with free VRAM — asking to unload the LLM")
+                        yield rx.call_script(
+                            f"window.confirm({_json.dumps(question)})",
+                            callback=AIState.stt_unload_confirm_result,
+                        )
+                        return
+                    else:
+                        # Non-unloadable backend (vLLM/cloud) or the retry
+                        # after an unload — CPU is no option at this size.
+                        self.add_debug("⚠️ No GPU with free VRAM — transcription aborted (file too big for CPU)")
+                        yield rx.toast.error(
+                            _t("stt_gpu_busy_aborted", lang=self.ui_language),
+                            duration=10000, position="top-center",
+                        )
+                        return
+            except TimeoutError as e:
+                self.add_debug(f"⚠️ {e}")
+                yield rx.toast.error(f"⚠️ {e}", duration=10000, position="top-center")
+                return
+
+            if user_text:
+                # German number format: 0,2s instead of 0.2s
+                from ..lib.formatting import format_number
+                self.add_debug(f"✅ Transcription complete ({format_number(stt_time, 1)}s)")
+
+                # Long recording (meeting etc.) → workspace file instead of
+                # flooding the input field. The agent can then process it with
+                # its file tools (translate_file, read_file, …).
+                from ..lib.config import TRANSCRIPT_TO_WORKSPACE_THRESHOLD_CHARS
+                if len(user_text) > TRANSCRIPT_TO_WORKSPACE_THRESHOLD_CHARS:
+                    from datetime import datetime
+                    from ..lib import file_manager as fm
+                    stem = re.sub(
+                        r'[^A-Za-z0-9._-]+', '_',
+                        os.path.splitext(filename)[0],
+                    )[:60]
+                    rel_name = f"transcript-{stem}-{datetime.now().strftime('%Y-%m-%d-%H%M')}.txt"
+                    result = fm.write_file(rel_name, user_text)
+                    if result.success:
+                        self.add_debug(
+                            f"📄 Transcript saved to workspace: {rel_name} "
+                            f"({format_number(len(user_text) / 1000, 1)}k chars)"
+                        )
+                        # Persistent chat bubble — synced to llm_history so the
+                        # model knows the filename ("summarize it" works).
+                        # Markdown link, NOT raw <a> HTML: the markdown
+                        # component map renders [..](..) as a new-tab link,
+                        # while raw HTML anchors come out dead — and the
+                        # model imitates whatever pattern it sees here.
+                        from ..lib.i18n import t as _t
+                        transcript_link = f"[{rel_name}](/_upload/documents/{rel_name})"
+                        # Diarized transcripts get the variant that explains
+                        # the [SPEAKER_xx] markers — without it the model
+                        # just parrots the anonymous labels instead of
+                        # resolving them to the names used in the recording.
+                        bubble_key = ("stt_bubble_saved_speakers"
+                                      if "[SPEAKER_" in user_text else "stt_bubble_saved")
+                        self.add_agent_panel(  # type: ignore[attr-defined]
+                            agent="aifred",
+                            content=_t(bubble_key, lang=self.ui_language,
+                                       transcript_link=transcript_link,
+                                       filename=rel_name,
+                                       chars=format_number(len(user_text) / 1000, 1)),
+                            mode="standard",
+                            sync_llm_history=True,
+                            generate_tts=False,
+                        )
+                        yield rx.toast.success(
+                            f"📄 Transkript gespeichert: {rel_name} — im Chat z. B. "
+                            f"„fasse {rel_name} zusammen“ oder „übersetze {rel_name}“",
+                            duration=12000, position="top-center",
+                        )
+                    else:
+                        self.add_debug(f"❌ Workspace write failed: {result.detail}")
+                        yield rx.toast.error(
+                            f"❌ Transkript konnte nicht gespeichert werden: {result.detail}",
+                            duration=8000, position="top-center",
+                        )
+                    self.add_debug(CONSOLE_SEPARATOR)
+                    console_separator()  # Log-File
+                    return
+
+                # File uploads (audio button): transcript always lands in a
+                # persistent chat bubble — synced to llm_history so the agent
+                # can work with it. Never the input field, never auto-send.
+                if source == "file":
+                    from ..lib.i18n import t as _t
+                    self.add_agent_panel(  # type: ignore[attr-defined]
+                        agent="aifred",
+                        content=_t("stt_bubble_transcript", lang=self.ui_language,
+                                   filename=filename, size=size_display,
+                                   text=user_text),
+                        mode="standard",
+                        sync_llm_history=True,
+                        generate_tts=False,
+                    )
+                    self.add_debug("💬 Transcript added to chat bubble")
+                    self.add_debug(CONSOLE_SEPARATOR)
+                    console_separator()  # Log-File
+                    return
+
+                # Mic dictation (user request) from here on.
+                # Auto-enable edit mode if transcription contains structured data
+                # (email addresses, URLs) that STT likely got wrong
+                force_edit = _transcription_needs_review(user_text)
+                if force_edit and not self.show_transcription:
+                    self.add_debug("✏️ Email/URL detected → edit mode enabled")
+
+                # Show Transcription Workflow
+                if self.show_transcription or force_edit:
+                    # Mode: Edit text → Send manually
+                    # Append to existing text (multiple recordings)
+                    if self.current_user_input:
+                        self.current_user_input += " " + user_text
+                    else:
+                        self.current_user_input = user_text
+                    # Append to uncontrolled textarea via JavaScript
+                    import json
+                    yield rx.call_script(
+                        f"var el = document.getElementById('user-text-input');"
+                        f" var t = {json.dumps(user_text)};"
+                        f" el.value = el.value.trim() ? el.value + ' ' + t : t"
+                    )
+                    self.add_debug("✏️ Text in input field → Ready for editing")
+                    # Separator after STT complete (user will edit + send manually)
+                    self.add_debug(CONSOLE_SEPARATOR)
+                    console_separator()  # Log-File
+                else:
+                    # Mode: Direct to AI (no append, send immediately)
+                    self.current_user_input = user_text
+                    self.add_debug("🚀 Sending text directly to AI...")
+                    # Separator after STT, before send_message starts
+                    self.add_debug(CONSOLE_SEPARATOR)
+                    console_separator()  # Log-File
+                    # Forward yields from send_message() — the yielded value
+                    # must be passed through: send_message emits real events
+                    # (rx.call_script for the TTS browser stream), and a bare
+                    # ``yield`` would drop them and only push state deltas.
+                    async for event in self.send_message():
+                        yield event
+            else:
+                self.add_debug("⚠️ Transcription returned empty text")
+                yield rx.toast.error(
+                    "⚠️ Transkription lieferte keinen Text (Whisper-Log prüfen)",
+                    duration=8000, position="top-center",
+                )
+
+        except (ImportError, RuntimeError, ValueError, OSError) as e:
+            self.add_debug(f"❌ Audio transcription failed: {e}")
+            log_message(f"❌ Audio transcription error: {e}")
+            yield rx.toast.error(f"❌ Transkription fehlgeschlagen: {e}", duration=8000, position="top-center")
+        finally:
+            # Clean up temporary file — unless the context was parked for the
+            # unload-confirm dialog (stt_unload_confirm_result cleans up then).
+            if not parked:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+    def toggle_yarn(self):
+        """Toggle YaRN context extension"""
+        self.enable_yarn = not self.enable_yarn
+        status = "enabled" if self.enable_yarn else "disabled"
+        self.add_debug(f"📏 YaRN Context Extension {status} (Factor: {self.yarn_factor}x)")
+        if self.enable_yarn:
+            self.add_debug("⚠️ Click 'Apply YaRN' to start backend with new factor!")
+        self._save_settings()
+
+    def set_yarn_factor_input(self, factor: str):
+        """Update YaRN factor input field (temporary, not applied yet)"""
+        self.yarn_factor_input = factor
+        # Calculate estimated context for preview
+        try:
+            # Normalize comma to point for German locale
+            factor_normalized = factor.replace(',', '.')
+            factor_float = float(factor_normalized)
+            if 1.0 <= factor_float <= 8.0 and self.vllm_max_tokens > 0:
+                estimated_context = int(self.vllm_max_tokens * factor_float)
+                self.add_debug(f"📏 YaRN factor: {factor_float}x (~{estimated_context} tokens)")
+        except ValueError:
+            pass  # Ignore invalid input during typing
+
+    async def apply_yarn_factor(self):
+        """Apply YaRN factor and restart backend"""
+        try:
+            # Normalize comma to point for German locale
+            factor_normalized = self.yarn_factor_input.replace(',', '.')
+            factor_float = float(factor_normalized)
+            if not (1.0 <= factor_float <= 8.0):
+                self.add_debug(f"❌ YaRN factor must be between 1.0 and 8.0 (entered: {factor_float})")
+                return
+
+            old_factor = self.yarn_factor
+            self.yarn_factor = factor_float
+            self._save_settings()
+
+            estimated_context = int(self.vllm_max_tokens * factor_float)
+            self.add_debug(f"✅ YaRN factor set: {old_factor}x → {factor_float}x (~{estimated_context} tokens)")
+
+            # Warn if factor is high (potential VRAM overflow)
+            if factor_float > 2.0:
+                self.add_debug(f"⚠️ High YaRN factor ({factor_float}x) may exceed VRAM → possible crash!")
+                self.add_debug("💡 Tip: For VRAM issues, reduce factor or use more GPU RAM")
+
+            # YaRN gehoerte zum alten Direkt-vLLM-Pfad; unter llama-swap
+            # bestimmen die kalibrierten Betriebspunkte den Kontext.
+            # (Feature-Bewertung verschoben, siehe Backend-Trennungs-Paket.)
+
+        except ValueError:
+            self.add_debug(f"❌ Invalid YaRN factor: {self.yarn_factor_input}")
+

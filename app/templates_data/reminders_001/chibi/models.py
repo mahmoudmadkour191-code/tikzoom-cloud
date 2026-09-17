@@ -1,0 +1,697 @@
+import asyncio
+import base64
+import binascii
+import itertools
+import json
+import time
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast
+
+from aiocache import cached
+from anthropic.types import (
+    MessageParam,
+    TextBlockParam,
+    ToolResultBlockParam,
+    ToolUseBlockParam,
+)
+from google.genai.types import ContentDict, FunctionCallDict, PartDict
+from loguru import logger
+from mistralai.models import (
+    AssistantMessage as MistralAssistantMessage,
+)
+from mistralai.models import (
+    FunctionCall as MistralFunctionCall,
+)
+from mistralai.models import (
+    SystemMessage as MistralSystemMessage,
+)
+from mistralai.models import (
+    ToolCall as MistralToolCall,
+)
+from mistralai.models import (
+    ToolMessage as MistralToolMessage,
+)
+from mistralai.models import (
+    UserMessage as MistralUserMessage,
+)
+from openai.types.chat import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionFunctionMessageParam,
+    ChatCompletionMessageParam,
+    ChatCompletionToolMessageParam,
+    ChatCompletionUserMessageParam,
+)
+from pydantic import BaseModel, Field, field_serializer, field_validator
+
+from chibi.config import application_settings, gpt_settings
+from chibi.exceptions import (
+    NoProviderSelectedError,
+)
+from chibi.schemas.app import ModelChangeSchema
+
+if TYPE_CHECKING:
+    from chibi.services.providers import RegisteredProviders
+    from chibi.services.providers.provider import Provider
+
+CHAT_COMPLETION_CLASSES = {
+    "assistant": ChatCompletionAssistantMessageParam,
+    "function": ChatCompletionFunctionMessageParam,
+    "tool": ChatCompletionToolMessageParam,
+    "user": ChatCompletionUserMessageParam,
+}
+
+
+class FunctionSchema(BaseModel):
+    id: str | None = None
+    name: str
+    arguments: str | None = None
+
+
+class ToolSchema(BaseModel):
+    id: str
+    type: str = "function"
+    function: FunctionSchema
+    thought_signature: bytes | None = None
+
+    @field_validator("thought_signature", mode="before")
+    @classmethod
+    def decode_signature_from_base64(cls, v: bytes | str | None) -> bytes | None:
+        if v is None:
+            return None
+
+        if isinstance(v, bytes):
+            return v
+
+        if isinstance(v, str):
+            try:
+                return base64.b64decode(v)
+            except binascii.Error:
+                raise ValueError("Invalid base64 string for thought_signature")
+
+        raise TypeError("thought_signature must be bytes or a base64 encoded string")
+
+    @field_serializer("thought_signature")
+    def serialize_signature_to_base64(self, value: bytes | None) -> str | None:
+        if not value:
+            return None
+        return base64.b64encode(value).decode("ascii")
+
+
+class Message(BaseModel):
+    id: int = Field(default_factory=time.time_ns)
+    role: str
+    content: str
+    expire_at: float | None = None
+    tool_calls: list[ToolSchema] | None = None
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    source: str | None = None
+
+    @property
+    def estimate_tokens(self) -> int:
+        return (len(self.content) + len(self.role)) // 4
+
+    def to_openai(self) -> ChatCompletionMessageParam:
+        wrapper_class = CHAT_COMPLETION_CLASSES.get(self.role)
+        if not wrapper_class:
+            raise ValueError(f"Role {self.role} seems not supported yet")
+
+        open_ai_message = wrapper_class(**self.model_dump(exclude={"expire_at"}))
+        return open_ai_message
+
+    @classmethod
+    def from_openai(cls, open_ai_message: ChatCompletionMessageParam) -> "Message":
+        # if not open_ai_message.get("tool_calls"):
+        #     open_ai_message["tool_calls"] = []
+        msg = cls(**open_ai_message)
+        msg.source = "openai"
+        return msg
+
+    def to_anthropic(self) -> MessageParam:
+        if self.role == "tool" and self.tool_call_id:
+            return MessageParam(
+                role="user",
+                content=[
+                    ToolResultBlockParam(
+                        tool_use_id=self.tool_call_id,
+                        type="tool_result",
+                        content=self.content,
+                    )
+                ],
+            )
+        if self.role == "user":
+            return MessageParam(
+                role="user",
+                content=[
+                    TextBlockParam(
+                        type="text",
+                        text=self.content,
+                    )
+                ],
+            )
+
+        assistant_content: list[TextBlockParam | ToolUseBlockParam] = [
+            TextBlockParam(
+                type="text",
+                text=self.content or "No content",
+            )
+        ]
+        if self.tool_calls:
+            for tool in self.tool_calls:
+                assistant_content.append(
+                    ToolUseBlockParam(
+                        type="tool_use",
+                        id=tool.id,
+                        name=tool.function.name,
+                        input=json.loads(tool.function.arguments) if tool.function.arguments else {},
+                    )
+                )
+        return MessageParam(
+            role="assistant",
+            content=assistant_content,
+        )
+
+    @classmethod
+    def from_anthropic(cls, anthropic_message: MessageParam) -> "Message":
+        message_content = anthropic_message["content"]
+        role: Literal["user", "assistant", "tool"] = anthropic_message["role"]
+        tool_call_id: str | None = None
+        content: str = ""
+        tool_name: str | None = None
+        tools: list[ToolSchema] = []
+
+        if isinstance(message_content, str):
+            return cls(role=role, content=message_content)
+
+        for content_block in message_content:
+            if isinstance(content_block, dict):
+                # TextBlockParam
+                if content_block["type"] == "text":
+                    content = content_block.get("text", "No content")
+
+                # ToolResultBlockParam
+                if content_block["type"] == "tool_result":
+                    role = "tool"
+                    tool_call_id = content_block.get("tool_use_id")
+                    content = cast(str, content_block["content"])
+                    tool_name = cls._get_tool_name(tool_result=content)
+
+                # ToolUseBlockParam
+                if content_block["type"] == "tool_use":
+                    function = FunctionSchema(
+                        name=content_block["name"],
+                        arguments=json.dumps(content_block["input"]),
+                    )
+                    tool_name = content_block["name"]
+                    tool_call_id = content_block["id"]
+                    tool = ToolSchema(id=content_block["id"], function=function)
+                    tools.append(tool)
+        return cls(
+            role=role,
+            content=content,
+            tool_calls=tools or None,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            source="anthropic",
+        )
+
+    def to_google(self) -> ContentDict:
+        """Convert a Chibi Message to a Google AI ContentDict."""
+
+        # Google uses 'model' for the assistant's role
+        google_role = "model" if self.role == "assistant" else "user"
+
+        # Handle tool calls from the assistant
+        if self.role == "assistant" and self.tool_calls:
+            parts: list[PartDict] = []
+            # Add text content if present
+            if self.content:
+                parts.append({"text": self.content})
+            # Add function calls
+            for tool_call in self.tool_calls:
+                args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+                parts.append(
+                    PartDict(
+                        function_call=FunctionCallDict(name=tool_call.function.name, args=args, id=tool_call.id),
+                        thought_signature=tool_call.thought_signature,
+                    )
+                )
+
+            return ContentDict(role=google_role, parts=parts)
+
+        # tool_result_message
+        if self.role == "tool" and self.tool_call_id:
+            try:
+                response_content = json.loads(self.content)
+            except Exception:
+                response_content = self.content
+
+            return {
+                "role": "user",
+                "parts": [
+                    {
+                        "function_response": {
+                            "id": self.tool_call_id,
+                            "name": self.tool_name or self._get_tool_name(self.content),
+                            "response": response_content,
+                        }
+                    }
+                ],
+            }
+
+        # Handle simple text content for user or assistant
+        if self.content:
+            return {"role": google_role, "parts": [{"text": self.content}]}
+
+        # Return empty content if no other case matches
+        return {"role": google_role, "parts": []}
+
+    @classmethod
+    def from_google(cls, google_content: ContentDict | dict[str, Any]) -> "Message":
+        """Convert a Google AI ContentDict to a Chibi Message."""
+
+        # Map Google role back to Chibi role
+        chibi_role = "assistant" if google_content.get("role") == "model" else google_content.get("role", "user")
+        content = ""
+        tools: list[ToolSchema] = []
+        tool_call_id: str | None = None
+        tool_name: str | None = None
+
+        parts = google_content.get("parts") or []
+
+        for part in parts:
+            if isinstance(part, dict):
+                # Text content
+                if part.get("text"):
+                    content = str(part["text"])
+
+                # tool_call_message
+                elif part.get("function_call"):
+                    function_call = part["function_call"]
+                    if function_call and isinstance(function_call, dict):
+                        function = FunctionSchema(
+                            name=function_call.get("name", ""),
+                            arguments=json.dumps(function_call.get("args", {})),
+                            id=function_call.get("id"),
+                        )
+                        # Generate a unique ID for the tool call
+                        tool_id = function_call.get("id", f"call_{time.time_ns()}")
+                        tool = ToolSchema(
+                            id=tool_id, function=function, thought_signature=part.get("thought_signature")
+                        )
+                        tools.append(tool)
+
+                # tool_result_message
+                elif part.get("function_response"):
+                    chibi_role = "tool"
+                    function_response = part["function_response"]
+                    if function_response and isinstance(function_response, dict):
+                        tool_call_id = function_response.get("id")
+                        content = json.dumps(function_response.get("response", {}))
+                        tool_name = function_response.get("name", "")
+
+        return cls(
+            role=chibi_role,
+            content=content,
+            tool_calls=tools or None,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            source="google",
+        )
+
+    def to_mistral(self) -> MistralSystemMessage | MistralUserMessage | MistralAssistantMessage | MistralToolMessage:
+        """Convert to MistralAI SDK format."""
+        if self.role == "system":
+            return MistralSystemMessage(content=self.content, role="system")
+
+        elif self.role == "user":
+            return MistralUserMessage(content=self.content, role="user")
+
+        elif self.role == "assistant":
+            mistral_tool_calls: list[MistralToolCall] | None = None
+            if self.tool_calls:
+                mistral_tool_calls = [
+                    MistralToolCall(
+                        id=tool.id,
+                        function=MistralFunctionCall(
+                            name=tool.function.name,
+                            arguments=tool.function.arguments or "{}",
+                        ),
+                    )
+                    for tool in self.tool_calls
+                ]
+            return MistralAssistantMessage(
+                content=self.content,
+                tool_calls=mistral_tool_calls,
+                role="assistant",
+            )
+
+        elif self.role == "tool":
+            return MistralToolMessage(
+                content=self.content,
+                tool_call_id=self.tool_call_id or "",
+                name=None,
+                role="tool",
+            )
+
+        # Fallback to user message
+        return MistralUserMessage(content=self.content, role="user")
+
+    def to_responses_items(self) -> list[dict]:
+        """Convert Message to Responses API input items.
+
+        Returns a list because assistant messages with tool_calls emit
+        multiple items (message + function_call items).
+
+        Returns:
+            A list of dicts formatted for the OpenAI Responses API.
+        """
+        if self.role == "user":
+            return [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": self.content}],
+                }
+            ]
+
+        if self.role == "assistant":
+            items: list[dict] = []
+            # If there's text content, emit a message item first
+            if self.content:
+                items.append(
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": self.content}],
+                    }
+                )
+            # Emit one function_call item per tool call
+            if self.tool_calls:
+                for tool in self.tool_calls:
+                    items.append(
+                        {
+                            "type": "function_call",
+                            "call_id": tool.id,
+                            "name": tool.function.name,
+                            "arguments": tool.function.arguments or "{}",
+                        }
+                    )
+            return items
+
+        if self.role == "tool":
+            return [
+                {
+                    "type": "function_call_output",
+                    "call_id": self.tool_call_id or "",
+                    "output": self.content,
+                }
+            ]
+
+        # Fallback for unsupported roles
+        return []
+
+    @classmethod
+    def from_mistral(
+        cls,
+        mistral_message: MistralUserMessage | MistralAssistantMessage | MistralToolMessage,
+    ) -> "Message":
+        """Convert from MistralAI SDK format to Chibi Message."""
+        role: Literal["user", "assistant", "tool"] = mistral_message.role  # type: ignore
+
+        # Extract content - handle different content types
+        raw_content = mistral_message.content
+        if isinstance(raw_content, str):
+            content = raw_content
+        elif raw_content is None:
+            content = ""
+        else:
+            # Content is a list/complex type - convert to string
+            content = str(raw_content)
+
+        tool_calls: list[ToolSchema] | None = None
+        tool_call_id: str | None = None
+
+        if isinstance(mistral_message, MistralAssistantMessage) and mistral_message.tool_calls:
+            tool_calls = [
+                ToolSchema(
+                    id=tool.id or "",
+                    function=FunctionSchema(
+                        name=tool.function.name,
+                        arguments=tool.function.arguments,
+                    ),
+                )
+                for tool in mistral_message.tool_calls
+            ]
+
+        if isinstance(mistral_message, MistralToolMessage):
+            # Handle Unset/None/str types
+            raw_tool_call_id = mistral_message.tool_call_id
+            if raw_tool_call_id and not isinstance(raw_tool_call_id, type(None)):
+                tool_call_id = str(raw_tool_call_id)
+
+        return cls(
+            role=role,
+            content=content,
+            tool_calls=tool_calls,
+            tool_call_id=tool_call_id,
+            source="mistral",
+        )
+
+    @classmethod
+    def _get_tool_name(cls, tool_result: str | dict[str, Any]) -> str | None:
+        if isinstance(tool_result, dict):
+            return tool_result.get("tool_name")
+        try:
+            tool_result_dict = json.loads(tool_result)
+            return tool_result_dict.get("tool_name")
+        except Exception as e:
+            logger.warning(f"Could not parse tool name from tool result: {e}")
+            return None
+
+
+class ImageMeta(BaseModel):
+    id: int = Field(default_factory=time.time_ns)
+    expire_at: float
+
+
+class TelegramFileMeta(BaseModel):
+    file_id: str
+    file_name: str
+    file_size: int
+    mime_type: str
+    file_unique_id: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    short_description: str | None = None
+    full_description: str | None = None
+    text: str | None = None
+
+
+class SelectedModel(BaseModel):
+    name: str
+    provider_name: str
+
+
+class User(BaseModel):
+    id: int
+    alibaba_token: str | None = gpt_settings.alibaba_key
+    anthropic_token: str | None = gpt_settings.anthropic_key
+    deepseek_token: str | None = gpt_settings.deepseek_key
+    gemini_token: str | None = gpt_settings.gemini_key
+    mistralai_token: str | None = gpt_settings.mistralai_key
+    openai_token: str | None = gpt_settings.openai_key
+    tokens: dict[str, str] = {}
+    messages: list[Message] = Field(default_factory=list)
+    images: list[ImageMeta] = Field(default_factory=list)
+    gpt_model: str | None = None  # TODO: Deprecated
+    selected_gpt_model_name: str | None = None  # TODO: Deprecated
+    selected_gpt_provider_name: str | None = None  # TODO: Deprecated
+    selected_image_model_name: str | None = None  # TODO: Deprecated
+    selected_image_provider_name: str | None = None  # TODO: Deprecated
+    info: str = "No info provided"
+    working_dir: str = application_settings.working_dir
+    llm_skills: dict[str, str] = {}
+    telegram_files: dict[str, TelegramFileMeta] = {}
+    thread_messages_map: dict[int, list[Message]] = Field(default_factory=dict)
+    thread_selected_llm: dict[int, SelectedModel] = Field(default_factory=dict)
+    thread_selected_image_model: dict[int, SelectedModel] = Field(default_factory=dict)
+    thread_names: dict[int, str] = Field(default_factory=dict)
+    thread_working_dirs: dict[int, str] = Field(default_factory=dict)
+
+    def __init__(self, **kwargs: Any) -> None:
+        if kwargs.get("gpt_model", None) and not kwargs.get("selected_gpt_model_name", None):
+            kwargs["selected_gpt_model_name"] = kwargs["gpt_model"]
+        super().__init__(**kwargs)
+
+    @property
+    def providers(self) -> "RegisteredProviders":
+        from chibi.services.providers import RegisteredProviders
+
+        return RegisteredProviders(user_api_keys={name.lower(): key for name, key in self.tokens.items()})
+
+    def get_active_image_provider(self, thread_id: int) -> "Provider":
+        provider_name: str | None = None
+
+        if selected_image_model := self.thread_selected_image_model.get(thread_id):
+            provider_name = selected_image_model.provider_name
+
+        elif self.selected_image_provider_name:
+            provider_name = self.selected_image_provider_name
+            self.thread_selected_image_model[thread_id] = SelectedModel(
+                name=self.selected_image_model_name, provider_name=provider_name
+            )
+
+        elif self.providers.first_image_generation_ready:
+            provider_name = self.providers.first_image_generation_ready.name
+
+        else:
+            raise NoProviderSelectedError
+
+        if not provider_name:
+            raise NoProviderSelectedError
+
+        if provider := self.providers.get(provider_name=provider_name):
+            return provider
+
+        raise NoProviderSelectedError
+
+    def get_active_image_model(self, thread_id: int) -> str | None:
+        if selected_model := self.thread_selected_image_model.get(thread_id):
+            return selected_model.name
+        return None
+
+    @property
+    def stt_provider(self) -> "Provider":
+        if gpt_settings.stt_provider:
+            if provider := self.providers.get(gpt_settings.stt_provider):
+                return provider
+        if provider := self.providers.first_stt_ready:
+            return provider
+        raise ValueError("No stt-provider found.")
+
+    @property
+    def tts_provider(self) -> "Provider":
+        if gpt_settings.tts_provider:
+            if provider := self.providers.get(gpt_settings.tts_provider):
+                return provider
+        if provider := self.providers.first_tts_ready:
+            return provider
+        raise ValueError("No tts-provider found.")
+
+    @property
+    def vision_provider(self) -> "Provider":
+        if gpt_settings.vision_provider:
+            if provider := self.providers.get(gpt_settings.vision_provider):
+                return provider
+        if provider := self.providers.first_vision_ready:
+            return provider
+        raise ValueError("No vision-ready provider found.")
+
+    @property
+    def ocr_provider(self) -> "Provider":
+        if gpt_settings.ocr_provider:
+            if provider := self.providers.get(gpt_settings.ocr_provider):
+                return provider
+        if provider := self.providers.first_ocr_ready:
+            return provider
+        raise ValueError("No OCR-ready provider found.")
+
+    @property
+    def moderation_provider(self) -> "Provider":
+        if gpt_settings.moderation_provider:
+            if provider := self.providers.get(gpt_settings.moderation_provider):
+                return provider
+        if provider := self.providers.first_moderation_ready:
+            return provider
+        raise ValueError("No moderation-provider found.")
+
+    def get_thread_selected_provider_name(self, thread_id: int) -> str | None:
+        if selected_llm := self.thread_selected_llm.get(thread_id):
+            return selected_llm.provider_name
+        return None
+
+    @property
+    def first_chat_ready_provider_name(self) -> str | None:
+        if provider := self.providers.first_chat_ready:
+            return provider.name
+        return None
+
+    def get_active_llm_provider(self, thread_id: int) -> "Provider":
+        provider: Optional["Provider"] = None
+
+        thread_selected_provider_name = self.get_thread_selected_provider_name(thread_id=thread_id)
+        for provider_name in [
+            thread_selected_provider_name,
+            self.selected_gpt_provider_name,
+            gpt_settings.default_provider,
+            self.first_chat_ready_provider_name,
+        ]:
+            if not provider_name:
+                continue
+
+            if provider := self.providers.get(provider_name=provider_name):
+                break
+
+        if not thread_selected_provider_name and self.selected_gpt_provider_name and self.selected_gpt_model_name:
+            self.thread_selected_llm[thread_id] = SelectedModel(
+                name=self.selected_gpt_model_name, provider_name=self.selected_gpt_provider_name
+            )
+        if not provider:
+            raise NoProviderSelectedError
+
+        return provider
+
+    def get_active_llm_model(self, thread_id: int) -> str | None:
+        if selected_model := self.thread_selected_llm.get(thread_id):
+            return selected_model.name
+        return None
+
+    def get_effective_working_dir(self, thread_id: int | None) -> str:
+        """Resolve the working directory for a thread.
+
+        Follows the same fallback chain as LLM selection: a thread-scoped
+        override wins, then the legacy user-level directory, then the
+        application-wide default. The stored value is returned as-is —
+        normalization (e.g. expanduser) happens only on write.
+
+        Args:
+            thread_id: The ID of the thread, or None to skip thread-level lookup.
+
+        Returns:
+            The effective working directory value.
+        """
+        if thread_id is not None and (thread_wd := self.thread_working_dirs.get(thread_id)):
+            return thread_wd
+        if self.working_dir:
+            return self.working_dir
+        return application_settings.working_dir
+
+    @cached(ttl=60 * 60)
+    async def get_available_models(self, image_generation: bool = False) -> list[ModelChangeSchema]:
+        providers = self.providers.available_instances
+        tasks = [provider.get_available_models(image_generation=image_generation) for provider in providers]
+        results = await asyncio.gather(*tasks)
+
+        return list(itertools.chain.from_iterable(results))
+
+    @property
+    def has_reached_image_limits(self) -> bool:
+        if not gpt_settings.image_generations_monthly_limit:
+            return False
+        if str(self.id) in gpt_settings.image_generations_whitelist:
+            return False
+        return len(self.images) >= gpt_settings.image_generations_monthly_limit
+
+    def approximate_context_size(self, thread_id: int) -> int:
+        messages_to_count = []
+        if thread_id == 0:
+            messages_to_count.extend(self.messages)
+
+        thread_messages = self.thread_messages_map.get(thread_id)
+        if thread_messages:
+            messages_to_count.extend(thread_messages)
+
+        if not messages_to_count:
+            return 0
+
+        return sum(msg.estimate_tokens for msg in messages_to_count)

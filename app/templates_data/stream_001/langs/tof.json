@@ -1,0 +1,99 @@
+{
+    "language_name": "🏴‍☠️ Тофийсковый",
+    "language_icon": "🏴‍☠",
+    "language_select_error": "❌ Обшипка выборга языкба!\n\n{error_text}",
+    "language_select": "Пожамлуста, выберитеб языкб интерфейсба",
+    "language_changed": "🏴‍☠️ Вы вымбрали тофийский язык\n\nВы можитеб изменитьб язык в любои время прописаф командуб /lang",
+    "start_message": "Преветб, 👋 тчумба! 👋\n\n📄 GPT-Telegramus вербпсии {version}\n\n💜 Разработбка: Ферн (F3RNI)\n💻 Соавторы:\n🤍 Keepalove (Azarell) (Sprav04ka)\n🤍 Hanssen\n🤍 https://github.com/F33RNI/GPT-Telegramus#-contributors\n\n😺 Странитса GitHub: https://github.com/F33RNI/GPT-Telegramus\n\n🎵 Подержите проектб, купив моюб музыкбу: https://f3rni.bandcamp.com",
+    "help_message": "📄 /start - Приветствене сообщенне и версия ботба\n❓ /help - Показатб этоб сообщенне\n↕ /module - Изменитб модуль для тчата\n🧹 /clear - Очиститб истоию чатба\n🌎 /lang - Изменитб языкб\n🆔 /chatid - Показатб ваш chat_id\n\nТеперб, чтобы начать, начырыкайте мне любое сообщенне 💬",
+    "help_message_admin": "Команды админаб:\n\n💬 /queue - Показатб очередб запрософ\n🔃 /restart [мобдулб, обционально] - Перезапускб мобдуля (или фсех), перезагрузбка конфигурациеф, языкоф и командоф\n👤 /users - Показатб списох всех польбзователей\n🔨 /ban <id> [reason] - Заблокировать полбзоватебля по его id с указанием причиныб (оптсыоинально)\n🔓 /unban <id> - Разблокироватб полбзоватебля по id\n📢 /broadcast <message> - Начырыкатб текбстовое сообщенне всем, кроме заблокированне пользователе",
+    "empty_request_module_changed": "✅ Модулб был изменен на {module_name}\nТеперб начырыкайте мне ваш запросб в виде сообщення",
+    "media_group_response": "Нарисованне кортинбки по зомпросуб \"{request_text}\"",
+    "permissions_deny": "❌ Вам низзя, у вас нет правб на енту команбду!",
+    "queue_overflow": "Очередб заполнена. Попробувайте пожже ⏳",
+    "queue_empty": "🗑 Очередб пуста",
+    "queue_accepted": "✅ Запрос к {module_name} модулю добавленб в очередб.\nПозиция в очереди: {queue_size}/{queue_max} ⏳",
+    "response_error": "❌ Ошибка: {error_text}\n\nОбчистити имсториюб и сделойте есчо один зопрос или повторибте попытку пожже",
+    "empty_message": "⚠️ Пустовое сообщенне! Смотрибте логи для подробновой информаци",
+    "regenerate_error_not_last": "❌ Ошибка! Можбно сгенерироватб заново толбко последневый запросб!",
+    "regenerate_error_empty": "❌ Ошибка! Пустовый запрос!",
+    "continue_error_not_last": "❌ Ошибка! Можноб продолжить только последневый запрос!",
+    "stop_error_not_last": "❌ Ошибка! Можноб прерватб толбко последневый запрос!",
+    "stop_error": "❌ Ошибка! Невозможноб прекратитб дегенерацию!",
+    "response_link_format": "\n📄 {source_name}: {link}",
+    "suggestion_format": "💡 {suggestion}",
+    "suggestion_error": "❌ Возможбно исполбзовац пребложенныйб зампросб токо из последнево сообщення!",
+    "users_read_error": "❌ Ашипка чтения или парсенга списбка полбзователеф!",
+    "users_admin": "Забананенб? Админ? Языкб Мобдулб ID Имбя - Запрософ\n\n{users_data}",
+    "users_total_stats": "Побзовабтели: {users_num}, некорошие: {banned_num}, одменовое: {admins_num}",
+    "restarting": "🙏 Выполняется перезампуск...\nПожамлеста, подождите чучутб",
+    "restarting_done": "{reload_logs}\n✅ Перезампуск завершен",
+    "chat_cleared": "✅ История чатба была очищена для {module_name}",
+    "clear_error": "❌ Ошибка очистбки истории чата!\n\n{error_text}",
+    "clear_select_module": "Выберимте модуль, историю чатба которогоб хотитеб очиститб\nИли проигнорируйте енто сообщенне",
+    "module_select_module": "Текущий модуль: {current_module}\nВыберите модуль для чата\nИли проигнорируйте это сообщенне",
+    "user_cooldown_error": "❌ Пожамлусто пождите есчо {time_formatted}, прежде чем черыкатб сообщчэние к {module_name}",
+    "hours": "ч",
+    "minutes": "м",
+    "seconds": "с",
+    "ban_message_admin": "✅ Заблокирован юзер: {banned_user}\n\nПримчина: {ban_reason}",
+    "ban_no_user_id": "❌ Ошибка! Пожалеста, укажите user_id",
+    "ban_message_user": "❌ Вы не находитясб в белом списке или вы были забананены!\n\nПричина: {ban_reason}",
+    "ban_reason_default": "Надоб указатб причину",
+    "unban_message_admin": "✅ Разблокирован пользователь: {unbanned_user}",
+    "broadcast_no_message": "❌ Нет сообщення для вещання!",
+    "broadcast": "📢 {message}",
+    "broadcast_initiated": "⏳ Bесчание в процесбе... Пожамлусто пождите и не черыкайти нововых собщениев!",
+    "broadcast_done": "✅ Весчание покончено! Собщчення начерыканы юзверям:\n{broadcast_ok_users}",
+    "style_changed": "✅ Стилб общення изменен на {changed_style}",
+    "style_change_error": "❌ Ошибка смены стиля общення!\n\n{error_text}",
+    "style_select": "Текущий стиль общення: {current_style}\nВымберитеб новый стилб общення девианта,\nИли проигнорируйте это сообщенне",
+    "style_precise": "📏 Точновый",
+    "style_balanced": "⚖️ Сбалансированновый",
+    "style_creative": "🎨 Творческовый",
+    "model_changed": "✅ Модельб из момдуля {module_name} изминиа на {changed_model}",
+    "model_select": "Вамша модельб момдуля {module_name}: {current_model}\nВыберитеп нововую модельб момдуля {module_name},\nили проигнорировайти енто сообщенне",
+    "model_change_error": "❌ Ошипка при изминенни момдели!\n\n{error_text}",
+    "model_no_models": "❌ Вы ни можоете изменитьб момдель текумщевого модуля!",
+    "button_model_change": "⚙️ Изменитб момделб",
+    "button_stop_generating": "🛑 Прекратитб дегенерабцию",
+    "button_continue": "⏩ Продолжитб",
+    "button_regenerate": "🔄 Дегенерироватб",
+    "button_clear": "🧹 Очиститб ибстомрию",
+    "button_module": "↕️ Сменить модулб",
+    "button_style_change": "⚙️ Сменитб стилб",
+    "modules": {
+        "lmao_chatgpt": {
+            "icon": "💬",
+            "name": "ЖБТ-ЛМАО"
+        },
+        "lmao_ms_copilot": {
+            "icon": "🟦",
+            "name": "Девиантнутый (ЛМАО)"
+        },
+        "chatgpt": {
+            "icon": "💬",
+            "name": "ЖБТ"
+        },
+        "dalle": {
+            "icon": "🖼",
+            "name": "Каляка малака"
+        },
+        "ms_copilot": {
+            "icon": "🔵",
+            "name": "Девиантнутый"
+        },
+        "ms_copilot_designer": {
+            "icon": "🎨",
+            "name": "Маляка каляка"
+        },
+        "gemini": {
+            "icon": "♊",
+            "name": "Близнетсы"
+        },
+        "groq": {
+            "icon": "🔴",
+            "name": "Грокб"
+        }
+    }
+}

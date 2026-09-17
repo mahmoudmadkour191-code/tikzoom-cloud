@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ecommerce Telegram Bot</title>
+    <link rel="icon" type="image/x-icon" href="https://img.icons8.com/color/512/hearts.png">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+          integrity="sha384-QWTKZJ5bZqNcWI8zBggApN3V1xNf3wNJp4wy3Z3oFALg3x1tZ9ybN9M9iL3eG5eD" crossorigin="anonymous">
+    <style>
+        body {
+            background-color: #1a1a1a;
+            font-family: 'Roboto', sans-serif;
+            color: #e0e0e0;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            text-align: center;
+        }
+
+        h1 {
+            font-weight: bold;
+            color: #ff6b6b;
+            text-shadow: 1px 1px 5px rgba(0, 0, 0, 0.3);
+            letter-spacing: 2px;
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        h2 {
+            font-weight: bold;
+            color: #ff6b6b;
+            text-shadow: 1px 1px 5px rgba(0, 0, 0, 0.3);
+            letter-spacing: 2px;
+            font-size: 1.25rem;
+            margin-top: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        p {
+            font-size: 0.95rem;
+            color: #e0e0e0;
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        a {
+            color: #ff6b6b;
+            text-decoration: none;
+            font-weight: bold;
+            transition: color 0.3s ease;
+        }
+
+        a:hover {
+            color: #e64a4a;
+        }
+
+        ul {
+            list-style-type: none;
+            padding-left: 0;
+            font-size: 1rem;
+        }
+
+        ul li {
+            margin-bottom: 1rem;
+            padding-left: 0;
+            position: relative;
+        }
+
+        code {
+            background-color: #444;
+            padding: 0.2rem 0.4rem;
+            border-radius: 0.25rem;
+            font-size: 1rem;
+            color: #ff6b6b;
+        }
+    </style>
+</head>
+<body>
+    <div>
+        <h1>Ecommerce Telegram Bot</h1>
+        <h2>Project Description</h2>
+        <ul>
+            <li>This is a simple Telegram bot page built with Django and Aiogram.</li>
+            <li>Using Django Admin, you can add and remove categories and products. PostgreSQL is used as the database.</li>
+            <li>Includes a user registration, login, and password recovery system.</li>
+            <li>In the Telegram bot, users can browse categories and view products.</li>
+            <li>The bot provides commands like <code>/help</code>, <code>/description</code>, <code>/catalog</code>, and <code>/admin</code>.</li>
+            <li>The <code>/admin</code> command opens the admin menu, which includes exclusive features such as "broadcast" and more.</li>
+            <li>The Django Admin panel is fully configured for easy management.</li>
+        </ul>
+        <p>
+            <a href="http://localhost:8000/admin/">
+                Click here to access Django Admin, or add <code>/admin/</code> to the end of the URL.
+            </a>
+        </p>
+    </div>
+</body>
+</html>

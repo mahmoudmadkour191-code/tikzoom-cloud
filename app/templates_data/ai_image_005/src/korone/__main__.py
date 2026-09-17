@@ -1,0 +1,185 @@
+import asyncio
+import logging
+from contextlib import AsyncExitStack
+from typing import Final
+
+import sentry_sdk
+import uvloop
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
+from sentry_sdk.integrations.aiohttp import AioHttpIntegration
+from sentry_sdk.integrations.logging import LoggingIntegration
+from sentry_sdk.integrations.redis import RedisIntegration
+from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
+from korone.args.middleware import ArgumentsMiddleware
+from korone.modules.error.utils.ignored import IGNORED_EXCEPTIONS
+
+from . import aredis, bot, dp
+from .config import CONFIG
+from .db.repositories.chat import ChatRepository
+from .db.utils import close_db, init_db, migrate_db_if_needed
+from .http import http_client
+from .logger import get_logger, setup_logging
+from .middlewares import UpdateLogContextMiddleware, localization_middleware
+from .middlewares.admin_cache import AdminCacheMiddleware
+from .middlewares.chat_context import ChatContextMiddleware
+from .middlewares.disabling import DisablingMiddleware
+from .middlewares.save_chats import SAVE_CHATS_REQUIRED_UPDATE_TYPES, SaveChatsMiddleware
+from .modules import LOADED_MODULES, load_modules
+from .modules.help.utils.commands import sync_bot_commands
+from .utils.cached import shutdown_cache
+from .utils.i18n import i18n
+
+logger = get_logger(__name__)
+
+CORE_MIDDLEWARE_UPDATE_TYPES: Final[frozenset[str]] = SAVE_CHATS_REQUIRED_UPDATE_TYPES
+DROP_PENDING_UPDATES: Final[bool] = True
+
+
+async def ensure_bot_in_db() -> None:
+    bot_user = await bot.get_me()
+    await ChatRepository.upsert_user(bot_user)
+    await logger.ainfo("Bot user ensured in DB", bot_id=bot_user.id, username=bot_user.username)
+
+
+def configure_dispatcher() -> None:
+    outer_middlewares = tuple(dp.update.outer_middleware)
+    for middleware in outer_middlewares:
+        dp.update.outer_middleware.unregister(middleware)
+
+    dp.update.outer_middleware(UpdateLogContextMiddleware())
+    for middleware in outer_middlewares:
+        dp.update.outer_middleware(middleware)
+
+    dp.update.middleware(localization_middleware)
+    dp.message.middleware(DisablingMiddleware())
+    dp.message.middleware(ArgumentsMiddleware())
+    dp.update.outer_middleware(SaveChatsMiddleware())
+    dp.update.middleware(AdminCacheMiddleware())
+    dp.update.middleware(ChatContextMiddleware())
+
+
+def get_webhook_url() -> str:
+    if CONFIG.webhook_domain is None:
+        msg = "webhook_domain must be configured to build the webhook URL"
+        raise RuntimeError(msg)
+
+    return f"{CONFIG.webhook_domain.rstrip('/')}{CONFIG.webhook_path}"
+
+
+def resolve_allowed_updates() -> list[str]:
+    return sorted({*dp.resolve_used_update_types(), *CORE_MIDDLEWARE_UPDATE_TYPES})
+
+
+async def prepare_runtime() -> list[str]:
+    await logger.ainfo("Starting up the bot...")
+
+    if CONFIG.sentry_url:
+        await logger.ainfo("Starting sentry.io integration...")
+
+        sentry_sdk.init(
+            str(CONFIG.sentry_url),
+            integrations=[
+                LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
+                RedisIntegration(),
+                AioHttpIntegration(),
+                SqlalchemyIntegration(),
+            ],
+            ignore_errors=IGNORED_EXCEPTIONS,
+            in_app_include=["korone"],
+        )
+
+    await http_client.start()
+    await init_db()
+    await migrate_db_if_needed()
+    await ensure_bot_in_db()
+    await load_modules(dp, CONFIG.modules_load, CONFIG.modules_not_load)
+    if "help" in LOADED_MODULES:
+        await sync_bot_commands(bot, i18n)
+    allowed_updates = resolve_allowed_updates()
+    await logger.ainfo("Allowed updates resolved", allowed_updates=allowed_updates)
+    return allowed_updates
+
+
+async def drop_pending_updates() -> None:
+    await bot.delete_webhook(drop_pending_updates=DROP_PENDING_UPDATES)
+    await logger.ainfo("Webhook deleted and pending updates dropped")
+
+
+async def shutdown(*, close_bot_session: bool = True) -> None:
+    await logger.ainfo("Shutting down the bot...")
+    async with AsyncExitStack() as cleanup:
+        cleanup.push_async_callback(aredis.aclose, close_connection_pool=True)
+        if close_bot_session:
+            cleanup.push_async_callback(bot.session.close)
+        cleanup.push_async_callback(http_client.close)
+        cleanup.push_async_callback(close_db)
+        cleanup.push_async_callback(shutdown_cache)
+        await drop_pending_updates()
+
+
+async def run_polling() -> None:
+    try:
+        await logger.awarning("No webhook domain configured, running in long polling mode")
+        await drop_pending_updates()
+        allowed_updates = await prepare_runtime()
+        await dp.start_polling(bot, allowed_updates=allowed_updates, close_bot_session=False)
+    finally:
+        await shutdown()
+
+
+def create_webhook_app() -> web.Application:
+    app = web.Application()
+
+    async def on_startup(_: web.Application) -> None:
+        await drop_pending_updates()
+        allowed_updates = await prepare_runtime()
+        webhook_url = get_webhook_url()
+        await bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=allowed_updates,
+            drop_pending_updates=DROP_PENDING_UPDATES,
+            max_connections=CONFIG.webhook_max_connections,
+            secret_token=(CONFIG.webhook_secret.get_secret_value() if CONFIG.webhook_secret is not None else None),
+        )
+        await logger.ainfo(
+            "Webhook set",
+            webhook_url=webhook_url,
+            allowed_updates=allowed_updates,
+            max_connections=CONFIG.webhook_max_connections,
+        )
+
+    async def on_shutdown(_: web.Application) -> None:
+        await shutdown(close_bot_session=False)
+
+    app.on_startup.append(on_startup)
+    setup_application(app, dp, bot=bot)
+    app.on_shutdown.append(on_shutdown)
+
+    webhook_handler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+        handle_in_background=True,
+        secret_token=CONFIG.webhook_secret.get_secret_value() if CONFIG.webhook_secret is not None else None,
+    )
+    webhook_handler.register(app, path=CONFIG.webhook_path)
+
+    return app
+
+
+def main() -> None:
+    configure_dispatcher()
+
+    if CONFIG.webhook_domain:
+        app = create_webhook_app()
+        web.run_app(app, host="0.0.0.0", port=CONFIG.web_server_port)
+        return
+
+    asyncio.run(run_polling())
+
+
+if __name__ == "__main__":
+    setup_logging(level=logging.DEBUG if CONFIG.debug_mode else logging.INFO)
+    uvloop.install()
+    main()

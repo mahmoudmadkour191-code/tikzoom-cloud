@@ -1,0 +1,24 @@
+# please change token and salt
+TOKEN:   str = "token_here"
+SALT:    str = "whatever"
+WORKERS: int = 32
+
+AT_ADMINS_RATELIMIT: int = 5*60
+# memorize some chat messages in case that some users
+# send messages before the bot restricts them
+STORE_CHAT_MESSAGES: int = 100
+# do garbage collection every 86400 seconds
+GARBAGE_COLLECTION_INTERVAL: int = 86400
+PICKLE_FILE: str = 'antispambot.pickle'
+
+# permit users with the following user_id to reload
+# the filter module by sending /start to the bot
+# example: [76527312, 21876387]
+PERMIT_RELOAD: list = [None,]
+
+# use userbot backend. DO NOT change if you don't know what it is.
+USER_BOT_BACKEND: bool = False
+API_ID:   int = 00000 # Your api id
+API_HASH: str = 'Your api hash'
+
+DEBUG: bool = False

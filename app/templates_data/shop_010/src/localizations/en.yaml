@@ -1,0 +1,542 @@
+user_unauthorized:
+  messages:
+    return_to_main_menu: <i>Returning to the main menu</i>
+    enter_promo_or_skip: |-
+      🕊 <b>Enter the referral promo code</b>
+      
+      This way you will receive an invitee's subscription type, as well as a free trial period!
+      
+      If there is no promo code, click on the «<b>Skip</b>» button in the menu under the message entry line for the bot.
+    ref_promo_accepted: |-
+      ✨ Wow! A promo code has been accepted from <b>client {0}</b>, giving <b>{1}</b> of free subscription!
+
+      Connected <b>{2}</b> with <b>cost {3:g}</b>₽ per month.
+    invalid_promo: There is no such promo code! Try to enter it again
+    need_renew_sub: ❗️ <b>To activate your subscription, you need to make the first payment</b>
+  keyboard_buttons:
+    join: 🔥 Connect!
+    project_info: About project
+    cancel: Cancel
+    skip_promo: Skip
+  telegram_file_ids: {}
+user_authorized:
+  messages:
+    rules: |-
+      <b>By using the service, you agree to the rules:</b>
+
+      <b>1. It is forbidden to share configurations with other people.</b>
+      One configuration can only be used for one of your devices. At the same time, you can request an unlimited number of additional configurations for your use within a reasonable framework.
+
+      <b>2. It is forbidden to download files via torrent clients using a VPN.</b>
+      However, the files themselves of the <code>*.torrent</code> extension can be downloaded.
+      <i>Example: You want to download the movie, but the website hosting the files is not available from Russia. You turn on the VPN, go to the site and download the file film-example.torrent. Next, you turn off the VPN and start downloading the movie itself in your torrent client.</i>
+
+      <b>3. It is recommended not to use a VPN when it is not necessary.</b>
+      Thanks to this, you will not experience problems with your applications.
+
+      ❌ <b>Violation of rules 1-2 may result in immediate blocking of the user.</b>
+    my_subscription: |-
+      🌟 <b>Subscription information</b>
+
+      <b>Status</b>: {status}{expiry}
+      <b>Cost</b>: {price:g}₽ per month
+      <b>Maximum devices</b>: {max_devices}
+      <b>Subscription link</b>: {url}
+
+      <b>Subscription type</b>: {title}
+      <b>Description</b>: {description}{locations_status_page}
+    my_subscription_status_blank: inactive 😔
+    my_subscription_status_free: active forever 🔥
+    my_subscription_status_active: active 🔥
+    my_subscription_status_inactive: deactivated 💔
+    my_subscription_expiry_line_active: "\n<b>Expires</b>: {0}"
+    my_subscription_expiry_line_inactive: "\n<b>Expired</b>: {0}"
+    my_subscription_url_pending: being set up
+    my_subscription_url_blank: available after subscription renewal
+    my_subscription_locations_status_page: "\n<b>Status page</b>: https://ksivpn.com/status"
+    how_to_connect_subscription: To activate a subscription, just click on the link and follow the instructions provided there!
+    how_to_renew_subscription: To pay for the subscription, use the «<b>{0}</b>» button in the menu below the bot message input line
+    location_types_info: |-
+      🔥 <b>Location and connection types</b>
+
+      1. <b>Fast</b> — the fastest VPN connection, but may be unstable under heavy blocks.
+      2. <b>Breach</b> — a «bulletproof» VPN connection that always works except under active whitelists.
+      3. <b>Breach for iOS</b> — a «bulletproof» VPN connection for iOS — if the regular «Breach» disconnects on its own.
+      4. <b>Pure</b> — a VPN location with access to services that are normally blocked when using a VPN. For example, signing up for Gemini, accessing Reddit without an account, and so on.
+    return_to_main_menu: <i>Returning to the main menu</i>
+    go_sub_renewal_menu: <i>Going to the subscription renewal menu</i>
+    choose_payment_provider: <i>Choose a payment method</i>
+    sub_renewal_free: <pre><code class="language-matrix">You are the One, Neo! There is no need to pay for a subscription 🐇</code></pre>
+    payment_history_message: |-
+      🌟 <b>{0}</b> was extended for {1} days for {2:g}₽.
+
+      <b>Payment date</b>: {3}
+      <b>Payment identifier</b>: #{4}
+    cant_find_payments: Alas! I could not find information about successful payments
+    restore_payments: "To restore long-standing payments, use the \n/restore_payments command"
+    cant_find_payments_restore: |-
+      Unfortunately, I could not find the paid payments, perhaps the payment has not been completed yet, or information about it is still on the way!
+
+      If you are sure that the payment was completed successfully, please contact the help section /help
+    cancel_payment: <i>Payment canceled</i>
+    payment_provider_error: |-
+      🤖 <b>Could not create the payment</b>
+
+      The payment provider returned an error. Please try again in a few minutes or pick a different payment method.
+
+      If the error persists, please contact the help section /help
+    check_payment_hour: Checking all created payments in the last hour!
+    payment_found: Payment for an order with a unique identifier <b>#{0}</b> found!
+    go_personal_account: <i>Going to personal account</i>
+    client_info_surname_str: |-
+      <b>Last name</b>: {0}
+    client_info_username_str: |-
+      <b>Nickname</b>: {0}
+    client_info: |-
+      👾 That's what I know:
+
+      {username_str}<b>Name</b>: {0}
+      {surname_str}<b>Telegram ID</b>: {1}
+      <b>Registration date</b>: {2}
+    ref_program_info: |-
+      <b>Invite your friends to join the project and get a subscription for free!</b>
+
+      When registering, ask for your referral promo code: a friend will immediately receive a month of use for free, as well as your subscription level. When he makes the payment for the first time, you will receive a month of subscription for free!
+    go_promo_menu: <i>Going to the promo codes menu</i>
+    enter_promo: <b>🎟 Send me the promo code by message!</b>
+    go_settings: <i>Going to settings</i>
+    return_to_personal_account: <i>Returning to personal account</i>
+    return_to_settings: <i>Returning to the settings</i>
+    go_settings_chatgpt: <i>Going to the ChatGPT mode settings</i>
+    settings_chatgpt_info: 💥 When this mode is enabled, I will consciously respond to any of your messages using the full power of the ChatGPT neural network!
+    chatgpt_on: <b>ChatGPT mode is enabled for the bot</b>
+    chatgpt_off: <b>ChatGPT mode is disabled for the bot</b>
+    go_settings_notifications: <i>Going to the notification settings</i>
+    settings_notifications_info: In this menu, you can configure receiving notifications about the imminent expiration of your subscription!
+    1d_on: <b>Sending a notification 1 day before the subscription expiration date is enabled</b>
+    1d_off: <b>Sending a notification 1 day before the subscription expiration date is disabled</b>
+    3d_on: <b>Sending a notification 3 days before the subscription expiration date is enabled</b>
+    3d_off: <b>Sending a notification 3 days before the subscription expiration date is disabled</b>
+    7d_on: <b>Sending a notification 7 days before the subscription expiration date is enabled</b>
+    7d_off: <b>Sending a notification 7 days before the subscription expiration date is disabled</b>
+    invited_by: 🚀 You were invited <b>by client {0}{1}</b>
+    invited_by_nobody: Wow! You found out about the existence of this project yourself and registered without an invitation from another client!
+    who_was_invited_str: |-
+      {0}. User <b>{1}{2}</b>
+    who_was_invited: |-
+      🕊 The users you invited who joined the project:
+
+      {invited_str}
+    nobody_was_invited: You haven't invited any users yet. Tell your friends about our project and get free months of subscription!
+    ref_program_invites_texts:
+    - |-
+      Are you guys kidding me? I understand that you just want to go on Instagram and enjoy life. But why do you use such terrible VPN services?I am recruiting a team of guys, we will make a cache on foreign services: https://t.me/ksiVPN_bot.
+
+      При after registration, enter my referral promo code <code>{0}</code> and you will get a month of use for free!
+    - "In short, Marked, I saved you and I will not play nobility: you will register in the service https://t.me/ksiVPN_bot – and we're even.At the same time, let's see how quickly your head clears up after using free VPNs. And I will try to find out about referral promo codes.Who knows why you gave up this month of free subscription, but I'm not meddling in other people's business, if you want to use my referral promo code <code>{0}</code>, then there's something..."
+    - |-
+      Hello! I use a VPN, which is really convenient and secure. If you want to try it, enter my referral code <code>{0}</code> at registration https://t.me/ksiVPN_bot . Both will benefit! 🚀
+
+      <tg-spoiler><i>This text is generated by the ChatGPT neural network, which can be easily accessed through the above VPN service 😉</i></tg-spoiler>
+    - |-
+      Greetings! I am opening the doors to the world of unlimited Internet with a cool VPN service. Register by following the link https://t.me/ksiVPN_bot and enter my referral code <code>{0}</code>. Both will receive bonuses for safe online surfing! 🌐🔒
+
+      <tg-spoiler><i>This text is generated by the ChatGPT neural network, which can be easily accessed through the above VPN service 😉</i></tg-spoiler>
+    - |-
+      Hello there! I want to share my discovery – an excellent VPN service. Register using the link https://t.me/ksiVPN_bot and specify my referral promo code <code>{0}</code>. I promise you won't regret it! 🌍🔐
+
+      <tg-spoiler><i>This text is generated by the ChatGPT neural network, which can be easily accessed through the above VPN service 😉</i></tg-spoiler>
+    your_ref_code: "🕊️ Your referral promo code: <b><code>{0}</code></b>"
+    ref_promo_accepted: |-
+      ✨ Wow! A referral promo code from <b>user {0}</b> has been accepted, giving <b>{1}</b> of free subscription!
+
+      Connected <b>{2}</b> with a cost of <b>{3:g}</b>₽ per month.
+    error_promo_entered_ref_code: Unfortunately, a referral promo code can only be entered within 7 days of registration and only once 😪
+    error_promo_own_ref_code: You cannot use your own referral promo code 😅
+    error_promo_limit_activations: Unfortunately, the number of possible activations of this promo code exhausted 🤧
+    error_promo_expired: Unfortunately, the promo code has expired 🤧
+    error_promo_already_entered: You have already entered this promo code earlier!
+    error_promo_inaccessible: Unfortunately, you cannot use this special promo code 😪
+    error_promo_not_exist: There is no such promo code! Try to enter it again
+    global_promo_accepted: ✨ Hooray! Promo code for <b>{0}</b> free subscription accepted!
+    new_sub_str: «<b>{0}</b>» — Your new subscription type with a cost of {1:g}₽ per month
+    loсal_promo_accepted: |-
+      ✨ Hooray! Special promo code for <b>{0}</b> free subscription accepted!
+      
+      {new_sub_str}
+    ref_promo_str: |-
+      <b>🕊 Used referral promo code</b>:
+      <code>{0}</code> from client {1}.
+    global_promos_str: |-
+      <b>📣 Used public promo codes</b>:
+      {global_promo_row_str}
+    global_promo_row_str: |-
+      {0}. <code>{1}</code> for {2} of subscription.
+      LED {3}.
+    local_promos_str: |-
+      <b>💎 Used special promo codes</b>:
+      {local_promo_row_str}
+    local_promo_row_str: |-
+      {0}. <code>{1}</code> for {2} of subscription.
+      LED {3}.
+    no_promo_entered: You have not entered any promo codes yet. Follow the news! 🚀
+    sub_expired: |-
+      👾 <b>Oh, oh! The subscription has expired, the VPN will have to be disabled</b>
+
+      We hope that this is temporary, and you will definitely come back to us! ♥️
+    sub_expires_1d: |-
+      👾 <b>Notifying: the subscription expires in 1 day</b>
+
+      Don't forget to renew your subscription!
+
+      <tg-spoiler><i>You can disable the reminder by going to «Personal Account» — «Settings» — «Notifications».</i></tg-spoiler>
+    sub_expires_3d: |-
+      👾 <b>Notifying: the subscription expires in 3 days</b>
+
+      Don't forget to renew your subscription!
+
+      <tg-spoiler><i>You can disable the reminder by going to «Personal Account» — «Settings» — «Notifications».</i></tg-spoiler>
+    sub_expires_7d: |-
+      👾 <b>Notifying: the subscription expires in 7 days</b>
+
+      Don't forget to renew your subscription!
+
+      <tg-spoiler><i>You can disable the reminder by going to «Personal Account» — «Settings» — «Notifications».</i></tg-spoiler>
+  keyboard_buttons:
+    sub_renewal: ❤️‍🔥 Renew subscription!
+    my_subscription: My subscription
+    how_to_connect: How to connect?
+    how_to_renew: How to renew subscription?
+    location_types: What are Fast, Breach and Pure?
+    personal_account: Personal account
+    rules: Rules
+    payment_30d: 30 days
+    payment_90d: 90 days (-10%)
+    payment_365d: 365 days (-15%)
+    payment_history: Payment history
+    return_main_menu: Return to main menu
+    payment_check: Check payment
+    payment_cancel: Cancel payment
+    pay_yoomoney: 💸 YooMoney transfer
+    pay_yookassa: 💳 Card and SBP
+    pay: Pay
+    ref_program: 🕊 Referral program
+    about_client: About client
+    promo: 🎟 Promo Codes
+    settings: Settings
+    return_to_account_menu_1: Return
+    return_to_account_menu_2: Cancel input
+    used_promos: Used promo codes
+    ref_program_participation: Participation in referral program
+    generate_invite: Generate an invitation
+    show_ref_code: Referral promo code
+    settings_chatgpt_mode: ChatGPT mode
+    settings_notifications: Notifications
+    1d_off: Turn off in 1 day
+    1d_on: Turn on in 1 day
+    3d_off: Turn off in 3 days
+    3d_on: Turn on in 3 days
+    7d_off: Turn off in 7 days
+    7d_on: Turn on in 7 days
+    return_to_settings: Back
+    chatgpt_off: Disable
+    chatgpt_on: Enable
+  telegram_file_ids:
+    rules: AgACAgIAAxkBAAJUyGWoBkWcqxDLR5T7rxSAgxD9k8LJAALd1DEbxdRBSUXUhjzY2aggAQADAgADcwADNAQ
+    ref_program_info: AgACAgIAAxkBAAJUv2WoBaYCCxzAlLwaiIEttY5NnqytAALa1DEbxdRBSdtn1kU78RbOAQADAgADcwADNAQ
+    welcome: AgACAgIAAxkBAAEDPARp537L0PjCIu8qP93cvXO1UapqcQACwhhrG7LHQEs5Dt3-t8IJJgEAAwIAA3MAAzsE
+admin:
+  messages:
+    reset_fsm_keyboard: <i>Reset the machine state and keyboard</i>
+    fsm_start: <i>The machine state is activated</i>
+    admin_kb_info: |-
+      To open this menu, use /admin. Available commands:
+
+      /fileid
+      /clients
+    go_send_message_menu: <i>Going to the menu for sending messages to clients</i>
+    message_everyone_info: |-
+      Enter the necessary information with the following message, and attach files if necessary!
+
+      Enter /perfect to confirm the selection of the last sent message!
+    message_everyone_with_reset_info: |-
+      <b>One-off announcement mode.</b>
+      The message will be sent to <b>all</b> users. Additionally:
+      • FSM state will be cleared for every recipient (including users stuck mid-registration);
+      • authorized users will get the main menu keyboard re-applied;
+      • unauthorized users will get the welcome keyboard;
+      • you (admin) will be skipped.
+
+      Enter the necessary information with the following message, and attach files if necessary!
+
+      Enter /perfect to confirm the selection of the last sent message!
+    clients_row_str: |-
+      {0}. {1} {2} {3} <code>{4}</code>
+    message_everyone_was_sent: <b>Okay, the message has been sent!</b>
+    message_everyone_everybody_received: <b>Hooray, all clients of the service will receive the message!</b>
+    message_everyone_somebody_didnt_recieve: |-
+      <b>Users who did not receive the message</b>:
+      {ignored_clients_str}
+    how_message_looks: "This is how your message will look like:"
+    message_selected_info: Enter a comma separated <i><b>username</b></i> or <i><b>telegram_id</b></i> of the clients for whom the newsletter is intended.
+    message_selected_somebody_received: |-
+      <b>The message will be sent to the clients</b>:
+
+      {selected_clients_str}
+    message_selected_nobody_received: You made a mistake when entering clients! The message will not reach anyone!
+    message_selected_enter_message_info: |-
+      Now enter the necessary information with the following message, and also attach files if necessary!
+
+      Enter /perfect to confirm the selection of the last sent message!
+    clients_info: 🚀 Displaying information about all clients!
+    clients_info_sub_active: "✅  "
+    clients_info_sub_inactive: "❌  "
+    show_logs_info: |-
+      Showing last {0} log lines.
+    
+      Use <code>/logs [number]</code> for a different count.
+    show_earnings: So-so! Earnings for the current month are <b>{0:g}</b>₽!
+    file_id_photo: |-
+      <b>file_id photo:</b>
+
+      <code>{0}</code>
+    file_id_document: |-
+      <b>document file_id:</b>
+      
+      <code>{0}</code>
+    error_no_file_for_file_id: The file was not attached along with the /fileid command call!
+    sub_expired: |-
+      👾 <b>The user's subscription has expired.</b>
+
+      <b>Client ID</b>: <code>{0}</code>
+      <b>Telegram INFO</b>:{1} <code>{2}{3}</code> <code>{4}</code>
+      <b>Subscription URL</b>: {5}
+    sub_expires_1d: |-
+      👾 <b>The user's subscription expires in 1 day.</b>
+
+      <b>Client ID</b>: <code>{0}</code>
+      <b>Telegram INFO</b>:{1} <code>{2}{3}</code> <code>{4}</code>
+    sub_expires_3d: |-
+      👾 <b>The user's subscription expires in 3 days.</b>
+
+      <b>Client ID</b>: <code>{0}</code>
+      <b>Telegram INFO</b>:{1} <code>{2}{3}</code> <code>{4}</code>
+    sub_expires_7d: |-
+      👾 <b>The user's subscription expires in 7 days.</b>
+
+      <b>Client ID</b>: <code>{0}</code>
+      <b>Telegram INFO</b>:{1} <code>{2}{3}</code> <code>{4}</code>
+  keyboard_buttons:
+    get_file_id: |-
+      Get file ID
+      👾
+    send_message: |-
+      Send message
+      👾
+    clients_info: |-
+      About clients
+      👾
+    show_earnings: |-
+      Earnings
+      👾
+    show_logs: |-
+      Logs
+      👾
+    reset_fsm_1: |-
+      Reset FSM
+      👾
+    send_message_everyone: |-
+      Send to all
+      👾
+    send_message_selected: |-
+      Send to favorites
+      👾
+    send_message_everyone_with_reset: |-
+      📣 Announce to all (reset FSM + menu)
+    reset_fsm_2: |-
+      Return
+      👾
+  telegram_file_ids: {}
+other:
+  messages:
+    hello_message: |-
+      👋 <b>Hi! I am a bot of the ksiVPN project — an unlimited, fast and completely secure VPN service for 199</b>₽<b>/month!</b>
+
+      I will help you configure the connection, pay for the subscription, extend it for free, as well as solve many other tasks! If desired, you can even discuss <code>human</code> topics with me!
+    more_info: More information about the service is available by clicking the <b>«About project»</b> button from below 👇
+    help: |-
+      You can easily write to my creator if you have any problems, as well as if you have ideas to improve my work!
+
+      <b>If I do not perceive button clicks, reset my state using the /start command</b>
+    project_info: Unlimited, fast and completely secure service that allows you to establish a VPN connection in various countries of the world through your own VPS for 199₽ per month.
+    service_info: Unlimited, fast and completely secure service that allows you to establish a VPN connection in various countries of the world through your own VPS for 199₽ per month.
+    faq_info: |-
+      💬 <b>How much does a subscription cost?</b>
+      The cost of a standard subscription is 199₽ per month. However, within the framework of promotions and the internal referral system, the subscription price can be 75₽ per month!
+
+      💬 <b>What do I get for this cost?</b>
+      VPN connection at maximum speed without traffic limit on all project servers!
+
+      💬 <b>Why is it so cheap?</b>
+      The project is developed and maintained by one engineer. Also, the project does not create its own VPN protocol and application for it — everything is based on time-tested and community-supported open source software. Both factors make it possible to save a lot on operating and capital costs, which ultimately affects the price of the product.
+
+      💬 <b>How is the connection going?</b>
+      Registration is done in one click — the bot will only ask for a referral promo code, which is not necessary to enter. Next, the bot will send a link to the subscription with detailed instructions. You will need to download the app from the official store (PlayMarket or App Store) and add a subscription by simply clicking on the link from the instructions.
+
+      💬 <b>Is the subscription price fixed?</b>
+      No, the subscription price depends on its type, there are several of them. For example, a discounted subscription is available to testers and some others. The final subscription price will be displayed after entering the referral promo code.
+
+      💬 <b>Are ChatGPT-type services available with this VPN?</b>
+      Of course available! Moreover, some locations allow you to bypass even extremely strict site restrictions — from such servers you can access Gemini registration, view Reddit without logging into your account, and so on.
+
+      💬 <b>Which OS are supported?</b>
+      The service is available on all possible operating systems, including Android, iOS, Windows, macOS and Linux.
+
+      💬 <b>Is whitelisting available?</b>
+      Not at the moment, but this area is actively being worked out in the service. Expect an update soon!
+
+      💬 <b>What locations are provided?</b>
+      The following locations are currently available:
+      🇳🇱 Netherlands, 🇱🇻 Latvia, 🇩🇪 Germany, 🇺🇸 USA, 🇪🇸 Spain, 🇵🇱 Poland.
+
+      💬 <b>What do Fast, Breach and Pure mean?</b>
+      These are the types of VPN connections and locations:
+      1. Fast is the fastest VPN connection, but it can be unstable with strong blockages.
+      2. Breach is an "armor-piercing" VPN connection that always works with the exception of active whitelists.
+      3. Breach for iOS — an "armor-piercing" VPN connection for iOS — if the usual "Breach" turns off by itself.
+      4. Pure is a VPN location with access to services that are usually closed when using a VPN. For example, registration for Gemini, access to Reddit without logging in, and so on.
+    chatgpt_error: Sorry, an error with ChatGPT mode occurred
+    chatgpt_only_for_active_sub: ChatGPT mode is available only to clients with an active subscription!
+    unrecognized_message: |-
+      <b>Sorry, I don't understand you</b> 🤔
+
+      If I do not perceive button clicks, reset my state using the /start command.
+    restart: <i>Oh, oh! Rebooting</i>
+    special_thanks: |-
+      <b>Special thanks</b>
+
+      <b>to the UX/UI designer of the project:</b>
+      🦩 to Olga https://music.yandex.ru/artist/23761468
+  keyboard_buttons:
+    help: Help
+    about_project: About project
+    about_service: About service
+    faq_inline: FAQ
+    faq_inline_callback: faq
+    tg_channel_inline: Telegram channel
+    tg_channel_inline_url: https://t.me/+5cDIKThNG-kzZjgy
+  telegram_file_ids:
+    project_info: AgACAgIAAxkBAAJVOWWoH2RGI7pBEGUSvAt_xGjPM9ufAAJW1TEbxdRBSc9pyZvrLmwWAQADAgADcwADNAQ
+    hello_message: AgACAgIAAxkBAAJVN2WoH0QQIRjdL-9ZoL8wqhQvEsY4AAJU1TEbxdRBSaknQL9Gkxc1AQADAgADcwADNAQ
+    help: AgACAgIAAxkBAAEDGqRp135c9bBwGwkR4iuNLe6nvdWUIAAC6xRrG035uUqKyrE3f_2NiAEAAwIAA3MAAzsE
+internal_functions:
+  messages:
+    wait_payment: <b>Waiting for the subscription payment!</b>
+    payment_form: |-
+      💳 Payment information:
+
+      <b>Subscription type</b>: {0}
+      <b>Amount to be paid</b>: {2:g}₽ {discount_str}
+      <b>Extension for the period</b>: {1} days.
+
+      Payment identifier: #{3}
+      
+      {test_note}
+    test_price_note: 💻 <i>Test mode — minimum price for debugging</i>
+    new_client_joined_no_sub_url: error creating user in Remnawave
+    new_client_joined: |-
+      👾 <b>New user registered!</b>
+
+      <b>Client ID</b>: <code>{0}</code>
+      <b>Telegram INFO</b>:{1} <code>{2}</code> <code>{3}</code>
+      <b>Referral promo code</b>: {ref_promo_str}
+      <b>Subscription URL</b>: {4}
+    new_client_remnawave_error: |-
+      ⚠️ <b>Error creating a client in Remnawave</b>
+
+      The client with ID <code>{0}</code>  is registered in the database, but not created in Remnawave. Manual registration is required! Error:
+
+      <code>{1}</code>
+    registration_complete: |-
+      ❤️‍🔥 <b>Welcome to the ksiVPN project!</b>
+
+      Your subscription is ready and available by clicking «<b>My subscription</b>» in the menu under the message writing line. You will also find connection instructions there!
+
+      If you need help interacting with a bot, write the /help command in the chat. The same command will show the project support contacts — be sure to contact us if you have any problems!
+    registration_complete_no_url: |-
+      ❤️‍🔥 <b>Welcome to the ksiVPN project!</b>
+
+      Your subscription will be ready soon and is available by clicking «<b>My subscription</b>» in the menu under the message writing line. You will also find connection instructions there!
+
+      If you need help interacting with a bot, write the /help command in the chat. The same command will show the project support contacts — be sure to contact us if you have any problems!
+    remnawave_expiry_sync_no_record: ⚠️ Client <code>{0}</code> has no Remnawave record — expiry not synced to panel. Manual migration required!
+    remnawave_expiry_sync_error: |-
+      ⚠️ Failed to sync Remnawave expiry for client <code>{0}</code>. Error:
+
+      <code>{1}</code>
+    new_client_no_ref_promo_str: no promocode
+    new_client_ref_promo_str: <code>{0}</code> from client{3} <code>{1}{2}</code> <code>{4}</code> for free {5} by subscription {6:g}₽/month.
+    admin_ref_promo_was_entered: |-
+      👾 <b>A referral promo code has been entered!</b>
+
+      <b>Client ID</b>: <code>{0}</code>
+      <b>Telegram INFO</b>:{1} <code>{2}{3}</code> <code>{4}</code>
+      <b>Promo code</b>: <code>{5}</code> from user {6} for {7} by subscription {8:g}₽/month
+    admin_promo_was_entered_local_promo_new_sub_str: providing subscription for {0:g}₽/month,
+    admin_promo_was_entered: |-
+      👾 <b>A promo code has been entered!</b>
+
+      <b>Client ID</b>: <code>{0}</code>
+      <b>Telegram INFO</b>:{1} <code>{2}{3}</code> <code>{4}</code>
+      <b>About the promo code</b>: {5} with id {6} for {7} subscription{new_sub_str} ending {8}
+    admin_successful_payment: |-
+      👾 <b>Successful subscription renewal for {0} days!</b>
+
+      <b>Client ID</b>: <code>{1}</code>
+      <b>Telegram INFO</b>:{2} <code>{3}{4}</code> <code>{5}</code>
+      <b>Payment Provider</b>: <code>{provider_name}</code>
+
+      {test_prefix}
+    admin_payment_test_prefix: 💻 <i>Test mode payment — minimum price for debugging</i>
+    ref_promo_was_entered: |-
+      Wow! User {0}{1} used your referral promo code when registering!
+
+      <b>After he pays for the subscription for the first time, you will receive {2} of subscription for free!</b>
+    ref_client_paid_for_sub: |-
+      🕊 Wow! The client {0}{1} who joined the project using your referral promo code has paid for the subscription for the first time!
+
+      <b>You get a month of subscription for free!</b>
+    discount_str: (discount {0:g}₽)
+    payment_successful: |-
+      ❤️‍🔥 <b>The payment was made successfully!</b>
+
+      Payment identifier: #{0}
+    payment_successful_with_receipt: |-
+      ❤️‍🔥 <b>The payment was made successfully!</b>
+
+      Payment identifier: #{0}
+
+      🧾 <a href="{1}">Tax receipt</a>
+    fiscal_receipt_description: Subscription payment for {0} days
+    admin_fiscalization_failed: |-
+      ⚠️ <b>Failed to register receipt in «Мой налог»</b>
+
+      payment_id=<code>{0}</code>
+
+      Please register the income manually in the «Мой налог» app.
+    torrent_blocker_warning: |-
+      ⚠️ <b>Location «{node_name}» is blocked for {block_minutes} minutes</b>
+
+      Torrent traffic was detected over the VPN — this is prohibited by the project rules. Please disable torrent clients while using the VPN; repeated violations may lead to account suspension.
+  keyboard_buttons: {}
+  telegram_file_ids:
+    template_image_url: https://github.com/exmanka/ksiVPN-telegram-bot/assets/74555362/38b4bf5b-bfa8-4904-b8e8-4c492c4eb872
+middlewares:
+  messages:
+    authorized_only: 👾 Oops! This feature is only available to registered users!
+    unauthorized_only: You have already registered!
+    admin_only: 👾 Oh, oh! This function is only available to the administrator!
+    antiflood: 🤖 Please do not spam with requests!
+    nonblank_only: 👾 Eh! This feature is only available to clietns with an activated subscription!
+  keyboard_buttons: {}
+  telegram_file_ids: {}

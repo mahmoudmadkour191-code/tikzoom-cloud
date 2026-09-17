@@ -1,0 +1,68 @@
+# 使用 Python 官方镜像作为基础镜像
+FROM python:3.11-slim-bullseye
+
+# 设置环境变量
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    LANG=C.UTF-8
+
+# 设置时区
+RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    echo 'Asia/Shanghai' > /etc/timezone
+
+# 系统更新与基础工具安装
+RUN apt update && apt install -y \
+    curl \
+    gnupg \
+    && apt clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Node.js 20.x
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt install -y nodejs && \
+    apt clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# 安装系统依赖
+RUN apt update && apt install -y \
+    # 编译工具
+    build-essential \
+    pkg-config \
+    swig \
+    # 系统库
+    tzdata \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libffi-dev \
+    libssl-dev \
+    libmupdf-dev \
+    # 可视化工具
+    graphviz \
+    # OCR相关
+    tesseract-ocr \
+    tesseract-ocr-chi-sim \
+    && apt clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 UV（使用官方推荐方式）
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+# 安装 mplfonts（系统级）
+RUN uv pip install --system mplfonts && mplfonts init
+
+# 创建应用目录并设置权限
+RUN mkdir -p /app /app/shared /app/packages && \
+    chown -R nobody:nogroup /app && \
+    chmod -R 777 /app /app/shared /app/packages && \
+    chmod 755 /bin/bash
+
+# 设置工作目录
+WORKDIR /app
+
+# 复制所有文件（沙盒项目较小，直接复制所有文件）
+COPY . /app
+
+# 使用 UV 安装项目依赖到系统 Python（保持与应用版本解耦）
+RUN uv pip install --system -r pyproject.toml
+
+CMD ["bash"]

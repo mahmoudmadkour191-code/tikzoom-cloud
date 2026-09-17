@@ -1,0 +1,411 @@
+import asyncio
+import re
+from time import strftime
+from uuid import uuid4
+
+import nio
+
+from bots.matrix import client
+from bots.matrix.client import matrix_bot
+from bots.matrix.config import MatrixConfig
+from bots.matrix.context import MatrixContextManager, MatrixFetchedContextManager
+from bots.matrix.events import member_joined, member_left, should_dispatch_member_joined, should_dispatch_member_left
+from bots.matrix.info import *
+from core.builtins.bot import Bot
+from core.builtins.message.chain import MessageChain
+from core.builtins.message.internal import Plain, Image, Audio, Video
+from core.builtins.session.info import SessionInfo
+from core.builtins.utils import command_prefix
+from core.client.init import client_cleanup, client_init
+from core.config.base import CoreConfig
+from core.logger import Logger
+from core.queue.contracts import ServerAPI
+
+Bot.register_bot(client_name=client_name)
+
+ctx_id = Bot.register_context_manager(MatrixContextManager)
+Bot.register_context_manager(MatrixFetchedContextManager, fetch_session=True)
+
+ignored_sender = CoreConfig.ignored_sender
+mention_required = CoreConfig.mention_required
+initial_sync_complete = False
+
+
+async def on_sync(resp: nio.SyncResponse):
+    with open(client.store_path_next_batch, "w") as fp:
+        fp.write(resp.next_batch)
+
+
+async def on_invite(room: nio.MatrixRoom, event: nio.InviteEvent):
+    Logger.info(f"Received room invitation for {room.room_id} ({room.name}) from {event.sender}")
+    await matrix_bot.join(room.room_id)
+    Logger.info(f"Joined room: {room.room_id}")
+
+
+async def on_room_member(room: nio.MatrixRoom, event: nio.RoomMemberEvent):
+    Logger.info(f"Received m.room.member, {event.sender}: {event.prev_membership} -> {event.membership}")
+    member_id = event.state_key
+    sender_id = f"{sender_prefix}|{member_id.removeprefix('@')}"
+    if should_dispatch_member_joined(
+        initial_sync_complete=initial_sync_complete,
+        member_id=member_id,
+        bot_id=matrix_bot.user_id,
+        membership=event.membership,
+        prev_membership=event.prev_membership,
+        sender_id=sender_id,
+        ignored_sender=ignored_sender,
+    ):
+        await member_joined(member_id, room.room_id, event.event_id)
+    elif should_dispatch_member_left(
+        initial_sync_complete=initial_sync_complete,
+        member_id=member_id,
+        bot_id=matrix_bot.user_id,
+        membership=event.membership,
+        prev_membership=event.prev_membership,
+        sender_id=sender_id,
+        ignored_sender=ignored_sender,
+    ):
+        await member_left(member_id, room.room_id, event.event_id)
+
+    # is_direct = (room.member_count == 1 or room.member_count == 2) and room.join_rule == "invite"
+    # if not is_direct:
+    #     resp = await bot.room_get_state_event(room.room_id, "m.room.member", client.user)
+    #     if "prev_content" in resp.__dict__ and "is_direct" in resp.__dict__[
+    #             "prev_content"] and resp.__dict__["prev_content"]["is_direct"]:
+    #         is_direct = True
+    if room.member_count == 1 and event.membership == "leave":
+        resp = await matrix_bot.room_leave(room.room_id)
+        if isinstance(resp, nio.ErrorResponse):
+            Logger.error(f"Error while leaving empty room {room.room_id}: {str(resp)}")
+        else:
+            Logger.info(f"Left empty room: {room.room_id}")
+
+
+async def to_message_chain(event: nio.RoomMessageFormatted, reply_id: str | None = None, target_id: str | None = None):
+    if not event.source:
+        return MessageChain.assign([])
+    content = event.source.get("content", {})
+    msgtype = content.get("msgtype", "")
+    if msgtype == "m.emote":
+        msgtype = "m.text"
+    if msgtype == "m.text":  # compatible with py38
+        text = str(content.get("body", ""))
+        if reply_id:
+            # redact the fallback line for rich reply
+            # https://spec.matrix.org/v1.9/client-server-api/#fallbacks-for-rich-replies
+            while text.startswith("> "):
+                text = "".join(text.splitlines(keepends=True)[1:])
+        return MessageChain.assign(Plain(re.sub(r"@([A-Za-z0-9_.-]+)", rf"{sender_prefix}|\1", text.strip())))
+    if msgtype == "m.image":
+        url = None
+        if "url" in content:
+            url = str(content["url"])
+        elif "file" in content:
+            # todo: decrypt image
+            # url = str(content["file"]["url"])
+            return MessageChain.assign([])
+        else:
+            Logger.error(f"Got invalid m.image message from {target_id}")
+            return MessageChain.assign([])
+        return MessageChain.assign(Image(await matrix_bot.mxc_to_http(url)))
+    if msgtype == "m.audio":
+        url = content.get("url")
+        if not url:
+            Logger.error(f"Got m.audio message without url from {target_id}")
+            return MessageChain.assign([])
+        return MessageChain.assign(Audio(await matrix_bot.mxc_to_http(url)))
+    if msgtype == "m.video":
+        url = content.get("url")
+        if not url:
+            Logger.error(f"Got m.video message without url from {target_id}")
+            return MessageChain.assign([])
+        return MessageChain.assign(Video(await matrix_bot.mxc_to_http(url)))
+    Logger.error(f"Got unknown msgtype: {msgtype}")
+    return MessageChain.assign([])
+
+
+async def on_message(room: nio.MatrixRoom, event: nio.RoomMessageFormatted):
+    if event.sender != matrix_bot.user_id and matrix_bot.olm:
+        for device_id, olm_device in matrix_bot.device_store[event.sender].items():
+            if matrix_bot.olm.is_device_verified(olm_device):
+                continue
+            matrix_bot.verify_device(olm_device)
+            Logger.info(f"Trust olm device for device id: {event.sender} -> {device_id}")
+    if event.source.get("content", {}).get("msgtype") == "m.notice":
+        # https://spec.matrix.org/v1.9/client-server-api/#mnotice
+        return
+    target_id = f"{target_prefix}|{room.room_id}"
+    sender_id = f"{sender_prefix}|{event.sender[1:]}"
+    if sender_id in ignored_sender:
+        return
+    reply_id = None
+    event_content = event.source.get("content", {})
+    if "m.relates_to" in event_content:
+        relatesTo = event_content.get("m.relates_to", {})
+        if "m.in_reply_to" in relatesTo:  # rich reply
+            reply_id = relatesTo.get("m.in_reply_to", {}).get("event_id")
+        if "rel_type" in relatesTo:
+            relType = relatesTo["rel_type"]
+            if relType == "m.replace":  # skip edited message
+                return
+            if relType == "m.thread":  # reply in thread
+                # https://spec.matrix.org/v1.9/client-server-api/#fallback-for-unthreaded-clients
+                if "is_falling_back" in relatesTo and relatesTo["is_falling_back"]:
+                    # we regard thread roots as reply target rather than last message in threads
+                    reply_id = relatesTo["event_id"]
+    resp = await matrix_bot.get_displayname(event.sender)
+    if isinstance(resp, nio.ErrorResponse):
+        Logger.error(f"Failed to get display name for {event.sender}")
+        return
+
+    at_message = False
+    if event.body.startswith(matrix_bot.user_id):
+        at_message = True
+        event.body = event.body[len(matrix_bot.user_id) :].strip()
+        if not event.body:
+            event.body = f"{command_prefix[0]}help"
+
+    if mention_required and not at_message:
+        return
+
+    msg_chain = await to_message_chain(event, reply_id, target_id)
+
+    session = await SessionInfo.assign(
+        target_id=target_id,
+        sender_id=sender_id,
+        sender_name=resp.displayname,
+        target_from=target_prefix,
+        sender_from=sender_prefix,
+        client_name=client_name,
+        message_id=event.event_id,
+        reply_id=reply_id,
+        messages=msg_chain,
+        ctx_slot=ctx_id,
+        bot_id=matrix_bot.user_id,
+    )
+
+    await Bot.process_message(session, (room, event))
+
+
+async def on_reaction(room: nio.MatrixRoom, event: nio.ReactionEvent):
+    if event.sender == matrix_bot.user_id:
+        return
+    relates_to = event.source.get("content", {}).get("m.relates_to", {})
+    target_id = f"{target_prefix}|{room.room_id}"
+    sender_id = f"{sender_prefix}|{event.sender[1:]}"
+    if sender_id in ignored_sender:
+        return
+    reaction = relates_to.get("key")
+    if not reaction or not event.reacts_to:
+        return
+    session = await SessionInfo.assign(
+        target_id=target_id,
+        sender_id=sender_id,
+        target_from=target_prefix,
+        sender_from=sender_prefix,
+        client_name=client_name,
+        message_id=event.event_id,
+        reply_id=event.reacts_to,
+        messages=MessageChain.assign(Plain(reaction)),
+        ctx_slot=ctx_id,
+        bot_id=matrix_bot.user_id,
+    )
+    await Bot.process_message(session, (room, event))
+
+
+async def _sync_room_state() -> bool:
+    """执行一次初始同步；AsyncClient.sync 已负责更新房间并分发回调。"""
+    response = await matrix_bot.sync(
+        timeout=10000, since=matrix_bot.next_batch, full_state=True, set_presence="unavailable"
+    )
+    if isinstance(response, nio.ErrorResponse):
+        Logger.error(f"Failed to perform initial Matrix sync: {response}")
+        return False
+    return True
+
+
+async def on_verify(event: nio.KeyVerificationEvent):
+    if isinstance(event, nio.KeyVerificationStart):
+        await matrix_bot.accept_key_verification(event.transaction_id)
+        await matrix_bot.to_device(matrix_bot.key_verifications[event.transaction_id].share_key())
+        Logger.info(f"Accepted key verification request {event.transaction_id} from {event.sender} {event.from_device}")
+    elif isinstance(event, nio.KeyVerificationCancel):
+        Logger.info(f"Key verification {event.transaction_id} is cancelled: {event.reason}")
+    elif isinstance(event, nio.KeyVerificationKey):
+        Logger.info(
+            f"Key verification {event.transaction_id}: {matrix_bot.key_verifications[event.transaction_id].get_emoji()}"
+        )
+        await matrix_bot.confirm_short_auth_string(event.transaction_id)
+    elif isinstance(event, nio.KeyVerificationMac):
+        mac = matrix_bot.key_verifications[event.transaction_id].get_mac()
+        Logger.info(f"Key verification {event.transaction_id} succeeded: {mac}")
+        await matrix_bot.to_device(mac)
+    else:
+        Logger.warning(f"Unknown key verification event: {event}")
+
+
+async def on_in_room_verify(room: nio.MatrixRoom, event: nio.RoomMessageUnknown):
+    if event.msgtype == "m.key.verification.request":
+        Logger.info(f"Cancelling in-room verification in {room.room_id}")
+        msg = "You are requesting a in-room verification to AkariBot. But I does not support in-room-verification at this time, please use to-device verification!"
+        await matrix_bot.room_send(room.room_id, "m.room.message", {"msgtype": "m.notice", "body": msg})
+        tx_id = str(uuid4())
+        resp = await matrix_bot.to_device(
+            nio.ToDeviceMessage(
+                type="m.key.verification.cancel",
+                recipient=event.sender,
+                recipient_device=event.content.get("from_device", ""),
+                content={
+                    "code": "m.invalid_message",
+                    "reason": msg,
+                    "transaction_id": tx_id,
+                },
+            ),
+            tx_id,
+        )
+        Logger.info(resp)
+
+
+async def _run_client():
+    global initial_sync_complete
+    # Logger.info(f"Trying first sync")
+    # sync = await bot.sync()
+    # Logger.info(f"First sync finished in {sync.elapsed}ms, dropped older messages")
+    # if sync is nio.SyncError:
+    #     Logger.error(f"Failed in first sync: {sync.status_code} - {sync.message}")
+    try:
+        with open(client.store_path_next_batch, "r", encoding="utf-8") as fp:
+            matrix_bot.next_batch = fp.read()
+            Logger.info(f"Loaded next sync batch from storage: {matrix_bot.next_batch}")
+    except FileNotFoundError:
+        matrix_bot.next_batch = 0
+
+    matrix_bot.add_response_callback(on_sync, nio.SyncResponse)
+    matrix_bot.add_event_callback(on_invite, nio.InviteEvent)
+    matrix_bot.add_event_callback(on_room_member, nio.RoomMemberEvent)
+    matrix_bot.add_event_callback(on_message, nio.RoomMessageFormatted)
+    matrix_bot.add_event_callback(on_reaction, nio.ReactionEvent)
+    matrix_bot.add_to_device_callback(on_verify, nio.KeyVerificationEvent)
+    matrix_bot.add_event_callback(on_in_room_verify, nio.RoomMessageUnknown)
+
+    # E2EE setup
+    if matrix_bot.olm:
+        if matrix_bot.should_upload_keys:
+            Logger.info("Uploading matrix E2E encryption keys...")
+            resp = await matrix_bot.keys_upload()
+            if (
+                isinstance(resp, nio.KeysUploadError)
+                and "One time key" in resp.message
+                and "already exists." in resp.message
+            ):
+                Logger.warning(
+                    f"Matrix E2EE keys have been uploaded for this session, we are going to force claim them down, although this is very dangerous and should never happen for a clean session: {resp}"
+                )
+                keys = 0
+                while True:
+                    resp = await matrix_bot.keys_claim({client.user: [client.device_id]})
+                    Logger.info(f"Matrix OTK claim resp #{keys + 1}: {resp}")
+                    if isinstance(resp, nio.KeysClaimError):
+                        break
+                    keys += 1
+                    resp = await matrix_bot.keys_upload()
+                    if not isinstance(resp, nio.KeysUploadError):
+                        Logger.success(f"Successfully uploaded matrix OTK keys after {keys} claims.")
+                        break
+        megolm_backup_path = client.store_path_megolm_backup / "restore.txt"
+        if megolm_backup_path.exists():
+            pass_path = client.store_path_megolm_backup / "restore-passphrase.txt"
+            if not pass_path.exists():
+                Logger.error(f"Passphrase file {pass_path} not found.")
+                return
+            Logger.info(f"Importing megolm keys backup from {megolm_backup_path}")
+            with open(pass_path) as f:
+                passphrase = f.read()
+            await matrix_bot.import_keys(megolm_backup_path, passphrase)
+            Logger.info("Megolm backup imported.")
+
+    # set device name
+    if client.device_name:
+        try:
+            response = await matrix_bot.update_device(client.device_id, {"display_name": client.device_name})
+            if isinstance(response, nio.ErrorResponse):
+                Logger.error(f"Failed to update Matrix device name: {response}")
+        except Exception:
+            Logger.exception("Failed to update Matrix device name:")
+
+    # sync joined room state
+    Logger.info("Starting sync room full state...")
+    # bot.upload_filter(presence={"limit":1},room={"timeline":{"limit":1}})
+    if not await _sync_room_state():
+        return
+    initial_sync_complete = True
+
+    await client_init(target_prefix_list, sender_prefix_list)
+
+    Logger.info("starting sync loop...")
+    version = await ServerAPI.get_bot_version()
+    await matrix_bot.set_presence("online", f"AkariBot {version}")
+    await matrix_bot.sync_forever(timeout=30000, full_state=False)
+    Logger.info("sync loop stopped.")
+
+
+async def _backup_megolm_keys():
+    if matrix_bot.olm:
+        if client.megolm_backup_passphrase:
+            backup_date = strftime("%Y-%m")
+            backup_path = client.store_path_megolm_backup / f"akaribot-megolm-backup-{backup_date}.txt"
+            old_backup_path = client.store_path_megolm_backup / f"akaribot-megolm-backup-{backup_date}-old.txt"
+            if backup_path.exists():
+                if old_backup_path.exists():
+                    old_backup_path.unlink()
+                backup_path.rename(old_backup_path)
+            Logger.info(f"Saving megolm keys backup to {backup_path}")
+            await matrix_bot.export_keys(str(backup_path), client.megolm_backup_passphrase)
+            Logger.info("Megolm backup exported.")
+
+
+async def _shutdown_client():
+    try:
+        await _backup_megolm_keys()
+    except Exception:
+        Logger.exception("Failed to back up Matrix encryption keys during shutdown:")
+    try:
+        await matrix_bot.set_presence("offline")
+    except Exception:
+        Logger.exception("Failed to set Matrix presence offline during shutdown:")
+    try:
+        await client_cleanup()
+    except Exception:
+        Logger.exception("Failed to clean up Matrix client resources:")
+    try:
+        await matrix_bot.close()
+    except Exception:
+        Logger.exception("Failed to close Matrix SDK client:")
+
+
+async def start():
+    try:
+        await _run_client()
+    finally:
+        await _shutdown_client()
+
+
+def run():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(start())
+    finally:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(loop.shutdown_default_executor())
+        loop.close()
+        asyncio.set_event_loop(None)
+
+
+if matrix_bot and MatrixConfig.enable:
+    run()

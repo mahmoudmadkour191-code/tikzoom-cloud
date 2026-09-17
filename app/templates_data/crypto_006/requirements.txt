@@ -1,0 +1,10 @@
+matplotlib
+pyrotgfork
+tgcrypto
+apscheduler
+defusedxml
+tenacity
+typing_extensions
+
+# auto-added by TikZoom curator
+pyrogram

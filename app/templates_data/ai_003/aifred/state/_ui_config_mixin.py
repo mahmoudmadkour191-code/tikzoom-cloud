@@ -1,0 +1,307 @@
+"""UI configuration mixin for AIfred state.
+
+Handles temperature, context settings, research mode, web search,
+STT configuration, and general UI state.
+"""
+
+from __future__ import annotations
+
+import reflex as rx
+
+
+class UIConfigMixin(rx.State, mixin=True):
+    """Mixin for UI configuration, research mode, and STT."""
+
+    # ── Temperature ───────────────────────────────────────────────
+    # Per-agent temperature lives in agent_tuning (SSOT) — no global var.
+    temperature_mode: str = "auto"  # "auto" (Intent-Detection) | "manual" (user slider)
+
+    # ── Context Window Control ────────────────────────────────────
+    # Per-agent manual values + toggles live in agent_tuning
+    # (num_ctx_manual / num_ctx_manual_enabled) — persisted for vision only.
+    num_ctx: int = 32768
+
+    # ── Research Settings ─────────────────────────────────────────
+    # NOTE: research_mode is now per-session (session_storage.DEFAULT_SESSION_CONFIG).
+    # Class default only applies before any session is loaded.
+    research_mode: str = "automatik"  # "quick", "deep", "automatik", "none"
+    research_mode_display: str = "\u2728 Automatik (KI entscheidet)"  # UI display value
+
+    # ── STT (Whisper) Settings ────────────────────────────────────
+    whisper_model_key: str = "small"  # Whisper model key (tiny/base/small/medium/large)
+    show_transcription: bool = False  # Show transcribed text for editing before sending
+
+    # ── Text-Input Behavior ──────────────────────────────────────
+    # When True, pressing Enter in the textarea sends the message
+    # immediately (Shift+Enter = newline). When False, Enter inserts
+    # a newline and the user clicks the Send button. Default ON for
+    # short prompts; user can toggle off for multi-line code/log paste.
+    enter_sends_message: bool = True
+
+    # ================================================================
+    # AUTO-REFRESH TOGGLE
+    # ================================================================
+
+    def toggle_auto_refresh(self) -> None:
+        """Toggle auto-scroll for all areas (Debug Console, Chat History, AI Response)."""
+        self.auto_refresh_enabled = not self.auto_refresh_enabled  # type: ignore[has-type]
+        self._save_settings()  # type: ignore[attr-defined]
+
+    # ================================================================
+    # TEMPERATURE
+    # ================================================================
+
+    def set_temperature_mode(self, checked: bool) -> None:
+        """Set temperature mode from toggle switch.
+
+        Args:
+            checked: True = manual mode (user slider), False = auto mode (Intent-Detection)
+        """
+        self.temperature_mode = "manual" if checked else "auto"
+        self._save_settings()  # type: ignore[attr-defined]
+        mode_label = "Manual" if checked else "Auto"
+        self.add_debug(f"\U0001f321\ufe0f Temperature Mode: {mode_label}")  # type: ignore[attr-defined]
+
+    # ================================================================
+    # CONTEXT WINDOW CONTROL
+    # ================================================================
+
+    def _set_num_ctx_manual(self, agent: str, value: str) -> None:
+        """Set manual num_ctx value for an agent (only used when enabled).
+
+        IMPORTANT: Not saved in settings.json (vision has its own persistent
+        path, see set_agent_num_ctx_manual).
+        """
+        from ..lib.agent_settings import set_agent_setting
+        from ..lib.config import NUM_CTX_MANUAL_MAX
+        from ..lib.formatting import format_number
+
+        try:
+            # Handle locale-formatted numbers and spaces (e.g., "1.472", "1,472", "1 472")
+            clean_value = str(value).replace(".", "").replace(",", "").replace(" ", "").strip()
+            if not clean_value:
+                return  # Empty input, ignore
+            num_value = int(clean_value)
+            min_value = 1024 if agent == "vision" else 1  # Vision minimum 1K
+            if num_value < min_value:
+                num_value = min_value
+            if num_value > NUM_CTX_MANUAL_MAX:
+                num_value = NUM_CTX_MANUAL_MAX
+            set_agent_setting(self, agent, "num_ctx_manual", num_value)
+            from ..lib.agent_config import get_agent_config
+            cfg = get_agent_config(agent)
+            display = cfg.display_name if cfg else agent.capitalize()
+            self.add_debug(f"\U0001f527 Manual Context ({display}): {format_number(num_value)}")  # type: ignore[attr-defined]
+        except (ValueError, TypeError):
+            self.add_debug(f"\u274c Invalid Context value: {value}")  # type: ignore[attr-defined]
+
+    def set_agent_num_ctx_manual(self, agent: str, value: str) -> None:
+        """Generic manual-context input handler (foreach rows pass the id).
+
+        Vision's value is persisted (settings.json); chat agents reset on
+        restart \u2014 deliberate, see the llm_params UI hint.
+        """
+        self._set_num_ctx_manual(agent, value)
+        if agent == "vision":
+            self._save_settings()  # type: ignore[attr-defined]
+
+    def _toggle_num_ctx_manual(self, agent: str, enabled: bool) -> None:
+        """Toggle manual context for an agent."""
+        from ..lib.agent_config import get_agent_label
+        from ..lib.agent_settings import set_agent_setting
+        set_agent_setting(self, agent, "num_ctx_manual_enabled", enabled)
+        status = "Manual" if enabled else "Auto"
+        self.add_debug(f"{get_agent_label(agent)} Context: {status}")  # type: ignore[attr-defined]
+
+    def toggle_agent_num_ctx_manual(self, agent: str, enabled: bool) -> None:
+        """Generic manual-context toggle handler (foreach rows pass the id)."""
+        self._toggle_num_ctx_manual(agent, enabled)
+        if agent == "vision":
+            self._save_settings()  # type: ignore[attr-defined]
+
+    def _auto_ctx_for_agent(self, agent: str) -> int:
+        """Auto (calibrated) context for an agent's model — backend-aware.
+
+        llamacpp: variant-resolved profile ctx from the llama-swap YAML
+        (source of truth, same as ``_show_model_calibration_info``), cache
+        as secondary. ollama: rope-scaled calibration from the cache.
+        The old ollama-only lookup showed "not calibrated" for perfectly
+        calibrated llamacpp models.
+        """
+        from ..lib.agent_settings import get_agent_setting
+        model_id: str = get_agent_setting(self, agent, "model_id")
+        if not model_id:
+            return 0
+        if self.backend_type == "llamacpp":  # type: ignore[attr-defined]
+            from ..lib.calibration import parse_llamaswap_config
+            from ..lib.config import LLAMASWAP_CONFIG_PATH
+            from ..lib.model_vram_cache import get_llamacpp_calibration
+            effective = self._effective_model_id(agent) or model_id  # type: ignore[attr-defined]
+            yaml_models = parse_llamaswap_config(LLAMASWAP_CONFIG_PATH)
+            yaml_ctx = int(yaml_models.get(effective, {}).get("current_context", 0))
+            if yaml_ctx > 0:
+                return yaml_ctx
+            return get_llamacpp_calibration(effective) or 0
+        if self.backend_type == "vllm":  # type: ignore[attr-defined]
+            from ..lib.operating_points import get_vllm_entry_context
+            return get_vllm_entry_context(model_id)
+        from ..lib.model_vram_cache import (
+            get_ollama_calibrated_max_context,
+            get_rope_factor_for_model,
+        )
+        rope_factor = get_rope_factor_for_model(model_id)
+        return get_ollama_calibrated_max_context(model_id, rope_factor) or 0
+
+    def calculate_manual_context(self) -> None:
+        """Calculate and display context limits.
+
+        Called when user clicks "Calculate" button.
+        Shows all LLM context values (manual or auto-calibrated from persistent cache).
+        """
+        from ..lib.formatting import format_number
+
+        # Collect effective limits for compression calculation
+        effective_limits: list[int] = []
+
+        def format_model_with_ctx(model_display: str, ctx_value: int, mode: str) -> str:
+            """Format model display with context info and mode indicator."""
+            if ctx_value > 0:
+                ctx_str = format_number(ctx_value)
+                mode_str = mode
+            else:
+                # Not calibrated - show clear indication
+                ctx_str = "n/a"
+                mode_str = "not calibrated" if mode == "auto" else mode
+            if model_display.endswith(")"):
+                return model_display[:-1] + f", {ctx_str} ctx, {mode_str})"
+            return f"{model_display} ({ctx_str} ctx, {mode_str})"
+
+        self.add_debug("\U0001f4ca Context configuration:")  # type: ignore[attr-defined]
+
+        from ..lib.agent_config import get_agent_label
+        from ..lib.agent_settings import get_agent_setting
+        for entry in self._ui_agent_list():  # type: ignore[attr-defined]
+            agent = entry["id"]
+            # AIfred is always shown; the others only with an own model
+            if agent != "aifred" and not get_agent_setting(self, agent, "model_id"):
+                continue
+            if get_agent_setting(self, agent, "num_ctx_manual_enabled"):
+                agent_ctx: int = get_agent_setting(self, agent, "num_ctx_manual")
+                mode = "manual"
+            else:
+                agent_ctx = self._auto_ctx_for_agent(agent)
+                mode = "auto"
+            model_display = get_agent_setting(self, agent, "model")
+            self.add_debug(f"   {get_agent_label(agent)}: {format_model_with_ctx(model_display, agent_ctx, mode)}")  # type: ignore[attr-defined]
+            # Vision context is NOT added to effective_limits - separate from chat context
+            if agent != "vision" and agent_ctx > 0:
+                effective_limits.append(agent_ctx)
+
+        # Calculate effective limit (minimum of all active limits)
+        effective_limit = min(effective_limits) if effective_limits else 0
+
+        # Update cached min context limit
+        self._min_agent_context_limit = effective_limit  # type: ignore[has-type]
+
+        # Show history utilization and warn if compression will trigger
+        self._log_history_utilization(effective_limit)
+
+        # Effective sampling parameters per agent — the values build_llm_options
+        # actually sends (temperature via resolve_agent_temperature). Shown for
+        # ALL matrix agents so the preview is a real pre-flight check that
+        # surfaces UI/engine divergence (e.g. a manual per-agent temperature
+        # that silently does not take effect).
+        from ..lib.multi_agent import resolve_agent_temperature
+        self.add_debug(f"\U0001f39b️ Sampling ({self.temperature_mode}):")  # type: ignore[attr-defined]
+        for entry in self._ui_agent_list():  # type: ignore[attr-defined]
+            agent = entry["id"]
+            temp = resolve_agent_temperature(self, agent)  # type: ignore[arg-type]
+            self.add_debug(  # type: ignore[attr-defined]
+                f"   {get_agent_label(agent)}: temp {format_number(temp, 2)}, "
+                f"top_k {int(get_agent_setting(self, agent, 'top_k', 40))}, "
+                f"top_p {format_number(get_agent_setting(self, agent, 'top_p', 0.9), 2)}, "
+                f"min_p {format_number(get_agent_setting(self, agent, 'min_p', 0.0), 2)}, "
+                f"rep {format_number(get_agent_setting(self, agent, 'repeat_penalty', 1.1), 2)}"
+            )
+
+    # ================================================================
+    # RESEARCH MODE
+    # ================================================================
+
+    def set_research_mode(self, mode: str) -> None:
+        """Set research mode (from internal value, e.g. pill button click)."""
+        from ..lib import TranslationManager
+
+        self.research_mode = mode
+        self.research_mode_display = TranslationManager.get_research_mode_display(
+            mode, self.ui_language  # type: ignore[attr-defined]
+        )
+        self.add_debug(f"\U0001f50d Research mode: {mode}")  # type: ignore[attr-defined]
+        self._persist_session_config()  # type: ignore[attr-defined]
+
+    # ================================================================
+    # STT (WHISPER) SETTINGS
+    # ================================================================
+
+    @rx.var(deps=["whisper_model_key", "ui_language"], auto_deps=False)
+    def whisper_model_display(self) -> str:
+        """Get localized display name for current Whisper model.
+
+        Maps key (tiny/base/small/medium/large) to translated display name.
+        """
+        from ..lib import TranslationManager
+
+        # Translation map: key -> translation_key
+        key_to_translation = {
+            "tiny": "stt_model_tiny",
+            "base": "stt_model_base",
+            "small": "stt_model_small",
+            "medium": "stt_model_medium",
+            "large-v3": "stt_model_large",
+            "large": "stt_model_large",  # Alias
+        }
+        translation_key = key_to_translation.get(self.whisper_model_key, "stt_model_small")
+        return TranslationManager.get_text(translation_key, self.ui_language)  # type: ignore[attr-defined]
+
+    def set_whisper_model(self, model_display_name: str) -> None:
+        """Set Whisper model and push to Docker container.
+
+        Updates the container config via /config API, then unloads both
+        models so the next transcription loads the new model.
+        """
+        import requests
+        from ..lib.config import WHISPER_SERVICE_URL
+
+        model_key = model_display_name.split("(")[0].strip() if "(" in model_display_name else model_display_name
+        self.whisper_model_key = model_key
+        self._save_settings()  # type: ignore[attr-defined]
+
+        # Push to Docker container + unload old models
+        try:
+            requests.post(
+                f"{WHISPER_SERVICE_URL}/config",
+                json={"model": model_key},
+                timeout=5,
+            )
+            requests.post(f"{WHISPER_SERVICE_URL}/unload?device=all", timeout=5)
+            self.add_debug(f"\U0001f3a4 Whisper Model: {model_key} (unloaded, reloads on next STT)")  # type: ignore[attr-defined]
+        except requests.ConnectionError:
+            self.add_debug(f"\U0001f3a4 Whisper Model: {model_key} (container not running)")  # type: ignore[attr-defined]
+
+    def toggle_show_transcription(self) -> None:
+        """Toggle show transcription mode."""
+        self.show_transcription = not self.show_transcription
+        mode = "Edit text" if self.show_transcription else "Send directly"
+        self.add_debug(f"\U0001f3a4 Transcription: {mode}")  # type: ignore[attr-defined]
+        self._save_settings()  # type: ignore[attr-defined]
+
+    def toggle_enter_sends_message(self) -> None:
+        """Toggle whether Enter sends the message or inserts a newline."""
+        self.enter_sends_message = not self.enter_sends_message
+        mode = "Enter sends" if self.enter_sends_message else "Enter = newline"
+        self.add_debug(f"⏎ Text input: {mode}")  # type: ignore[attr-defined]
+        self._save_settings()  # type: ignore[attr-defined]
+
+    def toggle_audio_recording(self):  # type: ignore[no-untyped-def]
+        """Toggle audio recording (calls JavaScript MediaRecorder)."""
+        return rx.call_script("toggleRecording()")

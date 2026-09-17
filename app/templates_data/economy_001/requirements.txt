@@ -1,0 +1,5 @@
+# auto-added by TikZoom curator
+python-telegram-bot
+openai
+pymongo
+python-dateutil

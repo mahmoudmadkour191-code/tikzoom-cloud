@@ -1,0 +1,20 @@
+python-telegram-bot>=21.0
+openai>=1.30.0
+tiktoken
+pydantic>=2.5
+PyYAML>=6.0
+aiosqlite>=0.19
+mcp>=1.9
+telegramify-markdown>=0.5
+trafilatura>=1.8
+pydub>=0.25.1
+python-docx
+python-pptx
+Pillow
+aiohttp
+BeautifulSoup4
+aiofiles
+chromadb
+PyMuPDF
+
+# auto-added by TikZoom curator

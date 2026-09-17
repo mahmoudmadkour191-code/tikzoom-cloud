@@ -1,0 +1,111 @@
+services:
+  # Proton - Open Source Streaming Database
+  # For enterprise Timeplus, replace with: timeplus/timeplusd:latest
+  proton:
+    image: d.timeplus.com/timeplus-io/proton:latest
+    platform: linux/amd64  # Required for ARM Macs (runs via Rosetta)
+    ports:
+      - "8123:8123"   # HTTP port (batch queries)
+      - "3218:3218"   # Streaming port
+      - "8463:8463"   # Native TCP
+    volumes:
+      - proton_data:/var/lib/proton
+      - ./init-proton.sh:/docker-entrypoint-initdb.d/init-proton.sh:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8123/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Grant privileges to default user after container starts
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        /entrypoint.sh &
+        PROTON_PID=$$!
+        sleep 10
+        /docker-entrypoint-initdb.d/init-proton.sh
+        wait $$PROTON_PID
+
+  # PulseBot Agent
+  pulsebot-agent:
+    build:
+      context: .
+      args:
+        - SETUPTOOLS_SCM_PRETEND_VERSION=${IMAGE_TAG:-0.0.0}
+    command: pulsebot run
+    environment:
+      - TIMEPLUS_HOST=proton
+      - TIMEPLUS_USER=pulsebot
+      - TIMEPLUS_PASSWORD=
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - API_SERVER_URL=http://pulsebot-api:8000
+      - WORKSPACE_INTERNAL_KEY=test-workspace-key-12345
+      - AGENT_HOST=pulsebot-agent
+      - SEARXNG_BASE_URL=http://searxng:8080
+      - CLAWHUB_AUTH_TOKEN=${CLAWHUB_AUTH_TOKEN}
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./skills:/app/skills:rw
+      - ./workspaces:/app/workspaces:rw
+      - ./pulsebot:/usr/local/lib/python3.12/site-packages/pulsebot:rw
+    ports:
+      - "8001:8001"
+    depends_on:
+      proton:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # PulseBot API Server
+  pulsebot-api:
+    build:
+      context: .
+      args:
+        - SETUPTOOLS_SCM_PRETEND_VERSION=${IMAGE_TAG:-0.0.0}
+    command: pulsebot serve --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      - TIMEPLUS_HOST=proton
+      - TIMEPLUS_USER=pulsebot
+      - TIMEPLUS_PASSWORD=
+      - AGENT_HOST=pulsebot-agent
+      - WORKSPACE_INTERNAL_KEY=test-workspace-key-12345
+    volumes:
+      - ./config.yaml:/app/config.yaml:rw
+      - ./pulsebot:/usr/local/lib/python3.12/site-packages/pulsebot:ro
+    depends_on:
+      proton:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # SearXNG - Privacy-respecting metasearch engine
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+      # Only needed if you want to use the JSON API or other features requiring a secret
+      - SEARXNG_SECRET=searxng-secret-key-12345
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+volumes:
+  proton_data:

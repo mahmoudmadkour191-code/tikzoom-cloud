@@ -1,0 +1,15 @@
+# auto-added by TikZoom curator
+aiofiles
+feedparser
+gTTS
+googletrans==4.0.0rc1
+motor
+psutil
+speedtest-cli
+uvloop
+yt-dlp
+
+# auto-added by TikZoom curator
+googletrans==4.0.0rc1
+pyrogram
+pytz

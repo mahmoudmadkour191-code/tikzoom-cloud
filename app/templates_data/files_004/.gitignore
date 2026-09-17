@@ -1,0 +1,23 @@
+# custom config
+tconfig.py
+config.json
+
+# you know these
+venv
+__pycache__
+.vscode
+
+# Telethon sessions
+*.session
+*.session-journal
+
+# tests
+test*.*
+splfil/
+
+# runtime files
+Downloads/
+userdata/
+torlog.txt
+*.conf
+

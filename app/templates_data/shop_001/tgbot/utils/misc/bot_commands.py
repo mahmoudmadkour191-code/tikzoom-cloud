@@ -1,0 +1,40 @@
+# - *- coding: utf- 8 - *-
+from aiogram import Dispatcher
+from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
+
+from tgbot.data.config import get_admins
+
+# Команды для юзеров
+user_commands = [
+    BotCommand("start", "♻ Перезапустить бота"),
+    BotCommand("lang", "Изменить язык"),
+    BotCommand("edit_location", "📡 Изменить город"),
+    BotCommand("support", "☎ Поддержка"),
+    BotCommand("switch_new_product_subscription", "Получать карточки новых позиций"),
+    BotCommand("user_seller_request", "Я продавец"),
+    BotCommand("faq", "ℹ FAQ"),
+]
+
+# Команды для админов
+admin_commands = [
+    BotCommand("start", "♻ Перезапустить бота"),
+    BotCommand("lang", "Изменить язык"),
+    BotCommand("edit_location", "📡 Изменить город"),
+    BotCommand("support", "☎ Поддержка"),
+    BotCommand("switch_new_product_subscription", "Получать карточки новых позиций"),
+    BotCommand("faq", "ℹ FAQ"),
+    BotCommand("check_seller_requests", "Заявки в продавцы"),
+    BotCommand("db", "📦 Получить Базу Данных"),
+    BotCommand("log", "🖨 Получить логи"),
+]
+
+
+# Установка команд
+async def set_commands(dp: Dispatcher):
+    await dp.bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
+
+    for admin in get_admins():
+        try:
+            await dp.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin))
+        except Exception:
+            pass

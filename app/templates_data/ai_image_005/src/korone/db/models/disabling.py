@@ -1,0 +1,15 @@
+from sqlalchemy import JSON, BigInteger
+from sqlalchemy.orm import Mapped, mapped_column
+
+from korone.db.base import Base
+
+
+class DisablingModel(Base):
+    __tablename__ = "disabled"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    cmds: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    def __repr__(self) -> str:
+        return f"DisablingModel(id={self.id!r}, chat_id={self.chat_id!r}, cmds={self.cmds!r})"

@@ -1,0 +1,8 @@
+venv/
+env/
+
+__pycache__/
+peewee.db
+
+secrets.py
+.env

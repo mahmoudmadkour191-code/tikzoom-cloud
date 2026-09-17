@@ -1,0 +1,19 @@
+Telethon
+pyrofork
+beautifulsoup4
+lxml
+pymongo
+python-dotenv
+requests
+aiohttp
+schedule
+tenacity
+Pillow
+motor
+pytz
+tgcrypto
+yt-dlp
+cloudscraper
+
+# auto-added by TikZoom curator
+pyrogram

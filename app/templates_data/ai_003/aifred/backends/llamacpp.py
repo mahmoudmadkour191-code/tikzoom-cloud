@@ -1,0 +1,493 @@
+"""
+llama.cpp Backend Adapter (via llama-swap)
+
+llama-swap is an OpenAI-compatible proxy that manages llama-server instances.
+It handles model loading/unloading, GPU allocation, and hot-swapping.
+chat() and chat_stream() are inherited from OpenAICompatibleBackend.
+
+See docs/en/guides/llamacpp-setup.md for hardware configuration and performance tuning.
+"""
+
+import asyncio
+import logging
+import re
+from typing import Optional, AsyncIterator, Dict, Any
+import openai
+from .base import (
+    OpenAICompatibleBackend,
+    LLMOptions,
+    LLMResponse,
+    BackendConnectionError,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _require_timings(server_timings: Dict[str, Any]) -> None:
+    """Fail with a diagnostic message when llama-server timings are absent.
+
+    A response without ``timings`` means the server died mid-generation
+    (stream cut, llama-swap restarts it) — the former bare
+    ``server_timings["predicted_per_second"]`` access surfaced that as a
+    cryptic ``KeyError: 'predicted_per_second'`` in the UI (3x on
+    2026-08-03). Keep it an error — never fake numbers — just say what
+    actually happened."""
+    if "predicted_per_second" not in server_timings:
+        raise RuntimeError(
+            "llama-server returned no timings — server crashed "
+            "mid-generation (see `journalctl -u llama-swap`)"
+        )
+
+
+class LlamaCppBackend(OpenAICompatibleBackend):
+    """llama.cpp backend via llama-swap (OpenAI-compatible)
+
+    Inherits chat() and chat_stream() from OpenAICompatibleBackend.
+    - _build_extra_body(): ALWAYS sends all sampling params (override server CLI defaults)
+    - reasoning: llama-server streams it as ``reasoning_content``; the
+      <think> state machine lives in the base class (REASONING_FIELD)
+    """
+
+    BACKEND_NAME = "llama.cpp"
+    # --reasoning-format deepseek: Denkteil im Feld reasoning_content
+    REASONING_FIELD = "reasoning_content"
+    # llama-server akzeptiert reasoning_content in eingehenden Messages und
+    # rendert es via Chat-Template (verifiziert 2026-08-15 per
+    # /apply-template gegen Qwen3.8: <think>…</think> im Assistant-Block).
+    SEND_TURN_REASONING = True
+    # 900s (15 min): genuegt fuer (a) llama-swap startup + Modell-Load bei
+    # grossen Modellen, (b) Multi-Tool-Round-Loops mit Thinking-Models (z.B.
+    # URL-Ranking ueber viele Suchergebnisse), (c) Long-Context-Inference auf
+    # 100k+ Token Prompts. Frueher 300s — fiel beim URL-Ranking um die 27
+    # Quellen reproduzierbar in den Timeout.
+    DEFAULT_TIMEOUT = 900.0
+
+    def __init__(self, base_url: str = "http://localhost:8080/v1", api_key: str = "dummy"):
+        super().__init__(base_url=base_url, api_key=api_key)
+
+    # === Pre-request validation ===
+
+    # Letztes geprüftes Modell — der Describer-Guard läuft nur beim
+    # Modellwechsel, nicht bei jedem Request (kein HTTP-Overhead im
+    # Steady-State).
+    _last_guarded_model: str = ""
+
+    async def _evict_visiond_if_conflicting(self, model: str) -> None:
+        """Describer räumen, bevor ein Profil OHNE VLM-Reserve lädt.
+
+        Die llama-swap ``vision``-Gruppe ist ``persistent`` — llama-swap
+        selbst entlädt die ``-visiond``-Describer nie (nur deren ttl).
+        Profile MIT ``-vlm-``-Marker lassen den Reserve-Slot per
+        Kalibrierung frei, daneben darf der Describer wohnen bleiben.
+        Ein Profil ohne Reserve kann dagegen die volle Karte brauchen:
+        Dann entlädt AIfred VOR dem Load alle Modelle über die
+        llama-swap-API (das alte Hauptmodell würde beim Wechsel ohnehin
+        verdrängt). Läuft das Ziel-Modell bereits, steht kein Load an —
+        dann wird nach User-Vorgabe NICHT entladen (nur ttl räumt auf).
+        """
+        if model == self._last_guarded_model:
+            return
+        self._last_guarded_model = model
+        if "-vlm-" in model or model.endswith(("-visiond", "-embed")):
+            return
+        import httpx
+
+        from ..lib.logging_utils import log_message
+        root = str(self.client.base_url).split("/v1")[0]
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{root}/running")
+                running = [
+                    m.get("model", "")
+                    for m in (resp.json().get("running") or [])
+                ]
+                if model in running:
+                    return
+                if not any(
+                    m.endswith(("-visiond", "-embed")) for m in running
+                ):
+                    return
+                await client.post(f"{root}/api/models/unload")
+                log_message(
+                    f"🧹 Parallel sidecars (describer/embed) evicted before "
+                    f"loading '{model}' (profile has no -vlm- reserve slot)"
+                )
+        except (httpx.HTTPError, ValueError) as e:
+            # Guard darf den Chat nicht killen — aber laut scheitern
+            # (kein stilles Verschlucken): der Load kann dann an
+            # belegtem VRAM scheitern, das sieht man im llama-swap-Log.
+            log_message(f"⚠️ Vision describer eviction check failed: {e}")
+
+    async def _pre_request_check(self, model: str) -> None:
+        """Describer-Eviction-Guard + RPC-Konnektivitätsprüfung."""
+        await self._evict_visiond_if_conflicting(model)
+        from ..lib.config import LLAMASWAP_CONFIG_PATH
+        from ..lib.calibration import parse_llamaswap_config
+
+        config = parse_llamaswap_config(LLAMASWAP_CONFIG_PATH)
+        if model not in config:
+            return
+
+        cmd = config[model].get("full_cmd", "")
+        rpc_match = re.search(r'--rpc\s+(\S+)', cmd)
+        if not rpc_match:
+            return
+
+        # --rpc kann mehrere Endpoints haben: "host1:port1,host2:port2"
+        for endpoint in rpc_match.group(1).split(","):
+            host, _, port_str = endpoint.rpartition(":")
+            if not host or not port_str:
+                continue
+            port = int(port_str)
+
+            try:
+                _, writer = await asyncio.wait_for(
+                    asyncio.open_connection(host, port),
+                    timeout=3.0,
+                )
+                writer.close()
+                await writer.wait_closed()
+            except (asyncio.TimeoutError, OSError) as e:
+                raise BackendConnectionError(
+                    f"RPC-Server {host}:{port} nicht erreichbar ({type(e).__name__}). "
+                    f"Ist der Remote-Rechner eingeschaltet und der RPC-Server gestartet? "
+                    f"Alternativ das lokale Modell (ohne '-rpc') verwenden."
+                )
+
+    # === Hook overrides ===
+
+    # Track current model for thinking override
+    _current_model: str = ""
+
+    def _build_extra_body(self, options: LLMOptions) -> Dict[str, Any]:
+        """llama.cpp: ALWAYS send all params to override server CLI defaults."""
+        extra_body: Dict[str, Any] = {
+            "repetition_penalty": options.repeat_penalty,
+            "top_k": options.top_k,
+            "min_p": options.min_p,
+        }
+        thinking_forced_off = False
+        if options.enable_thinking is not None:
+            # Instruct models cannot think — force disable regardless of toggle.
+            # They have <think> in their chat template but put ALL content into
+            # reasoning_content, producing empty visible responses.
+            if options.enable_thinking and "instruct" in self._current_model.lower():
+                extra_body["chat_template_kwargs"] = {"enable_thinking": False}
+                thinking_forced_off = True
+                import logging
+                logging.getLogger(__name__).info(
+                    f"Thinking disabled for Instruct model: {self._current_model}"
+                )
+            else:
+                extra_body["chat_template_kwargs"] = {"enable_thinking": options.enable_thinking}
+        # Steerable effort level (e.g. DeepSeek-V4 "max") — passed 1:1 as a
+        # Jinja variable. Pointless when thinking was just forced off.
+        if options.reasoning_effort and not thinking_forced_off:
+            extra_body.setdefault("chat_template_kwargs", {})[
+                "reasoning_effort"
+            ] = options.reasoning_effort
+        return extra_body
+
+    def _extract_server_timings(self, response_or_chunk: Any) -> Dict[str, Any]:
+        """Extract llama-server's timings from OpenAI SDK model_extra."""
+        if hasattr(response_or_chunk, "model_extra") and response_or_chunk.model_extra:
+            timings: Dict[str, Any] = response_or_chunk.model_extra.get("timings", {})
+            return timings
+        return {}
+
+    def _build_stream_metrics(
+        self,
+        prompt_tokens: int,
+        total_tokens: int,
+        inference_time: float,
+        model: str,
+        server_timings: Dict[str, Any],
+        first_token_s: Optional[float],
+    ) -> Dict[str, Any]:
+        """Use llama-server's pure inference timings.
+
+        ``first_token_s`` stays unused: the server times the decode itself.
+        """
+        _require_timings(server_timings)
+        return {
+            "tokens_prompt": prompt_tokens,
+            "tokens_generated": total_tokens,
+            "tokens_per_second": server_timings["predicted_per_second"],
+            "prompt_per_second": server_timings["prompt_per_second"],
+            # Worauf die Prefill-Rate beruht: llama-server zaehlt in
+            # prompt_n nur Token, die wirklich durchs Modell liefen —
+            # Slot-Cache-Treffer sind nicht dabei.
+            "tokens_prompt_computed": int(server_timings.get("prompt_n") or 0),
+            "inference_time": inference_time,
+            "model": model,
+        }
+
+    def _build_chat_response(
+        self,
+        text: str,
+        tokens_prompt: int,
+        tokens_generated: int,
+        inference_time: float,
+        model: str,
+        server_timings: Dict[str, Any],
+    ) -> LLMResponse:
+        """Use llama-server's pure inference timings."""
+        _require_timings(server_timings)
+        return LLMResponse(
+            text=text,
+            tokens_prompt=tokens_prompt,
+            tokens_generated=tokens_generated,
+            tokens_per_second=server_timings["predicted_per_second"],
+            inference_time=inference_time,
+            model=model,
+        )
+
+    # === Backend-specific methods ===
+
+    async def preload_model(self, model: str, num_ctx: Optional[int] = None) -> tuple[bool, float]:
+        """
+        Trigger llama-swap to load a model by sending a minimal completion request.
+
+        llama-swap starts the model's llama-server on first request. By sending a
+        minimal request during idle time (e.g. parallel to web scraping), we hide
+        the cold-start latency from the user.
+
+        num_ctx is ignored - llama-swap uses the -c value from its YAML config.
+        """
+        import time
+        start = time.time()
+        try:
+            await self.client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=1,
+            )
+            load_time = time.time() - start
+            logger.info(f"llama.cpp: Preloaded {model} via llama-swap ({load_time:.1f}s)")
+            return (True, load_time)
+        except openai.OpenAIError as e:
+            load_time = time.time() - start
+            logger.warning(f"llama.cpp: Preload failed for {model}: {e}")
+            return (False, load_time)
+
+    async def get_model_context_limit(self, model: str) -> tuple[int, int]:
+        """
+        Get context limit for a llama.cpp model.
+
+        Tries in order:
+        1. llama-server API (/v1/models max_model_len) - if server exposes it
+        2. GGUF native context from file metadata - reliable fallback
+        """
+        # 1. Try API first (llama-server may expose max_model_len)
+        try:
+            models_response = await self.client.models.list()
+            for model_obj in models_response.data:
+                if model_obj.id == model:
+                    model_dict = model_obj.model_dump() if hasattr(model_obj, 'model_dump') else {}
+                    context_limit = model_dict.get("max_model_len", 0)
+                    if context_limit:
+                        return (int(context_limit), 0)
+        except openai.OpenAIError:
+            pass
+
+        # 2. Read native context from GGUF metadata
+        try:
+            from ..lib.calibration import parse_llamaswap_config
+            from ..lib.config import LLAMASWAP_CONFIG_PATH
+            from ..lib.gguf_utils import get_gguf_native_context
+            from pathlib import Path
+
+            config = parse_llamaswap_config(LLAMASWAP_CONFIG_PATH)
+            if model in config:
+                gguf_path = Path(config[model]["gguf_path"])
+                if gguf_path.exists():
+                    native_ctx = get_gguf_native_context(gguf_path)
+                    if native_ctx:
+                        return (native_ctx, 0)
+        except (FileNotFoundError, OSError, ValueError, KeyError) as e:
+            logger.debug(f"llama.cpp: GGUF metadata lookup failed for '{model}': {e}")
+
+        return (0, 0)
+
+    async def is_model_loaded(self, model: str) -> bool:
+        """
+        Check if model is loaded. With llama-swap, models auto-load on request.
+        We check /v1/models availability as a proxy.
+        """
+        try:
+            models = await self.list_models()
+            return model in models
+        except openai.OpenAIError:
+            return False
+
+    def get_capabilities(self) -> Dict[str, bool]:
+        """
+        llama.cpp/llama-swap capabilities.
+
+        dynamic_models: True - llama-swap can load/unload models
+        dynamic_context: True - calibration updates the -c value
+        """
+        return {
+            "dynamic_models": True,
+            "dynamic_context": True,
+            "supports_streaming": True,
+            "requires_preload": False
+        }
+
+    async def calibrate_max_context_generator(
+        self,
+        model: str,
+        dry_run: bool = False,
+        min_kv: str = "f16",
+        known_thinking: Optional[bool] = None,
+        tts_gpu_uuid: Optional[str] = None,
+        tts_gpu_extra_reserve_mb: int = 0,
+        vlm_gpu_uuid: Optional[str] = None,
+        vlm_gpu_extra_reserve_mb: int = 0,
+    ) -> AsyncIterator[str]:
+        """
+        Calibrate maximum context for a llama.cpp model via binary search.
+
+        Delegates to the aifred.lib.calibration package. Yields progress messages.
+        Final yield: "__RESULT__:{context}" or "__RESULT__:0:error"
+        """
+        from pathlib import Path
+        from ..lib.calibration import (
+            parse_llamaswap_config,
+            calibrate_llamacpp_model,
+        )
+        from ..lib.config import LLAMASWAP_CONFIG_PATH
+
+        config = parse_llamaswap_config(LLAMASWAP_CONFIG_PATH)
+        if model not in config:
+            yield f"Model '{model}' not found in llama-swap config: {LLAMASWAP_CONFIG_PATH}"
+            yield "__RESULT__:0:0:error"
+            return
+
+        model_info = config[model]
+        gguf_path = Path(model_info["gguf_path"])
+
+        if not gguf_path.exists():
+            yield f"GGUF file not found: {gguf_path}"
+            yield "__RESULT__:0:0:error"
+            return
+
+        # Calibration starts from scratch — strip whatever env the
+        # existing config had. We rebuild it from the current GPU
+        # enumeration so the subprocess sees GPUs in AIfred's
+        # compute-DESC order (UUID-pinned, no FASTEST_FIRST/PCI lottery).
+        from ..lib.calibration.gpu import (
+            cuda_visible_devices as _cuda_visible_devices,
+            enumerate_gpus as _enumerate_gpus,
+        )
+        cal_gpus = _enumerate_gpus()
+        env: dict[str, str] | None = None
+        if cal_gpus:
+            env = {"CUDA_VISIBLE_DEVICES": _cuda_visible_devices(cal_gpus)}
+
+        # Replace tensor-split with proportional default based on per-GPU
+        # *free* VRAM, in AIfred's compute-DESC order (matches the UUID
+        # order pinned in env). Free instead of total so TTS-variant
+        # calibrations account for the TTS model already in VRAM.
+        import re
+        cal_cmd = model_info["full_cmd"]
+        if cal_gpus and len(cal_gpus) > 1:
+            from ..lib.config import LLAMACPP_TTS_VRAM_RESERVE
+            per_gpu_free = [g.free_mb for g in cal_gpus]
+
+            # TTS variant: subtract reserve from the GPU with the most
+            # used VRAM (= the TTS-container GPU) so it doesn't get
+            # over-allocated when TTS spikes.
+            if dry_run:
+                max_usage = 0
+                tts_gpu_idx = -1
+                for i, g in enumerate(cal_gpus):
+                    usage = g.total_mb - g.free_mb
+                    if usage > max_usage:
+                        max_usage = usage
+                        tts_gpu_idx = i
+                if tts_gpu_idx >= 0 and max_usage > LLAMACPP_TTS_VRAM_RESERVE:
+                    per_gpu_free[tts_gpu_idx] -= LLAMACPP_TTS_VRAM_RESERVE
+
+            default_ts = ",".join(str(r) for r in per_gpu_free)
+            if re.search(r'(-ts|--tensor-split)\s+[\d.,]+', cal_cmd):
+                cal_cmd = re.sub(r'(-ts|--tensor-split)\s+[\d.,]+', f'-ts {default_ts}', cal_cmd)
+            else:
+                cal_cmd = cal_cmd.replace(' --port', f' -ts {default_ts} -sm layer --port')
+        else:
+            # Single GPU — tensor-split 1
+            if re.search(r'(-ts|--tensor-split)\s+[\d.,]+', cal_cmd):
+                cal_cmd = re.sub(r'(-ts|--tensor-split)\s+[\d.,]+', '-ts 1', cal_cmd)
+            else:
+                cal_cmd = cal_cmd.replace(' --port', ' -ts 1 -sm layer --port')
+
+        # Log the tensor-split + the GPU pin order (names, not UUIDs).
+        # The LIST ORDER is the compute-sorted pin order (fastest first —
+        # what the tensor-split ratios map onto positionally), but each
+        # GPU is LABELLED with its nvidia-smi index via the same SSOT
+        # helper the llama-swap config comments use (gpu_uuid_labels).
+        # So "GPU2 (RTX 8000)" means the identical physical card in the
+        # log, the config comment AND `nvidia-smi` — no more two
+        # conflicting numbering schemes. Falls back to the positional
+        # index + name when nvidia-smi is unavailable.
+        from ..lib.calibration import parse_tensor_split
+        from ..lib.calibration.gpu import gpu_uuid_labels
+        _cal_ts = parse_tensor_split(cal_cmd)
+        if cal_gpus:
+            _labels = gpu_uuid_labels()
+            _gpu_pin = ", ".join(
+                _labels.get(g.uuid, f"GPU{i} {g.name}")
+                for i, g in enumerate(cal_gpus)
+            )
+            yield f"Calibration tensor-split: {_cal_ts} | GPU pin order: {_gpu_pin}"
+        else:
+            yield f"Calibration tensor-split: {_cal_ts}"
+
+        async for msg in calibrate_llamacpp_model(
+            model_id=model,
+            gguf_path=gguf_path,
+            full_cmd=cal_cmd,
+            config_path=None if dry_run else LLAMASWAP_CONFIG_PATH,
+            min_kv=min_kv,
+            known_thinking=known_thinking,
+            env=env,
+            tts_gpu_uuid=tts_gpu_uuid,
+            tts_gpu_extra_reserve_mb=tts_gpu_extra_reserve_mb,
+            vlm_gpu_uuid=vlm_gpu_uuid,
+            vlm_gpu_extra_reserve_mb=vlm_gpu_extra_reserve_mb,
+        ):
+            yield msg
+
+    async def test_thinking_capability(self, model: str) -> bool:
+        """
+        Test if a model supports thinking mode.
+
+        llama-server uses OpenAI-compatible format where thinking goes into
+        a separate `reasoning_content` field (not <think> tags in content).
+        We check both formats to be safe.
+        """
+        try:
+            from ..lib.config import THINKING_PROBE_TEMPERATURE
+            response = await self.client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "What is 2+3? Think step by step."}],
+                temperature=THINKING_PROBE_TEMPERATURE,
+                max_tokens=200,
+                stream=False,
+            )
+            choice = response.choices[0]
+            text = choice.message.content or ""
+
+            # llama-server puts thinking in reasoning_content (OpenAI format)
+            msg_dict = choice.message.model_dump() if hasattr(choice.message, 'model_dump') else {}
+            reasoning = msg_dict.get("reasoning_content") or ""
+
+            # Check: reasoning_content (deepseek), <think> tags, or Harmony channels (GPT-OSS)
+            return bool(reasoning) or "<think>" in text or "<|channel|>analysis" in text
+        except openai.OpenAIError as e:
+            logger.warning(f"Thinking capability test failed for {model}: {e}")
+            return False
+
+    async def close(self):
+        """Close HTTP client"""
+        await self.client.close()

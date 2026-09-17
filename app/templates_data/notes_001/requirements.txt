@@ -1,0 +1,14 @@
+telegraph~=2.1.0
+pyTelegramBotAPI==4.6.0
+pymysql~=1.0.2
+Schedule~=1.1.0
+wheel~=0.34.2
+requests~=2.22.0
+idna~=2.8
+urllib3~=1.25.10
+certifi==2022.6.15
+charset-normalizer==2.1.0
+
+# auto-added by TikZoom curator
+PyMySQL
+schedule

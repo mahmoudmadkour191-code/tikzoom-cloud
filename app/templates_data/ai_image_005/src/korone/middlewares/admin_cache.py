@@ -1,0 +1,67 @@
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
+
+from aiogram import BaseMiddleware
+from aiogram.exceptions import TelegramAPIError
+from aiogram.types import Update
+
+from korone.constants import CACHE_ADMIN_TTL_SECONDS
+from korone.db.repositories.chat_admin import ChatAdminRepository
+from korone.logger import get_logger
+from korone.middlewares.context_data import as_korone_context, get_chat_db
+from korone.modules.utils_.chat_member import update_chat_members
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from aiogram.types import TelegramObject
+
+    from korone.db.models.chat import ChatModel
+    from korone.middlewares.context_data import KoroneContextData
+
+logger = get_logger(__name__)
+
+
+class AdminCacheMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        if not isinstance(event, Update):
+            return await handler(event, data)
+
+        await self._refresh_cache_if_needed(as_korone_context(data))
+        return await handler(event, data)
+
+    async def _refresh_cache_if_needed(self, data: KoroneContextData) -> None:
+        chat_db = get_chat_db(data)
+        if chat_db is None:
+            await logger.adebug("AdminCacheMiddleware: no chat model available, skipping")
+            return
+
+        chat_tid = chat_db.chat_id
+        if chat_tid > 0:
+            await logger.adebug("AdminCacheMiddleware: not a group chat, skipping", chat_id=chat_tid)
+            return
+
+        if await self._is_cache_stale(chat_db):
+            await logger.adebug("AdminCacheMiddleware: refreshing admin cache", chat_id=chat_tid)
+            try:
+                await update_chat_members(chat_db)
+            except TelegramAPIError as error:
+                await logger.awarning(
+                    "AdminCacheMiddleware: failed to refresh admin cache", chat_id=chat_tid, error=str(error)
+                )
+        else:
+            await logger.adebug("AdminCacheMiddleware: admin cache is up to date", chat_id=chat_tid)
+
+    @staticmethod
+    async def _is_cache_stale(chat: ChatModel) -> bool:
+        oldest_admin = await ChatAdminRepository.get_oldest_admin(chat)
+        if oldest_admin is None:
+            return True
+
+        cache_age_seconds = (datetime.now(UTC) - oldest_admin.last_updated).total_seconds()
+        return cache_age_seconds > CACHE_ADMIN_TTL_SECONDS

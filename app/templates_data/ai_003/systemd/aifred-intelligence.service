@@ -1,0 +1,55 @@
+[Unit]
+Description=AIfred Intelligence Voice Assistant (Reflex Version)
+After=network.target ollama.service aifred-chromadb.service
+Wants=ollama.service aifred-chromadb.service
+# Wants statt Requires: ChromaDB-Recreate (z.B. docker-auto-update.sh
+# 03:00) loest sonst einen Cascade-Stop von AIfred aus, was laufende
+# Indexierungs-Jobs killt. AIfred starten ohne ChromaDB ist unschoen,
+# aber besser als der Cascade-Restart bei jedem ChromaDB-Image-Pull.
+
+[Service]
+Type=simple
+# Optional .env-Datei einlesen (Secrets, machine-specific Overrides).
+# `-` Prefix: kein Fehler wenn die Datei fehlt — viele Setups brauchen
+# keine .env, sondern setzen ihre Werte direkt unten als Environment=.
+EnvironmentFile=-__PROJECT_DIR__/.env
+User=__USER__
+Group=__USER__
+WorkingDirectory=__PROJECT_DIR__
+Environment="PATH=__PROJECT_DIR__/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+# Hot-Reload-Ausschluesse berechnet rxconfig.py aus dem Verzeichnisinhalt
+# (alles ausser aifred/) — hier bewusst KEIN REFLEX_HOT_RELOAD_EXCLUDE_PATHS,
+# eine feste Liste mit einem fehlenden Pfad laesst das Backend beim Start sterben.
+# Heap-Size fuer Bun (Frontend-Runner) und Node (react-router dev) hochsetzen.
+# Default ist 512 MB — bei einem 793 KB grossen _index.jsx (alle Modals
+# eager im Bundle) crasht der Frontend-Prozess regelmaessig mit SIGTERM
+# und reisst das Backend mit. 4 GB Heap gibt deutlich mehr Headroom waehrend
+# laufender Indexierungs-Jobs (viele State-Updates).
+Environment="NODE_OPTIONS=--max-old-space-size=4096"
+Environment="BUN_MAX_OLD_SPACE_SIZE=4096"
+# ─────────────────────────────────────────────────────────────────
+# Machine-specific overrides — uncomment + adjust if needed:
+#
+# Behind a nginx reverse-proxy at /aifred? Set the frontend path so
+# Reflex generates absolute asset URLs that include the prefix.
+# Environment=AIFRED_FRONTEND_PATH=aifred
+#
+# llama-swap not on the default port 11434?
+# Environment="LLAMACPP_URL=http://localhost:11435/v1"
+#
+# Calibration probe port collides with another service (default 9999)?
+# Environment="LLAMACPP_CALIBRATION_PORT=19999"
+# ─────────────────────────────────────────────────────────────────
+# Reflex patch — fixes the frontend_path route-matching bug
+# (see CLAUDE.md). Idempotent: safe to run on every start.
+ExecStartPre=/bin/bash __PROJECT_DIR__/scripts/patch-vite-config.sh
+ExecStart=__PROJECT_DIR__/venv/bin/python -m reflex run --frontend-port 3002 --backend-port 8002 --backend-host 0.0.0.0
+Restart=always
+KillMode=control-group
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

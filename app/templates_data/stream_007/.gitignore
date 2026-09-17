@@ -1,0 +1,13 @@
+.env
+.cache
+log.txt
+.DS_Store
+*.session
+raw_files/
+cache/
+downloads/
+__pycache__/
+*.session-journal
+#© Daxx Team
+#######
+userinfo_img_*.png

@@ -1,0 +1,255 @@
+# System Architecture
+
+Component flow:
+
+- Telegram Bot (`bot.py` + `handlers/`) drives outbound to tmux via `send_keys` and receives inbound via SessionMonitor callbacks. Handler registration in `handlers/registry.py`. Post_init wiring in `bootstrap.py`. Outbound formatting goes through `entity_formatting.py` (MD → plain + `MessageEntity`) and `telegram_sender.py` (`split_message`, 4096 limit). Per-user FIFO queue + worker + rate limiting in `messaging_pipeline/`. Terminal parsing via pyte (`screen_buffer.py`, `terminal_parser.py`).
+- SessionMonitor (`session_monitor.py`) polls JSONL transcripts (2s, mtime cache, byte-offset incremental reads) and reads `events.jsonl` incrementally for instant hook dispatch.
+- Multiplexer seam (`multiplexer/`) abstracts the terminal multiplexer behind the `Multiplexer` Protocol. tmux is the default backend (`multiplexer/tmux.py`, `TmuxManager`): list/find/create/kill windows, `send`, `capture`, `list_panes`, `send_to_pane`. Callers import the module-level `multiplexer` proxy, never a concrete backend.
+- TranscriptParser (`transcript_parser.py`) parses JSONL via `parse_entries`/`parse_history` public API; delegates to `_handle_*` methods and tracks `_ParseState` internally. Pairs tool_use ↔ tool_result, emits expandable quotes for thinking/history. Callers must not bypass the public API.
+- Hook (`hook.py`) receives Claude Code hook stdin, writes `session_map.json` + `events.jsonl`. Serialization contracts (version constants, required-field validation, schema migration) owned by `hooks.state_files`; `hook.py` and `session_map.py` both route through it.
+- SessionManager + ThreadRouter resolve window ↔ session, own thread bindings and message history.
+- State files in `~/.ccgram/`: `state.json` (thread bindings, window states, display names, read offsets), `session_map.json` (hook-generated window_id → session), `events.jsonl` (append-only hook event log), `monitor_state.json` (byte offsets per JSONL file).
+
+Claude session transcripts live under `~/.claude/projects/` (`sessions-index` + `*.jsonl`).
+
+## Module Inventory
+
+### `multiplexer/`
+
+Backend-neutral terminal-multiplexer seam (mirrors the `providers/` seam). Callers import the module-level `multiplexer` proxy and type against `multiplexer.base.Multiplexer`; they must not import a concrete backend (`multiplexer.tmux`/`multiplexer.herdr`/`multiplexer.agterm`). Enforced by the F1 boundary audit (`tests/ccgram/test_multiplexer_boundary.py`). Backend selected by `CCGRAM_MULTIPLEXER` (default `tmux`), wired in `bootstrap.py` from `config.multiplexer_name`.
+
+- `base.py` — core, pure: `Multiplexer` Protocol, `MultiplexerCapabilities` dataclass (`name` + eleven capability flags: `ids_stable_across_restart`, `exposes_pane_tty`, `native_agent_status`, `read_max_lines`, `self_identify_env`, `supports_event_stream`, `native_worktrees`, `supports_display_name_rebind`, `recovers_stale_ids_by_name`, `supports_workspace_selection`, `native_topic_targets`), and neutral value types `WindowRef`, `PaneInfo`, `CaptureResult`, `ForegroundInfo`, `PaneDims`, `AgentStatus`, `MuxEvent`. No backend imports, no I/O library (F3 core-purity audit). `watch_events(window_ids) -> AsyncGenerator[MuxEvent, None]` streams push events (`kind` ∈ `{"agent_status","window_died"}`) on `supports_event_stream` backends (herdr); tmux returns an empty async generator. Consumed by `event_stream_monitor.EventStreamMonitor`, gated on `supports_event_stream`. `agent_status(window_id) -> AgentStatus | None` exposes native agent run-state on `native_agent_status` backends (herdr and agterm); tmux returns None. `split_window(window_id) -> str | None` adds a sibling pane (herdr `pane split`, tmux `window.split()`) — the multi-pane "agent team" shape, driven by the `/split` command. `create_worktree_window(repo_path, worktree_path, branch, …) -> (ok, msg, name, window_id)` creates a git worktree _and_ the window running in it in one step on `native_worktrees` backends (herdr); tmux returns a not-supported failure tuple. `WindowRef.topic_eligible` is the backend-owned verdict on whether unattended discovery may adopt a live window. It travels on complete reconciliation listings so liveness and adoption remain separate; `WindowRef.alias_window_ids` remains the migration channel for superseded identities.
+- `tmux.py` — adapter: `TmuxManager` (tmux backend) satisfying `Multiplexer`, returns the neutral value types, exposes tmux `capabilities` (`ids_stable_across_restart=True`, `exposes_pane_tty=True`, `native_agent_status=False`, `read_max_lines=None`, `self_identify_env="TMUX_PANE"`, `supports_event_stream=False`, `native_worktrees=False`, `supports_display_name_rebind=True`, `recovers_stale_ids_by_name=True`, `supports_workspace_selection=False`, `native_topic_targets=False`). `create_worktree_window` returns a not-supported failure tuple (callers gate on `native_worktrees`). Owns the single `tmux_manager` singleton. `foreground(window_id)` is the sole `pane_tty` + `ps -t <tty>` site in the codebase (the private detail behind the seam's foreground source); shell tool-detection and provider auto-detection read it through the `multiplexer.foreground()` proxy, never a tty.
+- `herdr.py` — adapter: `HerdrManager` (herdr backend) satisfying `Multiplexer`, an anti-corruption layer over the `herdr` CLI/socket. All herdr JSON shapes and `wN:tN`/`wN:pN` ids stay private; methods return the neutral value types. **Guarded session identity:** `window_id` is an opaque `herdr-session-v1-…` target derived from Herdr's complete `agent_session` composite — one ccgram topic = one reported agent session; bare shells and unsupported sessions do not surface; known Claude, Codex and Gemini hook-capable sessionless records use a terminal fallback identity; Pi is deliberately excluded. I/O-free constructor with an injectable command runner (unit-tested with JSON fixtures); `HERDR_PROTOCOL_VERSION` is the maximum of the static supported set (14–20). `ensure_session` accepts supported versions silently and warns but continues for versions outside that set or a false CLI compatibility flag, leaving transport and schema failures to individual commands. `list_windows` builds one `WindowRef` per complete agent-session record: it resolves workspace/tab labels, includes the pane locator for display, and stamps `format_agent_topic_prefix(workspace_label, tab_label, pane, provider=agent)` → `"<Provider> ▸ <workspace> ▸ <tab> ▸ <pane>"` into `WindowRef.window_name`; skips workspace/tab labels matching `^__.*__$` so ccgram never auto-adopts itself. `create_window` returns a guarded opaque agent-session target as `window_id`. Agent actions guard the target against a fresh `agent.list` snapshot and use that record's current pane locator; sessionless, missing, malformed, and duplicate targets fail closed. `kill_window` closes the resolved pane; `rename_window` renames the resolved tab. herdr `capabilities` (`ids_stable_across_restart=False`, `exposes_pane_tty=False`, `native_agent_status=True`, `read_max_lines=1000`, `self_identify_env="HERDR_PANE_ID"`, `supports_event_stream=True`, `native_worktrees=True`, `supports_display_name_rebind=False`, `recovers_stale_ids_by_name=False`, `supports_workspace_selection=True`, `native_topic_targets=True`). `create_worktree_window` delegates to one `herdr worktree create --branch <ccg/…> --path <path> --no-focus --json` (makes the checkout + a workspace+tab+pane grouped under the parent repo) then `pane run`s the launch command; the `/new` worktree step routes through it (gated on `native_worktrees`), skipping ccgram's `git worktree add` and the workspace picker. `foreground(window_id)` maps `pane process-info.foreground_processes[]` → `ForegroundInfo` (pid/argv/cwd; `pgid` from `foreground_process_group_id`) — no tty, since `exposes_pane_tty=False`. `agent_status(window_id)` reads the active pane's `pane.agent_status` (`working`/`idle`/`done`/`blocked`/`unknown`) → `AgentStatus`; consumed by `observe._native_agent_status` (push cache first, this subprocess as cold-cache fallback) to gap-fill the status line for non-Claude agents when terminal scraping yields nothing. `watch_events(window_ids)` opens a persistent `events.subscribe` connection (the only long-lived socket reader; socket I/O isolated in `herdr_events.py`, injectable as `stream_opener`) — global `tab.closed` plus target-specific `pane.exited`/`pane.closed` death events, and per-pane `pane.agent_status_changed`; reprimes status after the subscribe is live, reconnects with backoff on drop. herdr's `event` form is inconsistent (dot `pane.agent_status_changed` vs underscore `tab_closed`); `herdr_events.translate_event` matches both. Scrollback captures clamp to `read_max_lines` (1000) and set `CaptureResult.truncated` so a >1000-line command surfaces truncation instead of silently dropping output. Session-map key is `herdr:<opaque-target-id>`; `session_map_prefix()` used in cleanup/lifecycle/transcript_discovery (backend-neutral key surface). CB_PANE_DELIMITER `"|"` used for pane callback encoding (avoids collision with the colon in herdr ids). Workspace picker step in `/new` flow gated on `supports_workspace_selection`. Contract validated by `tests/ccgram/test_herdr_backend.py` (unit) + `tests/integration/test_herdr_contract.py` (`-m herdr`, live socket); shell-on-herdr by `tests/integration/test_shell_herdr.py` (`-m herdr`).
+- `agterm.py` — adapter: `AgtermManager` (agterm backend) satisfying `Multiplexer`, an anti-corruption layer over the `agtermctl` CLI/socket. All agterm JSON shapes and `surface:<uuid>:<role>` locators stay private. **Session identity:** `window_id = the agterm session UUID` — one ccgram topic = one agterm session; agterm persists and restores that UUID in its per-window state file, so `ids_stable_across_restart=True` and no alias reconciliation is needed. I/O-free constructor with an injectable command runner (unit-tested with JSON fixtures). agterm `capabilities` (`ids_stable_across_restart=True`, `exposes_pane_tty=False`, `native_agent_status=True`, `read_max_lines=None`, `self_identify_env="AGTERM_SESSION_ID"`, `supports_event_stream=False`, `native_worktrees=False`, `supports_display_name_rebind=True`, `recovers_stale_ids_by_name=False`, `supports_workspace_selection=True`, `native_topic_targets=False`). **Native agent status.** agterm reports status through `tree.status`; topic eligibility is carried by `WindowRef.topic_eligible`, so native status and topic adoption are independent concerns. Workspace selection is gated by `supports_workspace_selection`. **Explicit pane on every call:** `session text` with no `--pane` reads the visible/focused pane while `session type` with no `--pane` injects into the main pane, so every capture and injection names `left` (where the agent runs) instead of relying on either default. **No sibling handle:** agterm promotes the split survivor into the main pane when the primary exits, so the `right` role is not a stable identity — `split_window` returns None and `list_panes` returns `[]`, per the Protocol's rule for a backend that cannot expose a safe sibling locator. `send(..., literal=False)` translates tmux key names (`Escape`, `C-c`, `Up`, `M-Enter`) to pty bytes via a private table and passes them on **stdin**, never argv; agterm's `session type` writes every byte through verbatim apart from newlines, which become a Return keypress. `foreground(window_id)` maps `tree.foreground` → `ForegroundInfo` (argv and cwd only; pid/pgid are 0 and tty is empty, since `exposes_pane_tty=False`). `providers/process_detection.py` classifies agterm's foreground argv even when `fg.pgid == 0`; providers named directly still resolve through `WindowRef.pane_current_command`, while wrapped providers use the argv fallback without caching. `capture_*` ignore `with_ansi`: agterm returns UTF-8 grid text with no SGR, but spacing, row boundaries and box-drawing survive intact, so structural parsing is unaffected and only rendered screenshots lose styling (the renderer falls back to default styles). `create_window` passes `--no-select` so an automated creation never steals the selection from whoever is at the keyboard. `create_worktree_window` returns a not-supported failure tuple. Session-map key is `agterm:<session-uuid>`. **Discovery scope:** agterm has no per-application container the way tmux has its own session, so `list_windows` is filtered to the `CCGRAM_AGTERM_WORKSPACES` environment value (default `ccgram`, `*` for all) plus the self/underscore exclusions; without it every session the user has open would surface as a topic. `list_windows_for_reconciliation` is deliberately **unfiltered** — cleanup asks what exists, not what may be adopted, so a bound session moved to another workspace does not read as gone and get pruned. **Reads merge every open window:** `tree` is placement-scoped to the frontmost window (`controlTree` → `resolvePlacementStore` → `library.activeStore`), so `_tree()` enumerates `window list` and merges `tree --window <id>`, skipping closed windows and failing closed on any error; `--target` session commands resolve cross-window and need no widening. The shell provider does not work on this backend. agterm exposes `foregroundShell`, but the adapter deliberately does not treat that value as proof of an idle prompt: a shell builtin or loop has the same shell name, so guessing could type prompt syntax into a running command. `doctor` and `status` dispatch on backend name (an agterm socket check; a seam-based listing) instead of falling through to tmux. Contract validated by `tests/ccgram/test_agterm_backend.py`.
+- `registry.py` — `get_multiplexer(name)` + singleton cache (mirrors `providers/registry.py`); backends (`tmux`, `herdr`, `agterm`) imported lazily inside their factory so the core stays I/O-free. `UnknownMultiplexerError` on unknown names.
+- `__init__.py` — `multiplexer` proxy (forwards to the wired backend; raises a clear "not wired" error before bootstrap), `install_multiplexer`/`get_active_multiplexer` wiring, re-exports `get_multiplexer`.
+- `herdr_events.py` — herdr push-event-stream plumbing (the only long-lived unix-socket reader). `open_socket_stream(socket_path, subscriptions)` async-generates pushed event dicts (yields a `SUBSCRIBED` sentinel after the ack so the caller reprimes once the subscription is live); `translate_event(obj, pane_to_window, tab_to_windows) -> tuple[MuxEvent, ...]` maps a herdr event dict → neutral events for watched targets; a `tab.closed` fans out to every target sharing that tab. Injected into `HerdrManager` as `stream_opener` for socket-free unit tests.
+- `agent_status_cache.py` — backend-neutral push-updated `window_id → AgentStatus` cache (mirrors `vim_state.py`; depends only on `base.AgentStatus`). The event-stream consumer writes it; `observe._native_agent_status` reads it (push-primary) and `apply._handle_dead_window_notification` evicts on death. Single event-loop thread, so a plain dict (no lock).
+- `vim_state.py` — backend-neutral vim-insert detection cache (`_vim_state`/`_vim_locks`, `notify_vim_insert_seen`). Lives outside the tmux backend so the polling layer can import the detection helpers without importing a concrete backend (F1 boundary).
+- `window_ops.py` — backend-neutral `send_to_window`/`send_followup_to_window` convenience wrappers over the active `multiplexer` proxy + thread router.
+- `self_identify.py` — backend-neutral hook identity resolver (`resolve_self_identity(env)` → `SelfIdentity`). Picks the backend by which `self_identify_env` var is present, in order (`$TMUX_PANE` → tmux via injected `tmux_query`; `$HERDR_PANE_ID` → herdr; `$AGTERM_SESSION_ID` → agterm, no probe). agterm is checked **last**: every shell agterm spawns inherits `AGTERM_SESSION_ID`, including one running a nested tmux or herdr, so an earlier check would claim panes owned by the inner multiplexer. I/O-free: the tmux `display-message` probe is injected by `hook.py` (its `_resolve_window_id`), so the hook (separate process) keeps the subprocess and the resolver stays table-testable. The tmux branch is byte-identical to the previous direct path.
+- `topic_mapping.py` — backend-neutral projection of multiplexer windows onto Telegram topics (consumer of the seam, not part of the `Multiplexer` contract). Two pure helpers. `is_agent_topic_window(window, caps)`: the discovery filter for whether a live window may be adopted; it returns the backend-stamped `WindowRef.topic_eligible`. Topic eligibility is independent of native agent status: Herdr and agterm stamp only agent windows as eligible, while tmux ordinary windows are eligible and excluded windows are marked ineligible in reconciliation. `format_agent_topic_prefix(workspace, tab, pane="", *, provider="")`: renders `"<Provider> ▸ <workspace> ▸ <tab> ▸ <pane>"` for Herdr agent topics while empty parts degrade gracefully; the Herdr adapter stamps it into `WindowRef.window_name`; the status emoji is prepended later by `topic_emoji`. Imported by `session_monitor._emit_unbound_window_events` (discovery) and `multiplexer.herdr` (labels). Lives outside the tmux backend so core + handlers can use it without crossing the F1 boundary.
+
+### `providers/`
+
+- `base.py` — `AgentProvider` protocol, `ProviderCapabilities`, event types.
+- `registry.py` — `ProviderRegistry` (name→factory, singleton cache).
+- `_jsonl.py` — shared JSONL parsing base for Codex + Gemini + Pi.
+- `claude.py`, `codex.py`, `gemini.py`, `pi.py` — provider implementations.
+- `pi_format.py` — Pi transcript parsers (user/assistant/toolResult/bashExecution, session header, pending-tool tracking).
+- `pi_discovery.py` — Pi command discovery (builtins + skills + prompts + `pi.registerCommand` scans).
+- `codex_status.py`, `codex_format.py` — Codex status snapshot + permission/tool prompt formatter.
+- `shell.py` — slim ShellProvider (re-exports from `shell_infra`).
+- `shell_infra.py` — prompt-marker detection, `KNOWN_SHELLS`, `PromptMatch`, `setup_shell_prompt`.
+- `process_detection.py` — provider classification from a pane's foreground process. Consumes `ForegroundInfo.argv` resolved through the seam (`multiplexer.foreground(window_id)`); never touches a tty or forks `ps` (the backend owns that — tmux `foreground()` via `ps -t <tty>`, herdr via `pane process-info`). Skips wrapper tokens, matches provider patterns, caches the result. No-tty boundary enforced by `tests/ccgram/test_no_tty_outside_backend.py`.
+- `__init__.py` — `get_provider_for_window`, `detect_provider_from_pane`, `detect_provider_from_command`, `get_provider`.
+
+### `llm/`
+
+- `base.py` — `CommandGenerator` + `TextCompleter` Protocols, `CommandResult`.
+- `httpx_completer.py` — OpenAI-compatible + Anthropic completions via httpx.
+- `summarizer.py` — completion summary (reads transcript, single-line summary for Ready).
+- `__init__.py` — provider registry + `get_completer()` / `get_text_completer()` factories.
+
+### `whisper/`
+
+- `base.py` — `WhisperTranscriber` Protocol + `TranscriptionResult`.
+- `httpx_transcriber.py` — OpenAI-compatible transcription (OpenAI, Groq, …).
+- `__init__.py` — `get_transcriber()`.
+
+### `src/ccgram/` (core)
+
+- `bot.py` — PTB Application factory + lifecycle delegates (172 lines); compat re-exports for handlers patched in tests.
+- `bootstrap.py` — `bootstrap_application()` (post_init) + `shutdown_runtime()` (post_shutdown). Named steps: `register_provider_commands`, `verify_hooks_installed`, `wire_runtime_callbacks`, `start_session_monitor`, `start_status_polling`, `start_event_stream`, `start_miniapp_if_enabled`. `start_event_stream` builds + starts the `EventStreamMonitor` only when `multiplexer.capabilities.supports_event_stream` (herdr); `shutdown_runtime` + `reset_for_testing` stop it and `agent_status_cache.reset()`. Ordering invariant: `wire_runtime_callbacks` must run before `start_session_monitor` — the monitor dispatches approval prompts to `register_approval_callback`, which raises if unwired.
+- `event_reader.py` — incremental reader for `events.jsonl`. `read_new_events(path, offset)` returns `(list[HookEvent], new_offset)`; routes each line through `hooks.state_files.parse_event_record` (validates version + required fields, skips-with-log on failure) then converts to `HookEvent`. Offset always advances past invalid lines.
+- `event_stream_monitor.py` — `EventStreamMonitor`: supervises one `multiplexer.watch_events(bound_window_ids)` subscription; routes `agent_status` events → `agent_status_cache`, `window_died` → the existing (idempotent) `_handle_dead_window_notification`. Restarts the stream when the bound set changes (herdr can't add subscriptions to a live connection); `aclosing` + cancellation close the socket deterministically. Module-level `set/get_active_event_stream` for shutdown (mirrors `session_monitor`). Started only on `supports_event_stream` backends.
+- `telegram_client.py` — `TelegramClient` Protocol covering 18 grep-verified bot API methods. `PTBTelegramClient(bot)` adapter; `FakeTelegramClient` for tests. `unwrap_bot(client)` is the escape hatch for PTB-only helpers (`do_api_request` for `DraftStream`).
+- `cc_commands.py` — CC command discovery (skills, custom) + menu registration.
+- `command_catalog.py` — provider-agnostic command discovery and caching.
+- `claude_task_state.py` — Claude task tracking from transcripts; per-window snapshots for live status bubble.
+- `cli.py` — Click CLI entry (run + bot-config flags).
+- `config.py` — application config singleton (env, .env, defaults).
+- `doctor_cmd.py` — `ccgram doctor [--fix]`.
+- `monitor_state.py` — byte-offset persistence per session.
+- `main.py` — Click dispatcher + run_bot bootstrap.
+- `screen_buffer.py` — pyte VT100 buffer (ANSI → clean lines, separator detection).
+- `screenshot.py` — terminal text → PNG (ANSI color, font fallback).
+- `session.py` — `SessionManager` constructs and owns `WindowStateStore`, `ThreadRouter`, `UserPreferences`, `SessionMapSync` via constructor DI with explicit `schedule_save` and store-specific callbacks.
+- `hook.py` — Claude Code hook CLI (`hook_main`). Runs as a short-lived subprocess inside agent panes; must NOT import `config.py`. Writes `session_map.json` (via `_update_session_map` → `hooks.state_files.serialize_session_map_entry`) and `events.jsonl` (via `_write_event` → `hooks.state_files.serialize_event_record`). File locking (`fcntl.flock`) and corrupt-file backup stay in this module; serialization contracts live in `hooks.state_files`.
+- `session_map.py` — reads/writes `session_map.json`, syncs window states against hook data. Per-entry validation routed through `hooks.state_files.parse_session_map_entry`; invalid/future-version entries skipped with a logged reason. `wait_for_session_map_entry` takes an optional `resolve_window_id` re-applied each poll, so a window whose identity is superseded mid-wait is still found. The stale-window-state sweep skips windows a creation flow owns, via the `register_in_flight_window_predicate` seam wired in `bootstrap.wire_runtime_callbacks` to `topic_orchestration.is_pending_creation` (a core → handlers import would invert the dependency).
+- `session_query.py` — read-only session resolution free functions wrapping `session_resolver`.
+- `session_state_ports/` — feature-port package for volatile live-session state (`live_session_state`). Thin read adapters over `claude_task_state` (task snapshots, wait headers, has-snapshot check) and `session_lifecycle` (session-id resolution) and `session_monitor` (last-activity timestamp). Exposes frozen `LiveSessionSnapshot` projection and free functions (`get_task_snapshot`, `get_wait_header`, `has_task_snapshot`, `get_session_id`, `get_last_activity_ts`, `get_live_session_snapshot`). Handlers must use this module for reads; direct imports of `get_claude_task_snapshot`/`get_claude_wait_header` or `claude_task_state.has_snapshot` in handlers are banned. Boundary enforced by `tests/ccgram/test_session_state_ports_audit.py`. Mirrors `window_state_ports/` pattern.
+- `session_resolver.py` — JSONL session resolution + message history extraction.
+- `state_persistence.py` — atomic/debounced JSON persistence for `state.json`.
+- `status_cmd.py` — `ccgram status`.
+- `telegram_request.py` — resilient long-polling helpers (custom HTTPX transport).
+- `thread_router.py` — thread bindings, display names, reverse index, chat ID resolution. Constructed by `SessionManager`; module-level `thread_router` is a proxy.
+- `toolbar_config.py` — per-provider button grids from TOML.
+- `topic_state_registry.py` — registry for per-topic/per-window cleanup functions with self-registration decorator and `register_bound()` for instance methods.
+- `user_preferences.py` — directory favorites + per-user read offsets. Constructed by `SessionManager`; module-level `user_preferences` is a proxy.
+- `utils.py` — `ccgram_dir`, `tmux_session_name`, `atomic_write_json`.
+- `window_query.py` — read-only window state free functions for handlers; delegates feature-shaped reads to `window_state_ports/*`.
+- `window_resolver.py` — window ID resolution, format helpers, startup migration.
+- `window_state_store.py` — `WindowState` dataclass + persistence kernel. Remains the only persisted window-state model. Includes `provider_manual_override` (set by `/agent`, blocks `_detect_and_apply_provider`; serialized only when `True`). Constructed by `SessionManager`; module-level `window_store` is a proxy.
+- `window_state_ports/` — feature-port package (`pane_state`, `identity_state`, `worktree_state`, `tool_state`, `lifecycle_state`). Thin adapters over `WindowStateStore` exposing frozen projection dataclasses and cohesive feature writes (pane upsert/remove/lifecycle, worktree metadata, batch mode, tool-call visibility, origin, provider-manual-override). Provider changes still route through `SessionManager.set_window_provider`. Sole approved raw `WindowState`-field access site outside `window_state_store.py`, `session.py`, and `window_query.py`; enforced by `tests/ccgram/test_window_state_access_audit.py`.
+- `window_view.py` — read-only `WindowView` projection (frozen snapshot).
+- `expandable_quote.py` — sentinel constants + `format_expandable_quote()` (markup contract between parsers and presentation).
+
+### `hooks/`
+
+Provider-aware hook support + state-file contracts. Import-light: runs inside agent panes without bot configuration.
+
+- `state_files.py` — **state-file contract owner**. Version constants (`EVENTS_SCHEMA_VERSION=1`, `SESSION_MAP_SCHEMA_VERSION=1`), `EventLogRecord` + `SessionMapEntry` frozen dataclasses, `StateFileValidationError`. Parse helpers: `parse_event_record(raw) -> EventLogRecord` (accepts legacy versionless records as v1; rejects missing required fields or unsupported future versions), `parse_session_map_entry(raw) -> SessionMapEntry` (same rules). Serialize helpers: `serialize_event_record(...)` and `serialize_session_map_entry(...)` emit v1 dicts with explicit `schema_version`. Stdlib only — no config, no providers, no I/O.
+- `model.py` — `NormalizedHookEvent` (frozen dataclass), `HookAdapter` protocol, `ProviderName` TypeAlias.
+- `adapters.py` — `detect_provider_from_payload`, `get_hook_adapter`; provider-specific adapters normalize raw stdin payloads into `NormalizedHookEvent`.
+- `__init__.py` — re-exports `detect_provider_from_payload`, `get_hook_adapter`, `NormalizedHookEvent`, `ProviderName`.
+
+### `handlers/`
+
+Grouped into 14 feature subpackages. Each subpackage `__init__.py` re-exports the public surface; call sites use subpackage-qualified imports. Handlers depend on `TelegramClient` Protocol, not `telegram.Bot`.
+
+Top-level (constants, leaves, top-level commands):
+
+- `agent_command.py` — `/agent` (alias `/provider`) command for manual provider override. Picker UI with `(manual override)` badge + `🔄 Auto`. Sets `WindowState.provider_manual_override` so `_detect_and_apply_provider` skips the window; clears stale `transcript_path` and session_map entry so SessionMonitor stops polling the wrong transcript.
+- `callback_data.py` — `CB_*` callback data constants.
+- `callback_helpers.py` — `user_owns_window`, `get_thread_id`.
+- `callback_registry.py` — prefix-based callback dispatch with self-registration decorator.
+- `cleanup.py` — topic teardown via TopicStateRegistry + async bot cleanup.
+- `command_history.py` — per-user/per-topic in-memory command recall (max 20).
+- `file_handler.py` — photo/document handler (save to `.ccgram-uploads/`, notify agent).
+- `hook_events.py` — dispatcher for `Stop`, `StopFailure`, `SessionEnd`, `Notification`, `Subagent*`, `Team*`.
+- `inline.py` — `inline_query_handler`, `unsupported_content_handler` (documented exception: no feature subpackage).
+- `last_reply.py` — `/last` command + `send_last_reply` backend; AI path walks the transcript for the last assistant turn, shell path extracts last command+output via prompt markers; overflows >4096 chars to a `.txt` document upload.
+- `reactions.py` — Telegram message reactions helper (Bot API 7.0+).
+- `registry.py` — central PTB handler registration (`register_all`): `CommandSpec` table + Message/Callback/Inline handler wiring. Documented exception: only handler module with runtime `from telegram.ext` import — the PTB wiring spine.
+- `response_builder.py` — response pagination and formatting.
+- `sessions_dashboard.py` — `/sessions` overview + kill.
+- `split_command.py` — `/split [command]` — adds a sibling pane to the topic's window via `multiplexer.split_window`; optional arg runs in the new pane (e.g. `/split claude` spawns a sibling agent). New pane surfaced via `/panes`. Backend-neutral.
+- `sync_command.py` — `/sync`.
+- `upgrade.py` — `/upgrade` (`uv tool upgrade` + restart).
+- `user_state.py` — `context.user_data` string key constants.
+
+`handlers/commands/` — `/commands` + `/toolbar` orchestration:
+
+- `__init__.py` — `commands_command`, `toolbar_command`; re-exports `forward_command_handler`, `setup_menu_refresh_job`, `get_global_provider_menu`, `set_global_provider_menu`, `sync_scoped_*`.
+- `forward.py` — `forward_command_handler`, `_handle_clear_command`. Forwards every `/<token>` to the active provider; unknown commands caught reactively by `failure_probe`.
+- `menu_sync.py` — provider menu cache + scoped sync (`sync_scoped_provider_menu`, `sync_scoped_menu_for_text_context`, `setup_menu_refresh_job`, LRU helpers, `_build_provider_command_metadata`).
+- `failure_probe.py` — `_capture_command_probe_context`, `_probe_transcript_command_error`, `_spawn_command_failure_probe`.
+- `status_snapshot.py` — `_status_snapshot_probe_offset`, `_maybe_send_status_snapshot`.
+
+`handlers/interactive/` — interactive UI prompts:
+
+- `interactive_ui.py` — AskUserQuestion / ExitPlanMode / Permission UI rendering.
+- `interactive_callbacks.py` — callbacks (arrow keys, enter, esc).
+
+`handlers/live/` — live view + screenshots:
+
+- `live_view.py` — auto-refreshing terminal via `editMessageMedia`, content-hash gating, auto-stop.
+- `screenshot_callbacks.py` — capture, quick-key, live view toggle.
+- `pane_callbacks.py` — per-pane rename, screenshot select.
+
+`handlers/messaging_pipeline/` — outbound message queue:
+
+- `message_queue.py` — per-user FIFO + worker; merge, status dedup, tool-use batching. Worker takes `client: TelegramClient`.
+- `message_routing.py` — routes new assistant messages from SessionMonitor to Telegram topics.
+- `message_sender.py` — `safe_reply`/`safe_edit`/`safe_send`, `rate_limit_send_message`, `edit_with_fallback`. All take `client: TelegramClient`.
+- `message_task.py` — dependency-free sum type (`ContentTask`, `StatusTask`, `ToolResultTask`) shared by queue, tool_batch, status_bubble.
+- `tool_batch.py` — Claude tool-use batching: state machine, formatting, edit-in-place. Uses `unwrap_bot(client)` for `DraftStream`.
+- `topic_commands.py` — `/verbose` and `/toolcalls` per-topic toggles.
+
+`handlers/polling/` — status polling + per-window tick:
+
+- `polling_coordinator.py` — iterates thread bindings, delegates per-window work to `window_tick`, runs periodic/lifecycle tasks.
+- `polling_types.py` — pure types module: `TickContext`, `TickDecision`, `PaneTransition`, `WindowPollState`, `TopicPollState`, constants (`STARTUP_TIMEOUT`, `RC_DEBOUNCE_SECONDS`, `MAX_PROBE_FAILURES`, `TYPING_INTERVAL`, `PANE_COUNT_TTL`, `ACTIVITY_THRESHOLD`, `SHELL_COMMANDS`), pure `is_shell_prompt`. Imports stdlib + `ccgram.providers.base.StatusUpdate` only.
+- `polling_state.py` — stateful: `TerminalPollState`, `TerminalScreenBuffer`, `InteractiveUIStrategy`, `TopicLifecycleStrategy`, `PaneStatusStrategy`, the five module-level singletons, `reset_window_polling_state`.
+- `polling_runtime.py` — `PollingRuntime` dataclass bundling the five strategy instances; `PollingRuntime.create()` builds an isolated bundle for tests; `get_default_runtime()` returns a lazily-built wrapper over the module-level singletons. Import direction: `polling_runtime` → `polling_state` only; `polling_types` and `decide` must not import here. `tick_window`, `observe`, and `apply` accept an optional `runtime` keyword and fall back to `get_default_runtime()`.
+- `periodic_tasks.py` — topic lifecycle management, live view ticking, state pruning.
+- `window_tick/__init__.py` — `tick_window(runtime=None)` (thin orchestrator; accepts optional `PollingRuntime`).
+- `window_tick/decide.py` — pure decision kernel (`decide_tick`, `build_status_line`, `is_shell_prompt`). Zero deps on tmux/PTB/singletons.
+- `window_tick/observe.py` — pure inputs → `TickContext` (pane-text capture, last-activity lookup, screen-buffer parsing, status resolve, vim-insert detection). Key functions accept optional `runtime` kwarg.
+- `window_tick/apply.py` — DI-heavy side effects: `_apply_*_transition`, `_update_status`, `_send_typing_throttled`, `_handle_dead_window_notification`, `_scan_window_panes`, pane forwarding. All stateful-strategy functions accept optional `runtime` kwarg.
+
+`handlers/recovery/` — dead window recovery + history:
+
+- `recovery_callbacks.py` — thin dispatcher (~170 LOC): `_dispatch`, `handle_recovery_callback`, shared `_validate_recovery_state`/`_clear_recovery_state` validators.
+- `recovery_banner.py` — dead-window banner UX: `RecoveryBanner`, `render_banner`, `build_recovery_keyboard`, `_create_and_bind_window`, fresh/continue/resume/back/browse/cancel handlers.
+- `resume_picker.py` — resume picker UX + transcript scan: `_SessionEntry`, `scan_sessions_for_cwd`, `_scan_index_for_cwd`, `_scan_bare_jsonl_for_cwd`, picker keyboard builders, `_handle_resume_pick`.
+- `restore_command.py` — `/restore`.
+- `resume_command.py` — `/resume` (scan past sessions, paginated picker).
+- `transcript_discovery.py` — hookless transcript discovery for Codex/Gemini, provider auto-detection, shell↔agent transitions.
+- `history.py` + `history_callbacks.py` — `/history` + pagination.
+
+`handlers/send/` — `/send` file delivery:
+
+- `send_command.py` — search, list, upload utilities.
+- `send_callbacks.py` — browser navigation.
+- `send_security.py` — multi-layer access control.
+
+`handlers/shell/` — shell provider command flow:
+
+- `shell_commands.py` — NL→command approval, dangerous command detection via LLM.
+- `shell_capture.py` — prompt-marker output isolation, exit code detection, baseline-diff fallback, glyph stripping.
+- `shell_context.py` — shared helpers (`gather_llm_context`, `redact_for_llm`, `_detect_shell_tools`).
+- `shell_prompt_orchestrator.py` — single `ensure_setup` entry point centralizing five trigger sites.
+
+`handlers/status/` — status bubble + topic emoji:
+
+- `status_bubble.py` — keyboard + status message lifecycle (`_status_msg_info`, `send_status_text`, `clear_status_message`, `build_status_keyboard`).
+- `status_bar_actions.py` — button callbacks (last reply, get file, recall, esc, keys).
+- `topic_emoji.py` — topic name emoji updates (active/idle/done/dead + RC/YOLO badges), debounced. Color scheme via `CCGRAM_STATUS_MODE`.
+- `rc_probe.py` — Claude `/remote-control` outcome probe: `arm_rc_probe`, pure `classify_rc_output`, `_classify_loop`. De-duped via `WindowState.rc_probe_state` (in-memory).
+
+`handlers/text/` — `text_handler.py` (UI guards → unbound → dead → forward).
+
+`handlers/toolbar/` — `/toolbar` inline keyboard:
+
+- `toolbar_keyboard.py` — builder from TOML config with per-window label overrides.
+- `toolbar_callbacks.py` — dispatch for inline button clicks.
+
+`handlers/topics/` — topic lifecycle + window picker:
+
+- `topic_orchestration.py` — new window/topic creation, unbound window adoption, rate limiting.
+- `topic_lifecycle.py` — autoclose timers for done/dead topics, unbound window TTL.
+- `directory_browser.py` — directory selection UI + worktree picker/confirm keyboard builders.
+- `directory_callbacks.py` — directory navigation callbacks; orchestrates the full directory→worktree→workspace→provider→mode→window flow. Re-exports submodule surfaces for backward-compat.
+- `topic_creation_draft.py` — typed accessor (`TopicCreationDraft`) for the 14 `context.user_data` keys used across the topic-creation flow; `_browser_flow_stale`, `_required_selected_path` module helpers. Single source of truth for all flow-state key names.
+- `workspace_callbacks.py` — CB_WS_SELECT / CB_WS_SKIP callbacks; `_show_workspace_picker_or_provider` (herdr: workspace picker, tmux: direct to provider pick). Imports `multiplexer` proxy only, not a concrete backend.
+- `provider_mode_callbacks.py` — CB_PROV_SELECT / CB_MODE_SELECT callbacks; `_validate_provider_select` double-click guard; calls `launch_window` after provider/mode resolved.
+- `window_launch_service.py` — `launch_window` entry point: `_create_topic_window` (native-worktrees branch for herdr, `create_window` for tmux), synchronous `register_pending_creation` race guard (MC-2967), thread bind, `_persist_worktree_state`, YOLO confirmation, pending-text forwarding. `WindowLaunchRequest`/`WindowLaunchResult` dataclasses.
+- `worktree.py` — pure git-worktree plumbing: `check_worktree_eligibility`, `suggest_branch_name`, `slug_for_path`, `worktree_path_for`, `validate_branch_name`, `create_worktree` (raises `WorktreeError`). No Telegram/tmux/state deps.
+- `window_callbacks.py` — bind, new, cancel.
+- `new_command.py` — `/new` and `/start`.
+
+`handlers/voice/` — voice transcription:
+
+- `voice_handler.py` — download, transcription, confirm keyboard.
+- `voice_callbacks.py` — `vc:send`/`vc:drop` routing; shell-provider transcriptions route through LLM.
+
+## Key Design Decisions
+
+- Topic-centric. Each Telegram topic binds to one tmux window. Topics _are_ the session list; no centralized session list.
+- Window-ID-centric. All internal state keyed by tmux window ID (e.g. `@0`, `@12`), unique within a tmux server session. Names are display labels in `window_display_names`. Same directory may have multiple windows.
+- Hook-based events. Claude Code hooks write `session_map.json` + `events.jsonl`. SessionMonitor reads both: session_map for tracking, `events.jsonl` for instant dispatch (interactive UI, done, API error alert, session lifecycle, subagent, team). Terminal scraping is fallback. Missing hooks logged at startup with fix command.
+- Multi-pane awareness. Windows with multiple panes (e.g. agent teams) are scanned for interactive prompts in non-active panes. Blocked panes surfaced as inline keyboard alerts. `/panes` lists all panes with status + per-pane screenshot. Callback data includes pane_id: `"aq:enter:@12:%5"`.
+- Tool use ↔ tool result pairing. `tool_use_id` tracked across poll cycles; result edits the original tool_use Telegram message in place.
+- Entity-based formatting. All messages go through `safe_reply`/`safe_edit`/`safe_send` (markdown → plain + `MessageEntity` via `telegramify-markdown`, fallback to plain). No parse errors possible.
+- No truncation at parse layer. Splitting only at send layer; respects 4096 char limit with expandable quote atomicity.
+- Only sessions in `session_map.json` (via hook) are monitored.
+- Notifications routed via thread bindings (topic → window_id → session).
+- Startup re-resolution. Window IDs reset on tmux server restart. `resolve_stale_ids()` remaps missing IDs by display name only on `recovers_stale_ids_by_name` backends (tmux); stable agterm UUIDs are retained and Herdr's durable targets are not remapped. Old name-keyed `state.json` is auto-migrated.
+- Per-window provider. CLI-specific behavior (launch args, transcript parsing, status, command discovery) delegated to `AgentProvider`. `ProviderCapabilities` gate UX per-window: hook checks, resume/continue buttons, command registration. `WindowState.provider_name` is source of truth; `get_provider_for_window(window_id)` resolves with config-default fallback. External windows auto-detected via `detect_provider_from_command()`. `get_provider()` is the no-window-context fallback (`doctor`, `status`).
+- Multiplexer seam. Terminal-multiplexer access is abstracted behind the `Multiplexer` Protocol (`multiplexer/base.py`, core, I/O-free). tmux is the default backend (`multiplexer/tmux.py`); a `CCGRAM_MULTIPLEXER` switch (default `tmux`, also `herdr` and `agterm`) selects it, wired in `bootstrap.py` from `config.multiplexer_name`. Callers depend only on the module-level `multiplexer` proxy and `MultiplexerCapabilities` flags — never a concrete backend or `name == "<backend>"` conditional. Boundary enforced by `tests/ccgram/test_multiplexer_boundary.py` (F1, concrete-backend imports forbidden outside `multiplexer/**`, `bootstrap.py`, `main.py`), contract by `tests/ccgram/test_multiplexer_contract.py` (F2, parametrized per backend), core purity by `tests/integration/test_import_no_cycles.py` (F3, `base` imports no backend/I/O). Mirrors the `AgentProvider` seam and the `window_store`/`thread_router` proxy pattern.
+- Foreground process via the seam (no-tty boundary). `Multiplexer.foreground(window_id) -> ForegroundInfo` is the single source of foreground-process truth for shell foreground detection (`shell_infra.detect_pane_shell`/`_is_interactive_shell`) and provider auto-detection (`process_detection`). The tty/`ps -t` mechanism is a private detail of `multiplexer/tmux.py`'s `foreground()`; herdr's `foreground()` reads `pane process-info` (no tty, since `exposes_pane_tty=False`). No module outside `multiplexer/tmux.py` references `pane_tty`, `ps -t`, or `get_foreground_args`. Enforced by the no-tty drift gate `tests/ccgram/test_no_tty_outside_backend.py` (AST/source walk, allow-listing only the tmux backend), modeled on the window-state access audit.
+- Push event stream (herdr), augment not replace. On `supports_event_stream` backends, `EventStreamMonitor` consumes `multiplexer.watch_events` to push agent-status into `agent_status_cache` (read by the 1s status poll — removes the per-tick `agent_status` subprocess, tightens status to ~1s) and to fire window-death banners instantly. JSONL transcript polling still owns message content. Death uses global `tab.closed` plus target-specific pane-close/exit events; multi-pane tabs avoid false death because pane events are translated only for the watched target. The poll loop backstops any tab that vanishes without a push. Both push and poll route death through the one idempotent `_handle_dead_window_notification` (marks dead before its first await, so the two paths can't double-notify).
+- Live terminal view. Auto-refreshing screenshots via `editMessageMedia` (default 5s). Content-hash gating skips API calls when unchanged. One active view per topic, auto-stop after timeout (default 300s). Managed by `handlers/live/live_view.py`, ticked from `handlers/polling/periodic_tasks.py`.
+- Completion summaries. On agent Stop, `llm/summarizer.py` reads transcript, produces one line, edits Ready message in place. Non-blocking: static enriched Ready appears immediately, LLM enhancement ~1-2s later.
+- Constructor DI for stores. `SessionManager` constructs `WindowStateStore`, `ThreadRouter`, `UserPreferences`, `SessionMapSync` with explicit `schedule_save` (and store-specific) callbacks. Module-level singletons are proxy objects forwarding to the wired instance. `register_*_callback` helpers raise on double-registration; unwired callees raise `RuntimeError("not wired")`.
+- `TelegramClient` Protocol. Handlers depend on the Protocol (`src/ccgram/telegram_client.py`), not `telegram.Bot`. Allowed runtime `from telegram.ext` importers: `bot.py`, `bootstrap.py`, `handlers/registry.py`, `telegram_client.py`, `telegram_request.py`, `telegram_sender.py`. Everything else uses `if TYPE_CHECKING:`. `unwrap_bot(client)` is the escape hatch for PTB-only helpers.
+- Pure decision kernel for window tick. `handlers/polling/window_tick/decide.py` is pure (zero deps on tmux/PTB/singletons), `observe.py` produces `TickContext`, `apply.py` is the only side-effect file. `decide_tick` and helpers unit-tested without mocks.
+- Pure types vs stateful split for polling. `polling_types.py` holds contracts (stdlib + `StatusUpdate` only); `polling_state.py` holds strategies + singletons. `decide.py` imports only from `polling_types`. Codified by `tests/ccgram/handlers/polling/test_polling_types_purity.py`.
+- Injectable polling runtime bundle. The five stateful strategy instances owned by `polling_state.py` are bundled into `PollingRuntime` (`polling_runtime.py`). `get_default_runtime()` wraps the existing module-level singletons (no double registration). `PollingRuntime.create()` builds an isolated bundle for tests. `tick_window`, `observe`, and `apply` functions accept `runtime: PollingRuntime | None = None` and fall back to the default; callers that don't pass one keep unchanged behaviour. Import direction: `polling_runtime` → `polling_state` only; `polling_types` and `decide` are unaffected. Fitness gate: `tests/ccgram/handlers/polling/test_polling_runtime.py` proves `create()` instances are distinct from the default and that `reset_window()` does not touch default singletons.
+- Single read path through query layer. Handler reads of window/session state go through `window_query` / `session_query` free functions or `window_state_ports/*` feature projections. Direct `session_manager.<attr>` access in `handlers/**` is restricted to a documented write/admin allow-list (`set_window_provider`, `set_window_origin`, `set_window_approval_mode`, `set_window_worktree`, `cycle_*`, `audit_state`, `prune_*`, `sync_display_names`). Codified by `tests/ccgram/test_query_layer_only_for_handlers.py` (AST walk over 86 handler files).
+- Live-session read contract. Volatile session state (`claude_task_state`, `session_lifecycle`, `session_monitor` idle tracker) is exposed to handlers exclusively through `session_state_ports/live_session_state.py`. Free functions (`get_task_snapshot`, `get_wait_header`, `has_task_snapshot`, `get_session_id`, `get_last_activity_ts`) and the frozen `LiveSessionSnapshot` projection are the approved read boundary. Write authority remains in `session_lifecycle` (all mutation methods). The fitness gate (`tests/ccgram/test_session_state_ports_audit.py`) bans direct handler imports of `get_claude_task_snapshot`, `get_claude_wait_header`, and `claude_task_state.has_snapshot`.
+- Window-state feature ports. `WindowStateStore` remains the single persistence kernel. `window_state_ports/{pane,identity,worktree,tool,lifecycle}_state.py` expose frozen projection dataclasses and cohesive feature writes. Reads return projections, not raw `WindowState`; writes only touch fields owned by the port. Provider/session identity writes still delegate to `SessionManager.set_window_provider` to preserve capability coordination. Boundary enforced by `tests/ccgram/test_window_state_access_audit.py`: raw feature-field access outside `window_state_store.py`, `window_state_ports/*`, `session.py`, `window_query.py`, and serialization tests fails the audit. A second import-boundary check (`tests/ccgram/test_window_store_import_boundary.py`) forbids handler/Mini App modules from importing `window_state_store.window_store` directly; the only allowed exceptions are `handlers/status/rc_probe.py` (transient in-memory RC-probe state never persisted) and `handlers/commands/forward.py` (`clear_window_session` coordination).
+- Lazy-import contract. `scripts/lint_lazy_imports.py` flags every in-function `Import`/`ImportFrom` not preceded by `# Lazy:`, not inside `if TYPE_CHECKING:`, and not inside `_reset_*_for_testing`. Walker recurses through compound statements (try/except/finally/if/else/with/for/while) and nested def/class bodies. Multi-line `# Lazy:` blocks supported. Wired into `make lint` as `lint-lazy`. All in-function imports annotated. Cycle test (`tests/integration/test_import_no_cycles.py`) enumerates all modules under `src/ccgram/`.

@@ -1,0 +1,46 @@
+Invest Alert Bot
+Copyright 2026 Shijie Zheng (Kerry Zheng)
+https://github.com/Formyselfonly
+https://github.com/Formyselfonly/invest-alert-bot
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this work except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+================================================================================
+Author Usage Policy (supplements Apache-2.0 — author's stated expectations)
+================================================================================
+
+Legal license: Apache License 2.0 (see LICENSE). The policy below expresses
+how the author asks the community to use this project. For commercial use,
+public derivative works, or paid services built on this code, contact the
+author first: https://github.com/Formyselfonly/invest-alert-bot/issues
+
+Permitted without separate permission
+  - Study and research (read source, run locally, learn from architecture)
+  - Personal deployment for non-commercial experimentation ("deploy and play")
+  - Citing the project with attribution and a link to the official repository
+
+Requires prior written consent from the author
+  - Commercial use, monetization, or paid products/services based on this code
+  - Publishing modified/forked versions as your own project or SaaS
+  - Secondary development released publicly or offered to third parties
+  - Rebranding or redistributing derivative works without explicit approval
+
+Not allowed
+  - Removing copyright notices, LICENSE, or NOTICE
+  - Claiming the project as your original work
+  - Republishing without attribution and a link to the official repository
+
+Official repository (only authoritative source):
+  https://github.com/Formyselfonly/invest-alert-bot
+
+Author: Shijie Zheng (Kerry Zheng) — https://github.com/Formyselfonly

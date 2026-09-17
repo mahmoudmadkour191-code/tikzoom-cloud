@@ -1,0 +1,20 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment
+.venv*
+venv*
+
+# Log files
+*.log
+
+# macOS directory custom attributes
+*.DS_Store
+
+# PyCharm system folder
+.idea/
+
+*.local*
+docs/

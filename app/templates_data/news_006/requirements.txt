@@ -1,0 +1,9 @@
+Telethon
+aiocron
+async_lru
+grapheme
+jieba
+packaging
+python_dateutil
+tenacity
+wordcloud

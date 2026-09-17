@@ -1,0 +1,119 @@
+{
+  "name": "Telegram Torrent Leecher",
+  "description": "A Telegram Torrent (and youtube-dl) Leecher based on Pyrogram. Powered by @ThankTelegram!",
+  "keywords": [
+    "telegram",
+    "best",
+    "indian",
+    "pyrogram",
+    "torrent",
+    "plugin",
+    "modular",
+    "youtube-dl",
+    "leecher"
+  ],
+  "repository": "https://github.com/Omkar47/AutoLeecher",
+  "success_url": "https://telegram.dog/APDBugged",
+  "website": "https://github.com/Omkar47/AutoLeecher",
+  "env": {
+    "ENV": {
+      "description": "Setting this to ANYTHING will enable webhooks when in env mode",
+      "value": "ANYTHING"
+    },
+    "APP_ID": {
+      "description": "Get this value from https://my.telegram.org",
+      "value": ""
+    },
+    "API_HASH": {
+      "description": "Get this value from https://my.telegram.org",
+      "value": ""
+    },
+    "BOT_TOKEN": {
+      "description": "get this value from @BotFather",
+      "value": ""
+    },
+    "AUTH": {
+      "description": "should be an integer. The BOT API ID of the Telegram Group, where the Leecher should work.",
+      "value": ""
+    },
+    "CHUNK_SIZE": {
+      "description": "should be an integer",
+      "value": "128",
+      "required": false
+    },
+    "ARIA_STARTED_PORT": {
+      "description": "should be an integer. The port on which aria2c daemon must start, and keep listening.",
+      "value": "6800",
+      "required": false
+    },
+    "EDIT_SLEEP_TIME": {
+      "description": "should be an integer. Number of seconds to wait before editing a message.",
+      "value": "10",
+      "required": false
+    },
+    "MAX_TIME_TO_WAIT_FOR_START": {
+      "description": "should be an integer. Number of seconds to wait before cancelling a torrent.",
+      "required": false
+    },
+    "LEECH_CMD": {
+      "description": "add Leech Command.",
+      "required": false
+    },
+    "YTDL_CMD": {
+      "description": "add Yt-dl Leech Command.",
+      "required": false
+    },
+    "PYTDL_CMD": {
+      "description": "add Playlist Leech Command.",
+      "required": false
+    },
+    "CANCEL_CMD": {
+      "description": "add Cancel Leech Command.",
+      "required": false
+    },
+    "STATUS_CMD": {
+      "description": "add Status Command.",
+      "required": false
+    },
+    "STATS_CMD": {
+      "description": "add Stats Command.",
+      "required": false
+    },
+    "SAVE_CMD": {
+      "description": "add Save Thumbnail Command.",
+      "required": false
+    },
+    "CLEAR_CMD": {
+      "description": "add Clear Thumbnail Command.",
+      "required": false
+    },
+    "UPLOAD_CMD": {
+      "description": "add Upload Files Command.",
+      "required": false
+    },
+    "EXEC_CMD": {
+      "description": "add Executors Command.",
+      "required": false
+    },
+    "HELP_CMD": {
+      "description": "add Help Message Command.",
+      "required": false
+    }
+  },
+  "addons": [
+  ],
+  "buildpacks": [{
+    "url": "https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest"
+  }, {
+    "url": "https://github.com/amivin/aria2-heroku"
+  }, {
+    "url": "heroku/python"
+  }],
+  "stack": "container",
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "free"
+    }
+  }
+}

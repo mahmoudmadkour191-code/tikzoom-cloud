@@ -1,0 +1,204 @@
+"""SSOT für Kamera-Snap-Standbilder — frische Vollbild-Frames ohne RTSP-Lag.
+
+Kapselt das Kamera-spezifische (aktuell die Reolink-Snap-API) an EINER
+Stelle für die *on-demand*-Snap-Pfade: das Snapshot-Tool und die
+Multipose-Live-Preview. Beide brauchen sporadisch ein frisches Standbild
+und teilen sich hier Client-Verwaltung (Token-Cache: ein Login pro Quelle
+statt Login-Sturm), Kanal-Auflösung aus der ``rtsp_cameras``-Config und
+den Frame-Bau.
+
+NICHT hier: der Vigilantia-Watcher. Sein Client ist an die Watch-Session
+gebunden (lebt mit ihr, macht ZUSÄTZLICH das ``get_ai_state``-Polling und
+einen parallelen Dual-Lens-Snap mit gemeinsamem Zeitstempel). Das ist ein
+eigener Lebenszyklus, kein Duplikat — er teilt sich nur den ``Frame``-Bau
+über :func:`frame_from_snap`.
+
+Andere Kamera-Marken später: Dies ist der EINE Dispatch-Punkt. Ein
+Config-Feld (z.B. ``driver``) plus eine zweite Client-Klasse mit
+``snap()``/``aclose()`` genügen — die Aufrufer bleiben unverändert.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import datetime
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+# Snap-Clients pro KAMERA (Schlüssel host:api_port), NICHT pro Source:
+# zwei Quellen desselben Geräts (Weitwinkel + Zoom) teilen sich EINEN
+# Client → EINE Reolink-Session statt zwei (Session-Limit) und kein
+# Login-Sturm beim Umschalten zwischen den Linsen. Geteilt von Snapshot-
+# Tool und Multipose; via close_clients() freigegeben.
+#
+# Use-after-close-Schutz: ``snap_frames`` awaited mitten im Snap — ein
+# paralleles ``close_clients`` (Multipose-Modal zu) würde den Client unterm
+# laufenden Snap wegschließen; der Snap re-loggt sich dann ein und die
+# Session leakt (Reolink-Session-Limit!). Darum zählt ``_in_use`` aktive
+# Snap-Läufe pro Key; ``close_clients`` schiebt das Schließen bei aktiver
+# Nutzung auf (``_close_pending``), der letzte Nutzer schließt. Alles läuft
+# auf DEM Event-Loop (keine Threads) — plain dict/set reichen, kein Lock.
+_clients: dict[str, Any] = {}
+_in_use: dict[str, int] = {}
+_close_pending: set[str] = set()
+
+
+def _client_key(cam: dict[str, Any]) -> str:
+    return f"{cam.get('host', '')}:{cam.get('api_port', 443)}"
+
+
+def frame_from_snap(
+    source_id: str, jpeg: bytes, timestamp: Optional[datetime] = None,
+) -> Any:
+    """``Frame`` aus Snap-JPEG bauen — eine Wahrheit für alle Snap-Pfade
+    (auch der Watcher nutzt dies). ``width/height=0``: der Caller dekodiert
+    bei Bedarf; ``via=snap`` markiert die Herkunft."""
+    from .frame_sources.base import Frame
+    return Frame(
+        source_id=source_id,
+        timestamp=timestamp or datetime.now(),
+        image_bytes=jpeg,
+        format="jpeg",
+        width=0,
+        height=0,
+        metadata={"kind": "rgb", "via": "snap"},
+    )
+
+
+def resolve_snap_channel(
+    source_id: str, *, prefer_face: bool = False,
+) -> Optional[int]:
+    """Snap-Kanal aus der Kamera-Config — oder ``None``, wenn die Quelle
+    nicht snap-fähig ist (keine ``cred`` / kein snapbarer Kanal).
+
+    Das EIGENE ``snap_channel`` der Quelle hat IMMER Vorrang — bei zwei
+    Quellen desselben Geräts (Weitwinkel + separate Zoom-Quelle) zeigt damit
+    jede ihre eigene Linse; sonst snappten beide denselben Kanal.
+    ``prefer_face=True`` (Gesichts-Enrollment, Multipose) zieht ``face_channel``
+    nur als FALLBACK heran — für eine Single-Source-Dual-Lens-Kamera OHNE
+    eigenes ``snap_channel`` (dann Zoom-Objektiv fürs Gesichtsdetail).
+    Reihenfolge: ``snap_channel`` > (``face_channel`` bei prefer_face) >
+    ``channel`` (bei ``ai_camera``)."""
+    from .frame_sources.rtsp_source import find_camera_config
+    cam = find_camera_config(source_id)
+    if not cam or not cam.get("cred"):
+        return None
+    keys = ("snap_channel", "face_channel") if prefer_face else ("snap_channel",)
+    for k in keys:
+        if cam.get(k) is not None:
+            return int(cam[k])
+    if str(cam.get("profile")) == "ai_camera":
+        return int(cam.get("channel", 0))
+    return None
+
+
+def get_client(source_id: str) -> Any | None:
+    """Öffentlicher Zugriff auf den pro-Kamera GETEILTEN Snap-/AI-Client.
+
+    EINE Session pro physischer Kamera (host:api_port) für ALLE Konsumenten
+    — Snapshot-Tool, Multipose UND der Vigilantia-Watcher (Polling + Snap).
+    So entsteht nie mehr als ein Login pro Kamera (Token wird durch
+    Wiederverwendung refreshed); das verhindert das „max session"-Limit, das
+    bei separaten Clients pro Subsystem auftrat. ``None`` ohne creds."""
+    return _get_client(source_id)
+
+
+def _get_client(source_id: str) -> Any | None:
+    """Gecachten Snap-Client der Kamera (oder ``None``, wenn keine creds)."""
+    entry = _get_client_with_key(source_id)
+    return entry[1] if entry else None
+
+
+def _get_client_with_key(source_id: str) -> tuple[str, Any] | None:
+    """Wie ``_get_client``, zusätzlich mit dem Cache-Key (für ``_in_use``).
+    Aktuell Reolink — hier wäre der Dispatch auf andere Marken."""
+    from .frame_sources.rtsp_source import find_camera_config
+    cam = find_camera_config(source_id)
+    if not cam or not cam.get("cred"):
+        return None
+    key = _client_key(cam)
+    client = _clients.get(key)
+    if client is None:
+        from .reolink_ai import ReolinkAIClient
+        client = ReolinkAIClient(
+            host=str(cam.get("host", "")),
+            api_port=int(cam.get("api_port", 443)),
+            cred=str(cam.get("cred", "")),
+        )
+        _clients[key] = client
+    return key, client
+
+
+async def snap_frames(
+    source_id: str, n: int = 1, interval: float = 0.0, *,
+    prefer_face: bool = False,
+) -> Optional[list[Any]]:
+    """``n`` frische Snap-Frames der Quelle (volle Linsen-Auflösung).
+
+    ``None`` = nicht snap-fähig ODER Fehler — der Caller fällt dann auf den
+    RTSP-/Hub-Frame zurück. Bewusst weich: Die Kamera-API kann ausfallen
+    (Session-Limit), während RTSP läuft; ein Substream-Foto schlägt kein
+    Foto."""
+    ch = resolve_snap_channel(source_id, prefer_face=prefer_face)
+    if ch is None:
+        return None
+    entry = _get_client_with_key(source_id)
+    if entry is None:
+        return None
+    key, client = entry
+    _in_use[key] = _in_use.get(key, 0) + 1
+    try:
+        frames: list[Any] = []
+        for i in range(max(1, n)):
+            if i > 0 and interval > 0:
+                await asyncio.sleep(interval)
+            jpeg = await client.snap(ch)
+            frames.append(frame_from_snap(source_id, jpeg))
+        return frames
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "snap failed for %s: %s — caller falls back to RTSP/hub",
+            source_id, e,
+        )
+        return None
+    finally:
+        _in_use[key] -= 1
+        if _in_use[key] <= 0:
+            del _in_use[key]
+            if key in _close_pending:
+                # close_clients kam während des Snaps — jetzt nachholen.
+                _close_pending.discard(key)
+                await _close_key(key)
+
+
+async def _close_key(key: str) -> None:
+    client = _clients.pop(key, None)
+    if client is None:
+        return
+    try:
+        await client.aclose()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("snap client close failed for %s: %s", key, e)
+
+
+async def close_clients(source_id: Optional[str] = None) -> None:
+    """Snap-Clients schließen (Reolink ``aclose`` → Logout, gibt die
+    Session frei) und aus dem Cache nehmen. Ohne Argument: alle. Wird z.B.
+    beim Schließen des Multipose-Modals gerufen.
+
+    Läuft gerade ein Snap auf dem Client, wird das Schließen aufgeschoben
+    (der letzte Snap-Nutzer schließt) — sonst re-loggt sich der laufende
+    Snap auf dem geschlossenen Client ein und die Session leakt."""
+    if source_id:
+        from .frame_sources.rtsp_source import find_camera_config
+        cam = find_camera_config(source_id)
+        keys = [_client_key(cam)] if cam else []
+    else:
+        keys = list(_clients)
+    for key in keys:
+        if _in_use.get(key, 0) > 0:
+            _close_pending.add(key)
+            continue
+        await _close_key(key)

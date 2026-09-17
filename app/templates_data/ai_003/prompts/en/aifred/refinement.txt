@@ -1,0 +1,21 @@
+CURRENT ROUND: {round_num}
+
+Sokrates has critiqued your thesis, and Salomo has created a synthesis.
+
+Salomo's synthesis: {critique}
+
+{user_interjection}
+
+Your task: Revise your answer based on Sokrates' critique (in the history) AND Salomo's recommendation.
+
+IMPORTANT:
+- Formulate COMPLETELY NEW - no copy-paste from previous answers
+- Acknowledge where Sokrates was right (1 sentence)
+- Keep what remains valid from your thesis
+- The new answer should be a NEW whole, not patchwork
+
+Start DIRECTLY with your revised answer - no header, no "AIfred:"
+
+CONSENSUS VOTING - End with ONE of these tags:
+- [LGTM] if you are satisfied
+- [WEITER] if further improvement is needed

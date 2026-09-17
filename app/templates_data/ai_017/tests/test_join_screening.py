@@ -1,0 +1,1530 @@
+import asyncio
+import os
+import tempfile
+import unittest
+from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, call, patch
+
+from bot.db.engine import init_db
+from bot.db.models import (
+    BanAuditEvent,
+    GlobalBan,
+    Group,
+    GroupMember,
+    JoinScreeningExemption,
+    ModerationRule,
+    UserProfileScreen,
+    UserWarning,
+)
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from bot.services.authz import authorize_group
+from bot.services.join_screening import (
+    add_global_ban,
+    build_join_profile_text,
+    get_global_ban,
+    get_profile_screen_hash,
+    is_globally_banned,
+    is_join_screening_exempt,
+    list_global_bans,
+    list_join_screening_exemptions,
+    mark_profile_screened,
+    profile_signature,
+    remove_global_ban,
+    remove_join_screening_exemption,
+    screen_member_profile,
+    screen_member_profile_verbose,
+)
+from bot.services.join_verification import (
+    get_join_verification,
+    upsert_join_verification,
+)
+from bot.services.moderation import ModerationVerdict
+from bot.services.update_completion import (
+    UpdateCompletionReceipt,
+    bind_update_completion,
+    reset_update_completion,
+)
+from bot.utils.timezone import now_shanghai_naive
+
+
+class GlobalBanServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.engine, self.session_factory = await init_db(f"sqlite+aiosqlite:///{self._db_path}")
+
+    async def asyncTearDown(self) -> None:
+        await self.engine.dispose()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(f"{self._db_path}{suffix}")
+            except OSError:
+                pass
+
+    async def test_add_global_ban_marks_user_banned(self) -> None:
+        async with self.session_factory() as session:
+            added = await add_global_ban(
+                session, 1001, reason="广告机", source="manual", created_by=1
+            )
+            await session.commit()
+            self.assertTrue(added)
+            self.assertTrue(await is_globally_banned(session, 1001))
+            row = await get_global_ban(session, 1001)
+            self.assertEqual(row.reason, "广告机")
+            self.assertEqual(row.source, "manual")
+
+    async def test_unban_adds_join_screening_exemption(self) -> None:
+        async with self.session_factory() as session:
+            await add_global_ban(session, 1002, reason="x", source="join_screening", created_by=1)
+            await session.commit()
+
+            removed = await remove_global_ban(session, 1002, operator_id=9)
+            await session.commit()
+
+            self.assertTrue(removed)
+            self.assertFalse(await is_globally_banned(session, 1002))
+            self.assertTrue(await is_join_screening_exempt(session, 1002))
+
+    async def test_reban_revokes_exemption(self) -> None:
+        async with self.session_factory() as session:
+            await add_global_ban(session, 1003, reason="a", created_by=1)
+            await session.commit()
+            await remove_global_ban(session, 1003, operator_id=1)
+            await session.commit()
+
+            await add_global_ban(session, 1003, reason="b", created_by=1)
+            await session.commit()
+
+            self.assertTrue(await is_globally_banned(session, 1003))
+            self.assertFalse(await is_join_screening_exempt(session, 1003))
+
+    async def test_unban_unknown_user_still_records_exemption(self) -> None:
+        async with self.session_factory() as session:
+            removed = await remove_global_ban(session, 1004, operator_id=1)
+            await session.commit()
+
+            self.assertFalse(removed)
+            self.assertTrue(await is_join_screening_exempt(session, 1004))
+
+    async def test_list_global_bans_returns_rows(self) -> None:
+        async with self.session_factory() as session:
+            await add_global_ban(session, 1, reason="r1", created_by=1)
+            await add_global_ban(session, 2, reason="r2", created_by=1)
+            await session.commit()
+
+            rows = await list_global_bans(session)
+            self.assertEqual({row.user_id for row in rows}, {1, 2})
+
+    async def test_list_global_bans_searches_user_reason_and_source(self) -> None:
+        async with self.session_factory() as session:
+            session.add_all(
+                [
+                    GlobalBan(
+                        user_id=123456,
+                        reason="ordinary",
+                        source="manual",
+                    ),
+                    GlobalBan(
+                        user_id=700001,
+                        reason="Affiliate SPAM",
+                        source="manual",
+                    ),
+                    GlobalBan(
+                        user_id=700002,
+                        reason="other",
+                        source="profile_screening",
+                    ),
+                ]
+            )
+            await session.commit()
+
+            by_user = await list_global_bans(session, query="345")
+            by_reason = await list_global_bans(session, query="affiliate spam")
+            by_source = await list_global_bans(session, query="PROFILE_SCREENING")
+
+            self.assertEqual([row.user_id for row in by_user], [123456])
+            self.assertEqual([row.user_id for row in by_reason], [700001])
+            self.assertEqual([row.user_id for row in by_source], [700002])
+
+    async def test_list_global_bans_search_escapes_like_wildcards(self) -> None:
+        async with self.session_factory() as session:
+            session.add_all(
+                [
+                    GlobalBan(user_id=810001, reason="100% spam", source="manual"),
+                    GlobalBan(user_id=810002, reason="plain spam", source="manual"),
+                ]
+            )
+            await session.commit()
+
+            rows = await list_global_bans(session, query="%")
+
+            self.assertEqual([row.user_id for row in rows], [810001])
+
+    async def test_list_global_bans_filters_before_pagination(self) -> None:
+        created_at = now_shanghai_naive()
+        async with self.session_factory() as session:
+            session.add_all(
+                [
+                    GlobalBan(
+                        user_id=820001,
+                        reason="target",
+                        source="manual",
+                        created_at=created_at,
+                    ),
+                    GlobalBan(
+                        user_id=820002,
+                        reason="target",
+                        source="manual",
+                        created_at=created_at + timedelta(seconds=1),
+                    ),
+                    GlobalBan(
+                        user_id=820003,
+                        reason="target",
+                        source="manual",
+                        created_at=created_at + timedelta(seconds=2),
+                    ),
+                    GlobalBan(
+                        user_id=999999,
+                        reason="unrelated",
+                        source="manual",
+                        created_at=created_at + timedelta(seconds=3),
+                    ),
+                ]
+            )
+            await session.commit()
+
+            rows = await list_global_bans(
+                session,
+                query="target",
+                limit=1,
+                offset=1,
+            )
+
+            self.assertEqual([row.user_id for row in rows], [820002])
+
+    async def test_list_join_screening_exemptions_searches_before_pagination(
+        self,
+    ) -> None:
+        created_at = now_shanghai_naive()
+        async with self.session_factory() as session:
+            session.add_all(
+                [
+                    JoinScreeningExemption(
+                        user_id=910001,
+                        created_by=1,
+                        created_at=created_at,
+                    ),
+                    JoinScreeningExemption(
+                        user_id=910002,
+                        created_by=1,
+                        created_at=created_at + timedelta(seconds=1),
+                    ),
+                    JoinScreeningExemption(
+                        user_id=420003,
+                        created_by=1,
+                        created_at=created_at + timedelta(seconds=2),
+                    ),
+                ]
+            )
+            await session.commit()
+
+            rows = await list_join_screening_exemptions(
+                session,
+                query="9100",
+                limit=1,
+                offset=1,
+            )
+
+            self.assertEqual([row.user_id for row in rows], [910001])
+
+    async def test_global_registry_pagination_has_stable_tie_breakers(self) -> None:
+        created_at = now_shanghai_naive()
+        async with self.session_factory() as session:
+            session.add_all(
+                [
+                    GlobalBan(
+                        user_id=user_id,
+                        reason="same timestamp",
+                        source="manual",
+                        created_at=created_at,
+                    )
+                    for user_id in (940001, 940002, 940003)
+                ]
+                + [
+                    JoinScreeningExemption(
+                        user_id=user_id,
+                        created_by=1,
+                        created_at=created_at,
+                    )
+                    for user_id in (950001, 950002, 950003)
+                ]
+            )
+            await session.commit()
+
+            bans = await list_global_bans(session, limit=2, offset=1)
+            exemptions = await list_join_screening_exemptions(
+                session,
+                limit=2,
+                offset=1,
+            )
+
+            self.assertEqual([row.user_id for row in bans], [940002, 940001])
+            self.assertEqual(
+                [row.user_id for row in exemptions],
+                [950002, 950001],
+            )
+
+    async def test_remove_join_screening_exemption_is_idempotent(self) -> None:
+        async with self.session_factory() as session:
+            session.add(JoinScreeningExemption(user_id=920001, created_by=1))
+            await session.commit()
+
+            removed = await remove_join_screening_exemption(session, 920001)
+            removed_again = await remove_join_screening_exemption(session, 920001)
+            await session.commit()
+
+            self.assertTrue(removed)
+            self.assertFalse(removed_again)
+            self.assertFalse(await is_join_screening_exempt(session, 920001))
+
+    async def test_remove_join_screening_exemption_keeps_global_ban(self) -> None:
+        async with self.session_factory() as session:
+            session.add_all(
+                [
+                    GlobalBan(user_id=930001, reason="keep", source="manual"),
+                    JoinScreeningExemption(user_id=930001, created_by=1),
+                ]
+            )
+            await session.commit()
+
+            removed = await remove_join_screening_exemption(session, 930001)
+            await session.commit()
+
+            self.assertTrue(removed)
+            self.assertTrue(await is_globally_banned(session, 930001))
+            self.assertFalse(await is_join_screening_exempt(session, 930001))
+
+    async def test_remove_join_screening_exemption_invalidates_profile_caches(
+        self,
+    ) -> None:
+        user_id = 960001
+        async with self.session_factory() as session:
+            session.add_all(
+                [
+                    JoinScreeningExemption(user_id=user_id, created_by=1),
+                    GroupMember(
+                        group_id=-100,
+                        user_id=user_id,
+                        patrol_hash="cached-one",
+                    ),
+                    GroupMember(
+                        group_id=-101,
+                        user_id=user_id,
+                        patrol_hash="cached-two",
+                    ),
+                    UserProfileScreen(
+                        group_id=-100,
+                        user_id=user_id,
+                        profile_hash="cached-one",
+                    ),
+                    UserProfileScreen(
+                        group_id=-101,
+                        user_id=user_id,
+                        profile_hash="cached-two",
+                    ),
+                ]
+            )
+            await session.commit()
+
+            removed = await remove_join_screening_exemption(session, user_id)
+            await session.commit()
+
+            members = list(
+                (
+                    await session.execute(
+                        select(GroupMember).where(GroupMember.user_id == user_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            screens = list(
+                (
+                    await session.execute(
+                        select(UserProfileScreen).where(
+                            UserProfileScreen.user_id == user_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            self.assertTrue(removed)
+            self.assertEqual([member.patrol_hash for member in members], ["", ""])
+            self.assertEqual(screens, [])
+
+    async def test_profile_exemption_does_not_suppress_message_moderation(
+        self,
+    ) -> None:
+        from bot.handlers import group as group_handlers
+
+        user_id = 970001
+        async with self.session_factory() as session:
+            await authorize_group(session, -100, 1)
+            await remove_global_ban(session, user_id, operator_id=1)
+            await session.commit()
+
+            verdict = ModerationVerdict(
+                violated=True,
+                reason="message violation",
+                rule=None,
+                conclusive=True,
+            )
+            with (
+                patch(
+                    "bot.handlers.group.acquire_group_settings_write_intent",
+                    new=AsyncMock(),
+                ),
+                patch(
+                    "bot.handlers.group.manual_unban_generation_is_active",
+                    return_value=False,
+                ),
+            ):
+                claimed = await group_handlers._claim_current_moderation_verdict(
+                    session,
+                    group_id=-100,
+                    user_id=user_id,
+                    verdict=verdict,
+                )
+
+            self.assertTrue(await is_join_screening_exempt(session, user_id))
+            self.assertTrue(claimed)
+
+    async def test_concurrent_add_global_ban_is_idempotent(self) -> None:
+        # Use plain AsyncSession instances here so the database upsert itself,
+        # rather than the application's SQLite write mutex, resolves the race.
+        concurrent_factory = async_sessionmaker(
+            self.engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+
+        async def add(reason: str) -> bool:
+            async with concurrent_factory() as session:
+                created = await add_global_ban(
+                    session,
+                    1005,
+                    reason=reason,
+                    source="join_screening",
+                    created_by=1,
+                )
+                await session.commit()
+                return created
+
+        created = await asyncio.gather(add("first"), add("second"))
+
+        self.assertEqual(sorted(created), [False, True])
+        async with self.session_factory() as session:
+            row = await get_global_ban(session, 1005)
+        self.assertIsNotNone(row)
+        self.assertIn(row.reason, {"first", "second"})
+
+
+class ProfileScreenStateTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.engine, self.session_factory = await init_db(f"sqlite+aiosqlite:///{self._db_path}")
+
+    async def asyncTearDown(self) -> None:
+        await self.engine.dispose()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(f"{self._db_path}{suffix}")
+            except OSError:
+                pass
+
+    def test_profile_signature_changes_with_profile(self) -> None:
+        a = profile_signature(full_name="张三", username="zhang")
+        b = profile_signature(full_name="张三改名", username="zhang")
+        c = profile_signature(full_name="张三", username="zhang")
+        self.assertNotEqual(a, b)
+        self.assertEqual(a, c)
+
+    async def test_mark_and_get_profile_screen_hash(self) -> None:
+        async with self.session_factory() as session:
+            self.assertEqual(await get_profile_screen_hash(session, -100, 2001), "")
+            await mark_profile_screened(session, -100, 2001, profile_hash="h1")
+            await session.commit()
+            self.assertEqual(await get_profile_screen_hash(session, -100, 2001), "h1")
+            self.assertEqual(await get_profile_screen_hash(session, -200, 2001), "")
+            await mark_profile_screened(session, -200, 2001, profile_hash="other")
+            await mark_profile_screened(session, -100, 2001, profile_hash="h2")
+            await session.commit()
+            self.assertEqual(await get_profile_screen_hash(session, -100, 2001), "h2")
+            self.assertEqual(await get_profile_screen_hash(session, -200, 2001), "other")
+
+
+class JoinProfileScreeningTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.engine, self.session_factory = await init_db(f"sqlite+aiosqlite:///{self._db_path}")
+
+    async def asyncTearDown(self) -> None:
+        await self.engine.dispose()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(f"{self._db_path}{suffix}")
+            except OSError:
+                pass
+
+    def test_build_join_profile_text_combines_name_username_bio(self) -> None:
+        text = build_join_profile_text(
+            full_name="出售 VPN 联系我",
+            username="seller123",
+            bio="加我飞机 @spam_channel 进群秒发",
+        )
+
+        self.assertIn("出售 VPN 联系我", text)
+        self.assertIn("@seller123", text)
+        self.assertIn("加我飞机 @spam_channel 进群秒发", text)
+
+    async def test_screen_member_profile_flags_violating_profile(self) -> None:
+        async with self.session_factory() as session:
+            session.add(Group(id=-100, title="test", settings={}))
+            session.add(
+                ModerationRule(
+                    group_id=-100,
+                    rule_type="llm",
+                    pattern="禁止广告与拉人",
+                    action="warn",
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+            moderation = SimpleNamespace(
+                check_rules=AsyncMock(return_value=(True, "昵称含广告", SimpleNamespace(id=1)))
+            )
+            violated, reason = await screen_member_profile(
+                session,
+                moderation,
+                group_id=-100,
+                user_id=555,
+                profile_text="出售VPN | @seller | 广告simp",
+            )
+
+            self.assertTrue(violated)
+            self.assertEqual(reason, "昵称含广告")
+            moderation.check_rules.assert_awaited_once()
+            called_text = moderation.check_rules.await_args.args[2]
+            self.assertIn("成员资料审核", called_text)
+            self.assertIn("出售VPN", called_text)
+
+    async def test_screen_member_profile_skips_exempt_user(self) -> None:
+        async with self.session_factory() as session:
+            await remove_global_ban(session, 556, operator_id=1)  # records exemption
+            await session.commit()
+
+            moderation = SimpleNamespace(check_rules=AsyncMock())
+            violated, reason = await screen_member_profile(
+                session,
+                moderation,
+                group_id=-100,
+                user_id=556,
+                profile_text="whatever",
+            )
+
+            self.assertFalse(violated)
+            self.assertEqual(reason, "")
+            moderation.check_rules.assert_not_awaited()
+
+            violated, reason, conclusive = await screen_member_profile_verbose(
+                session,
+                moderation,
+                group_id=-100,
+                user_id=556,
+                profile_text="whatever",
+            )
+            self.assertFalse(violated)
+            self.assertEqual(reason, "")
+            self.assertFalse(conclusive)
+
+    async def test_screen_member_profile_skips_empty_profile(self) -> None:
+        async with self.session_factory() as session:
+            moderation = SimpleNamespace(check_rules=AsyncMock())
+            violated, _ = await screen_member_profile(
+                session,
+                moderation,
+                group_id=-100,
+                user_id=557,
+                profile_text="   ",
+            )
+
+            self.assertFalse(violated)
+            moderation.check_rules.assert_not_awaited()
+
+
+def _join_event(*, user_id: int = 900, full_name: str = "新人", username: str = "newbie") -> SimpleNamespace:
+    user = SimpleNamespace(
+        id=user_id,
+        is_bot=False,
+        full_name=full_name,
+        username=username,
+    )
+    return SimpleNamespace(
+        chat=SimpleNamespace(id=-100, type="supergroup", ban=AsyncMock()),
+        new_chat_member=SimpleNamespace(user=user),
+        bot=SimpleNamespace(
+            get_chat=AsyncMock(return_value=SimpleNamespace(bio="正经简介")),
+            send_message=AsyncMock(),
+            edit_message_text=AsyncMock(
+                return_value=SimpleNamespace(message_id=777)
+            ),
+            delete_message=AsyncMock(return_value=True),
+            ban_chat_member=AsyncMock(return_value=True),
+            get_chat_member=AsyncMock(return_value=SimpleNamespace(status="kicked")),
+        ),
+    )
+
+
+class ProfileScreeningNoticeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_required_prompt_missing_does_not_send_new_notice(self) -> None:
+        from bot.handlers import membership
+
+        event = _join_event(user_id=910, full_name="广告用户")
+        await membership._publish_profile_screening_ban_notice(
+            event,
+            membership.Settings(_env_file=None),
+            user_id=910,
+            display_name="广告用户",
+            reason="昵称含广告",
+            require_existing_prompt=True,
+        )
+
+        event.bot.edit_message_text.assert_not_awaited()
+        event.bot.send_message.assert_not_awaited()
+
+    async def test_existing_prompt_edit_failure_does_not_send_second_notice(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import membership
+
+        event = _join_event(user_id=909, full_name="广告用户")
+        event.bot.edit_message_text = AsyncMock(side_effect=RuntimeError("edit failed"))
+        cleanup = AsyncMock(return_value=True)
+        settings = membership.Settings(_env_file=None)
+
+        with patch(
+            "bot.handlers.membership.delete_verification_prompt",
+            new=cleanup,
+        ):
+            await membership._publish_profile_screening_ban_notice(
+                event,
+                settings,
+                user_id=909,
+                display_name="广告用户",
+                reason="昵称含广告",
+                prompt_message_id=777,
+                require_existing_prompt=True,
+            )
+
+        event.bot.edit_message_text.assert_awaited_once()
+        cleanup.assert_awaited_once_with(event.bot, -100, 777)
+        event.bot.send_message.assert_not_awaited()
+
+
+class MembershipHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.engine, self.session_factory = await init_db(f"sqlite+aiosqlite:///{self._db_path}")
+        async with self.session_factory() as session:
+            await authorize_group(session, -100, 1)
+            await session.commit()
+
+    async def asyncTearDown(self) -> None:
+        await self.engine.dispose()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(f"{self._db_path}{suffix}")
+            except OSError:
+                pass
+
+    def _settings(self):
+        from bot.config import Settings
+
+        settings = Settings(_env_file=None)
+        settings.moderation.enabled = True
+        return settings
+
+    async def test_violating_join_gets_group_banned_without_global_ban(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import membership
+
+        event = _join_event(user_id=901)
+        async with self.session_factory() as session:
+            fake_moderation = SimpleNamespace(
+                check_rules=AsyncMock(return_value=(True, "昵称含广告", None))
+            )
+            with (
+                patch("bot.handlers.membership.ModerationService", return_value=fake_moderation),
+                patch("bot.handlers.membership._build_llm", return_value=object()),
+            ):
+                await membership.on_member_join(event, session=session, settings=self._settings())
+            await session.commit()
+
+            event.bot.ban_chat_member.assert_awaited_once_with(
+                -100,
+                901,
+                revoke_messages=True,
+            )
+            event.bot.send_message.assert_not_awaited()
+            self.assertFalse(await is_globally_banned(session, 901))
+            warning = await session.scalar(
+                select(UserWarning).where(
+                    UserWarning.group_id == -100,
+                    UserWarning.user_id == 901,
+                )
+            )
+            self.assertIsNotNone(warning)
+            self.assertTrue(warning.is_banned)
+            audit = await session.scalar(
+                select(BanAuditEvent).where(
+                    BanAuditEvent.group_id == -100,
+                    BanAuditEvent.target_user_id == 901,
+                    BanAuditEvent.source == "profile_screening",
+                )
+            )
+            self.assertIsNotNone(audit)
+            self.assertIn("昵称含广告", audit.reason)
+
+    async def test_profile_violation_updates_existing_join_verification_prompt(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import membership
+
+        event = _join_event(user_id=908, full_name="广告用户")
+        edited = SimpleNamespace(message_id=777)
+        event.bot.edit_message_text = AsyncMock(return_value=edited)
+        settings = self._settings()
+        settings.bot.auto_delete_seconds = 42
+        settings.bot.auto_delete_categories = ["moderation"]
+        async with self.session_factory() as session:
+            await upsert_join_verification(
+                session,
+                group_id=-100,
+                user_id=908,
+                deadline_at=now_shanghai_naive() + timedelta(minutes=10),
+                display_name="广告用户",
+                prompt_message_id=777,
+            )
+            await session.commit()
+            fake_moderation = SimpleNamespace(
+                check_rules=AsyncMock(return_value=(True, "昵称含广告", None))
+            )
+            with (
+                patch("bot.handlers.membership.ModerationService", return_value=fake_moderation),
+                patch("bot.handlers.membership._build_llm", return_value=object()),
+                patch(
+                    "bot.handlers.membership.schedule_message_auto_delete_durable",
+                    new=AsyncMock(return_value=True),
+                ) as schedule_mock,
+            ):
+                await membership.on_member_join(
+                    event,
+                    session=session,
+                    settings=settings,
+                )
+
+            event.bot.edit_message_text.assert_awaited_once()
+            edit_kwargs = event.bot.edit_message_text.await_args.kwargs
+            self.assertEqual(edit_kwargs["chat_id"], -100)
+            self.assertEqual(edit_kwargs["message_id"], 777)
+            self.assertEqual(edit_kwargs["parse_mode"], "HTML")
+            self.assertIsNone(edit_kwargs["reply_markup"])
+            self.assertIn("<b>成员资料审核 · 已处理</b>", edit_kwargs["text"])
+            self.assertIn("已在当前群封禁成员", edit_kwargs["text"])
+            self.assertIn("昵称含广告", edit_kwargs["text"])
+            event.bot.send_message.assert_not_awaited()
+            event.bot.delete_message.assert_not_awaited()
+            schedule_mock.assert_awaited_once_with(edited, 42)
+            self.assertFalse(await is_globally_banned(session, 908))
+            warning = await session.scalar(
+                select(UserWarning).where(
+                    UserWarning.group_id == -100,
+                    UserWarning.user_id == 908,
+                )
+            )
+            self.assertIsNotNone(warning)
+            self.assertTrue(warning.is_banned)
+            self.assertIsNone(await get_join_verification(session, -100, 908))
+
+    async def test_deauthorization_during_join_llm_discards_profile_ban(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import membership
+        from bot.services.authz import deauthorize_group
+
+        event = _join_event(user_id=907)
+
+        async def deauthorize_then_violate(
+            session,
+            _moderation,
+            **_kwargs,
+        ):
+            await deauthorize_group(session, -100)
+            await session.commit()
+            return True, "昵称含广告", True
+
+        async with self.session_factory() as session:
+            with (
+                patch(
+                    "bot.handlers.membership.screen_member_profile_verbose",
+                    side_effect=deauthorize_then_violate,
+                ),
+                patch("bot.handlers.membership._build_llm", return_value=object()),
+            ):
+                await membership.on_member_join(
+                    event,
+                    session=session,
+                    settings=self._settings(),
+                )
+
+        event.bot.ban_chat_member.assert_not_awaited()
+        event.bot.send_message.assert_not_awaited()
+        async with self.session_factory() as session:
+            self.assertFalse(await is_globally_banned(session, 907))
+            warning = await session.scalar(
+                select(UserWarning.id).where(
+                    UserWarning.group_id == -100,
+                    UserWarning.user_id == 907,
+                    UserWarning.is_banned.is_(True),
+                )
+            )
+            self.assertIsNone(warning)
+
+    async def test_cancelling_inflight_exemption_restarts_profile_screening(
+        self,
+    ) -> None:
+        from bot.handlers import membership
+        from bot.services.join_screening import _ProfileScreeningExemptionSkip
+
+        user_id = 911
+        event = _join_event(user_id=user_id, full_name="广告用户")
+        async with self.session_factory() as session:
+            await remove_global_ban(session, user_id, operator_id=1)
+            await session.commit()
+
+            calls = 0
+
+            async def skip_then_cancel(
+                current_session,
+                _moderation,
+                **_kwargs,
+            ):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    removed = await remove_join_screening_exemption(
+                        current_session,
+                        user_id,
+                    )
+                    self.assertTrue(removed)
+                    await current_session.commit()
+                    return _ProfileScreeningExemptionSkip((False, "", False))
+                return True, "昵称含广告", True
+
+            with (
+                patch(
+                    "bot.handlers.membership.screen_member_profile_verbose",
+                    side_effect=skip_then_cancel,
+                ),
+                patch("bot.handlers.membership._build_llm", return_value=object()),
+            ):
+                await membership.on_member_join(
+                    event,
+                    session=session,
+                    settings=self._settings(),
+                )
+
+            self.assertEqual(calls, 2)
+            event.bot.ban_chat_member.assert_awaited_once_with(
+                -100,
+                user_id,
+                revoke_messages=True,
+            )
+            self.assertFalse(await is_join_screening_exempt(session, user_id))
+
+    async def test_repeated_inflight_exemption_changes_defer_join_handling(
+        self,
+    ) -> None:
+        from bot.handlers import membership
+        from bot.services.join_screening import _ProfileScreeningExemptionSkip
+
+        user_id = 912
+        event = _join_event(user_id=user_id, full_name="状态反复用户")
+        async with self.session_factory() as session:
+            await remove_global_ban(session, user_id, operator_id=1)
+            await session.commit()
+
+            calls = 0
+
+            async def repeatedly_changed(
+                current_session,
+                _moderation,
+                **_kwargs,
+            ):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    await remove_join_screening_exemption(current_session, user_id)
+                    await current_session.commit()
+                return _ProfileScreeningExemptionSkip((False, "", False))
+
+            with (
+                patch(
+                    "bot.handlers.membership.screen_member_profile_verbose",
+                    side_effect=repeatedly_changed,
+                ),
+                patch("bot.handlers.membership._build_llm", return_value=object()),
+                patch(
+                    "bot.handlers.membership.request_current_update_retry"
+                ) as retry_mock,
+            ):
+                await membership.on_member_join(
+                    event,
+                    session=session,
+                    settings=self._settings(),
+                )
+
+            self.assertEqual(calls, 2)
+            retry_mock.assert_called_once_with()
+            event.bot.ban_chat_member.assert_not_awaited()
+            event.bot.send_message.assert_not_awaited()
+
+    async def test_clean_join_is_not_banned_and_marks_profile_checked(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import membership
+
+        event = _join_event(user_id=902)
+        async with self.session_factory() as session:
+            fake_moderation = SimpleNamespace(
+                check_rules=AsyncMock(return_value=(False, "", None))
+            )
+            with (
+                patch("bot.handlers.membership.ModerationService", return_value=fake_moderation),
+                patch("bot.handlers.membership._build_llm", return_value=object()),
+            ):
+                await membership.on_member_join(event, session=session, settings=self._settings())
+            await session.commit()
+
+            event.bot.ban_chat_member.assert_not_awaited()
+            self.assertFalse(await is_globally_banned(session, 902))
+            self.assertNotEqual(await get_profile_screen_hash(session, -100, 902), "")
+
+    async def test_clean_join_sends_configured_welcome(self) -> None:
+        from unittest.mock import patch
+
+        from bot.db.models import Group
+        from bot.handlers import membership
+
+        async with self.session_factory() as session:
+            group = await session.get(Group, -100)
+            if group is None:
+                session.add(
+                    Group(id=-100, title="", settings={"welcome_message": "欢迎 {name}"})
+                )
+            else:
+                group.settings = {"welcome_message": "欢迎 {name}"}
+            await session.commit()
+
+        event = _join_event(user_id=906, full_name="Ada")
+        async with self.session_factory() as session:
+            fake_moderation = SimpleNamespace(
+                check_rules=AsyncMock(return_value=(False, "", None))
+            )
+            with (
+                patch("bot.handlers.membership.ModerationService", return_value=fake_moderation),
+                patch("bot.handlers.membership._build_llm", return_value=object()),
+            ):
+                await membership.on_member_join(event, session=session, settings=self._settings())
+
+        event.bot.send_message.assert_awaited_once()
+        args = event.bot.send_message.await_args.args
+        self.assertEqual(args[0], -100)
+        self.assertIn("欢迎 Ada", args[1])
+
+    async def test_welcome_deferred_when_join_verification_starts(self) -> None:
+        from unittest.mock import patch
+
+        from bot.db.models import Group
+        from bot.handlers import membership
+
+        async with self.session_factory() as session:
+            group = await session.get(Group, -100)
+            if group is None:
+                session.add(
+                    Group(id=-100, title="", settings={"welcome_message": "欢迎 {name}"})
+                )
+            else:
+                group.settings = {"welcome_message": "欢迎 {name}"}
+            await session.commit()
+
+        settings = self._settings()
+        settings.moderation.enabled = False
+        event = _join_event(user_id=907, full_name="Ada")
+        async with self.session_factory() as session:
+            with (
+                patch(
+                    "bot.handlers.membership.join_verification_policy",
+                    return_value=(True, "turnstile"),
+                ),
+                patch(
+                    "bot.handlers.membership.join_verification_ready",
+                    return_value=True,
+                ),
+                patch(
+                    "bot.handlers.membership._start_join_verification",
+                    new=AsyncMock(),
+                ) as start_verification,
+            ):
+                await membership.on_member_join(event, session=session, settings=settings)
+
+        start_verification.assert_awaited_once()
+        # The welcome must wait for the verification outcome, not the raw join.
+        event.bot.send_message.assert_not_awaited()
+
+    async def test_globally_banned_user_is_rebanned_on_rejoin_without_screening(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import membership
+
+        event = _join_event(user_id=903)
+        async with self.session_factory() as session:
+            await add_global_ban(session, 903, reason="之前违规", created_by=1)
+            await session.commit()
+
+            fake_moderation = SimpleNamespace(check_rules=AsyncMock())
+            with (
+                patch("bot.handlers.membership.ModerationService", return_value=fake_moderation),
+                patch("bot.handlers.membership._build_llm", return_value=object()),
+            ):
+                await membership.on_member_join(event, session=session, settings=self._settings())
+
+            event.bot.ban_chat_member.assert_awaited_once_with(
+                -100,
+                903,
+                revoke_messages=True,
+            )
+            fake_moderation.check_rules.assert_not_awaited()
+            event.bot.get_chat.assert_not_awaited()
+
+    async def test_ban_notice_honors_moderation_auto_delete(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import membership
+
+        event = _join_event(user_id=906)
+        sent = SimpleNamespace()
+        event.bot.send_message = AsyncMock(return_value=sent)
+        settings = self._settings()
+        settings.bot.auto_delete_seconds = 42
+        settings.bot.auto_delete_categories = ["moderation"]
+        async with self.session_factory() as session:
+            await add_global_ban(session, 906, reason="之前违规", created_by=1)
+            await session.commit()
+
+            fake_moderation = SimpleNamespace(check_rules=AsyncMock())
+            with (
+                patch("bot.handlers.membership.ModerationService", return_value=fake_moderation),
+                patch("bot.handlers.membership._build_llm", return_value=object()),
+                patch(
+                    "bot.handlers.membership.schedule_message_auto_delete_durable",
+                    new=AsyncMock(return_value=True),
+                ) as schedule_mock,
+            ):
+                await membership.on_member_join(event, session=session, settings=settings)
+
+            event.bot.ban_chat_member.assert_awaited_once_with(
+                -100,
+                906,
+                revoke_messages=True,
+            )
+            event.bot.send_message.assert_awaited_once()
+            # The banned joiner never verified: the notice hides the display
+            # name behind a spoiler while keeping the numeric ID visible.
+            notice_text = event.bot.send_message.await_args.args[1]
+            self.assertIn("<tg-spoiler>新人</tg-spoiler>", notice_text)
+            self.assertIn("906", notice_text)
+            # The ban notice ("审核通知") must inherit the moderation retention.
+            schedule_mock.assert_awaited_once_with(sent, 42)
+
+    async def test_unbanned_user_rejoin_skips_profile_screening(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import membership
+
+        event = _join_event(user_id=904)
+        async with self.session_factory() as session:
+            await add_global_ban(session, 904, reason="旧账", created_by=1)
+            await remove_global_ban(session, 904, operator_id=1)
+            await session.commit()
+
+            fake_moderation = SimpleNamespace(check_rules=AsyncMock())
+            with (
+                patch("bot.handlers.membership.ModerationService", return_value=fake_moderation),
+                patch("bot.handlers.membership._build_llm", return_value=object()),
+            ):
+                await membership.on_member_join(event, session=session, settings=self._settings())
+
+            event.bot.ban_chat_member.assert_not_awaited()
+            fake_moderation.check_rules.assert_not_awaited()
+
+    async def test_unauthorized_group_join_is_ignored(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import membership
+
+        event = _join_event(user_id=905)
+        event.chat = SimpleNamespace(id=-999, type="supergroup", ban=AsyncMock())
+        async with self.session_factory() as session:
+            fake_moderation = SimpleNamespace(check_rules=AsyncMock())
+            with (
+                patch("bot.handlers.membership.ModerationService", return_value=fake_moderation),
+                patch("bot.handlers.membership._build_llm", return_value=object()),
+            ):
+                await membership.on_member_join(event, session=session, settings=self._settings())
+
+            event.bot.ban_chat_member.assert_not_awaited()
+            fake_moderation.check_rules.assert_not_awaited()
+
+
+class BanCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.engine, self.session_factory = await init_db(f"sqlite+aiosqlite:///{self._db_path}")
+        async with self.session_factory() as session:
+            await authorize_group(session, -100, 1)
+            await session.commit()
+
+    async def asyncTearDown(self) -> None:
+        await self.engine.dispose()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(f"{self._db_path}{suffix}")
+            except OSError:
+                pass
+
+    def _settings(self):
+        from bot.config import Settings
+
+        settings = Settings(_env_file=None)
+        settings.super_admin_id = 1
+        return settings
+
+    def _message(self, text: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            chat=SimpleNamespace(
+                id=-100,
+                type="supergroup",
+                ban=AsyncMock(),
+                get_member=AsyncMock(return_value=SimpleNamespace(status="member")),
+            ),
+            from_user=SimpleNamespace(id=1, username="root", full_name="Root"),
+            text=text,
+            reply_to_message=None,
+            bot=SimpleNamespace(
+                ban_chat_member=AsyncMock(),
+                unban_chat_member=AsyncMock(),
+                restrict_chat_member=AsyncMock(return_value=True),
+                get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member")),
+            ),
+            answer=AsyncMock(return_value=SimpleNamespace(message_id=900)),
+        )
+
+    async def test_super_admin_ban_command_prompts_for_scope(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import admin as admin_handlers
+
+        message = self._message("/ban 777 广告机")
+        async with self.session_factory() as session:
+            with patch("bot.handlers.admin._answer", new=AsyncMock()) as answer_mock:
+                await admin_handlers.cmd_ban(message, session=session, settings=self._settings())
+            await session.commit()
+
+            self.assertFalse(await is_globally_banned(session, 777))
+            message.bot.ban_chat_member.assert_not_awaited()
+            message.answer.assert_awaited_once()
+            self.assertIn("请选择封禁范围", message.answer.await_args.args[0])
+            self.assertEqual(
+                len(message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0]),
+                2,
+            )
+            answer_mock.assert_not_awaited()
+
+    async def test_super_admin_unban_command_prompts_for_scope(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import admin as admin_handlers
+
+        async with self.session_factory() as session:
+            await add_global_ban(session, 778, reason="x", created_by=1)
+            session.add(UserWarning(group_id=-100, user_id=778, count=3, is_banned=True))
+            await session.commit()
+
+            message = self._message("/unban 778")
+            with patch("bot.handlers.admin._answer", new=AsyncMock()) as answer_mock:
+                await admin_handlers.cmd_unban(message, session=session, settings=self._settings())
+            await session.commit()
+
+            self.assertTrue(await is_globally_banned(session, 778))
+            self.assertFalse(await is_join_screening_exempt(session, 778))
+            warning_result = await session.execute(
+                select(UserWarning).where(
+                    UserWarning.group_id == -100,
+                    UserWarning.user_id == 778,
+                )
+            )
+            self.assertIsNotNone(warning_result.scalar_one_or_none())
+            message.bot.unban_chat_member.assert_not_awaited()
+            self.assertIn("请选择解封范围", message.answer.await_args.args[0])
+            answer_mock.assert_not_awaited()
+
+    async def test_clearwarnings_command_clears_count_by_user_id(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import admin as admin_handlers
+
+        async with self.session_factory() as session:
+            session.add(UserWarning(group_id=-100, user_id=779, count=2, is_banned=False))
+            await session.commit()
+
+            message = self._message("/clearwarnings 779")
+            with patch("bot.handlers.admin._answer", new=AsyncMock()) as answer_mock:
+                await admin_handlers.cmd_clearwarnings(
+                    message,
+                    session=session,
+                    settings=self._settings(),
+                )
+            await session.commit()
+
+            warning_result = await session.execute(
+                select(UserWarning).where(
+                    UserWarning.group_id == -100,
+                    UserWarning.user_id == 779,
+                )
+            )
+            self.assertIsNone(warning_result.scalar_one_or_none())
+            self.assertIn("原为 2 次", answer_mock.await_args.args[2])
+
+    async def test_clearwarnings_command_accepts_reply_target(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import admin as admin_handlers
+
+        async with self.session_factory() as session:
+            session.add(UserWarning(group_id=-100, user_id=780, count=1, is_banned=True))
+            await session.commit()
+
+            message = self._message("/clearwarnings")
+            message.reply_to_message = SimpleNamespace(from_user=SimpleNamespace(id=780))
+            with patch("bot.handlers.admin._answer", new=AsyncMock()) as answer_mock:
+                await admin_handlers.cmd_clearwarnings(
+                    message,
+                    session=session,
+                    settings=self._settings(),
+                )
+            await session.commit()
+
+            warning_result = await session.execute(
+                select(UserWarning).where(
+                    UserWarning.group_id == -100,
+                    UserWarning.user_id == 780,
+                )
+            )
+            warning = warning_result.scalar_one_or_none()
+            self.assertIsNotNone(warning)
+            self.assertEqual(warning.count, 0)
+            self.assertTrue(warning.is_banned)
+            self.assertIn("封禁状态已保留", answer_mock.await_args.args[2])
+
+            with patch("bot.handlers.admin._answer", new=AsyncMock()) as list_answer:
+                await admin_handlers.cmd_warnings(
+                    message,
+                    session=session,
+                    settings=self._settings(),
+                )
+            self.assertIn("780", list_answer.await_args.args[2])
+
+    async def test_telegram_group_admin_bans_only_current_group(self) -> None:
+        from unittest.mock import patch
+
+        from bot.handlers import admin as admin_handlers
+
+        message = self._message("/ban 777")
+        message.from_user = SimpleNamespace(id=42, username="manager", full_name="Manager")
+        message.chat.get_member = AsyncMock(
+            return_value=SimpleNamespace(status="administrator")
+        )
+        message.bot.get_chat_member = AsyncMock(
+            side_effect=lambda _chat_id, user_id: SimpleNamespace(
+                status="administrator" if int(user_id) == 42 else "member",
+                can_restrict_members=int(user_id) == 42,
+            )
+        )
+
+        async with self.session_factory() as session:
+            with patch("bot.handlers.admin._answer", new=AsyncMock()) as answer_mock:
+                await admin_handlers.cmd_ban(message, session=session, settings=self._settings())
+
+            self.assertFalse(await is_globally_banned(session, 777))
+            warning = await session.scalar(
+                select(UserWarning).where(
+                    UserWarning.group_id == -100,
+                    UserWarning.user_id == 777,
+                )
+            )
+            self.assertIsNotNone(
+                warning,
+                msg=str(answer_mock.await_args.args[2]),
+            )
+            self.assertTrue(warning.is_banned)
+            message.bot.ban_chat_member.assert_awaited_once_with(
+                -100,
+                777,
+                revoke_messages=True,
+            )
+            self.assertIn("本群封禁完成", answer_mock.await_args.args[2])
+
+
+class GlobalBanMiddlewareTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.engine, self.session_factory = await init_db(f"sqlite+aiosqlite:///{self._db_path}")
+        async with self.session_factory() as session:
+            await authorize_group(session, -100, 1)
+            await session.commit()
+
+    async def asyncTearDown(self) -> None:
+        await self.engine.dispose()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(f"{self._db_path}{suffix}")
+            except OSError:
+                pass
+
+    def _settings(self):
+        from bot.config import Settings
+
+        settings = Settings(_env_file=None)
+        settings.super_admin_id = 1
+        return settings
+
+    def _event(self, *, user_id: int, text: str = "/help") -> SimpleNamespace:
+        return SimpleNamespace(
+            chat=SimpleNamespace(id=-100, type="supergroup", ban=AsyncMock()),
+            bot=SimpleNamespace(
+                ban_chat_member=AsyncMock(return_value=True),
+                get_chat_member=AsyncMock(
+                    return_value=SimpleNamespace(status="kicked")
+                ),
+            ),
+            from_user=SimpleNamespace(id=user_id),
+            sender_chat=None,
+            text=text,
+            delete=AsyncMock(),
+        )
+
+    async def test_banned_user_command_is_blocked_before_handler(self) -> None:
+        from bot.middlewares.global_ban import GlobalBanEnforcementMiddleware
+
+        middleware = GlobalBanEnforcementMiddleware(self.session_factory)
+        handler = AsyncMock(return_value="handled")
+
+        async with self.session_factory() as session:
+            await add_global_ban(session, 666, reason="spam", created_by=1)
+            await session.commit()
+
+        event = self._event(user_id=666, text="/help")
+        result = await middleware(handler, event, {"settings": self._settings()})
+
+        handler.assert_not_awaited()
+        self.assertIsNone(result)
+        event.delete.assert_awaited_once()
+        event.bot.ban_chat_member.assert_awaited_once_with(
+            -100,
+            666,
+            revoke_messages=True,
+        )
+
+    async def test_local_ban_retries_any_next_message_until_telegram_confirms(self) -> None:
+        from bot.middlewares.global_ban import GlobalBanEnforcementMiddleware
+
+        middleware = GlobalBanEnforcementMiddleware(self.session_factory)
+        handler = AsyncMock(return_value="handled")
+        async with self.session_factory() as session:
+            session.add(
+                UserWarning(
+                    group_id=-100,
+                    user_id=667,
+                    count=3,
+                    is_banned=True,
+                )
+            )
+            await session.commit()
+
+        event = self._event(user_id=667, text="ordinary message")
+        event.bot.ban_chat_member.side_effect = [False, True]
+
+        failed_receipt = UpdateCompletionReceipt()
+        token = bind_update_completion(failed_receipt)
+        try:
+            self.assertIsNone(
+                await middleware(handler, event, {"settings": self._settings()})
+            )
+        finally:
+            reset_update_completion(token)
+        self.assertTrue(failed_receipt.deferred)
+        self.assertFalse(await failed_receipt.wait())
+
+        successful_receipt = UpdateCompletionReceipt()
+        token = bind_update_completion(successful_receipt)
+        try:
+            self.assertIsNone(
+                await middleware(handler, event, {"settings": self._settings()})
+            )
+        finally:
+            reset_update_completion(token)
+        self.assertFalse(successful_receipt.deferred)
+        handler.assert_not_awaited()
+        self.assertEqual(
+            event.bot.ban_chat_member.await_args_list,
+            [
+                call(-100, 667, revoke_messages=True),
+                call(-100, 667, revoke_messages=True),
+            ],
+        )
+
+    async def test_normal_user_message_passes_through(self) -> None:
+        from bot.middlewares.global_ban import GlobalBanEnforcementMiddleware
+
+        middleware = GlobalBanEnforcementMiddleware(self.session_factory)
+        handler = AsyncMock(return_value="handled")
+
+        event = self._event(user_id=42)
+        result = await middleware(handler, event, {"settings": self._settings()})
+
+        handler.assert_awaited_once()
+        self.assertEqual(result, "handled")
+        event.delete.assert_not_awaited()
+
+    async def test_super_admin_never_blocked_even_if_listed(self) -> None:
+        from bot.middlewares.global_ban import GlobalBanEnforcementMiddleware
+
+        middleware = GlobalBanEnforcementMiddleware(self.session_factory)
+        handler = AsyncMock(return_value="handled")
+
+        async with self.session_factory() as session:
+            await add_global_ban(session, 1, reason="oops", created_by=1)
+            await session.commit()
+
+        event = self._event(user_id=1)
+        result = await middleware(handler, event, {"settings": self._settings()})
+
+        handler.assert_awaited_once()
+        self.assertEqual(result, "handled")
+
+    async def test_private_chat_is_ignored(self) -> None:
+        from bot.middlewares.global_ban import GlobalBanEnforcementMiddleware
+
+        middleware = GlobalBanEnforcementMiddleware(self.session_factory)
+        handler = AsyncMock(return_value="handled")
+
+        async with self.session_factory() as session:
+            await add_global_ban(session, 666, reason="spam", created_by=1)
+            await session.commit()
+
+        event = self._event(user_id=666)
+        event.chat = SimpleNamespace(id=666, type="private", ban=AsyncMock())
+        result = await middleware(handler, event, {"settings": self._settings()})
+
+        handler.assert_awaited_once()
+        self.assertEqual(result, "handled")
+
+    async def test_unauthorized_group_is_not_enforced(self) -> None:
+        from bot.middlewares.global_ban import GlobalBanEnforcementMiddleware
+
+        middleware = GlobalBanEnforcementMiddleware(self.session_factory)
+        handler = AsyncMock(return_value="handled")
+
+        async with self.session_factory() as session:
+            await add_global_ban(session, 666, reason="spam", created_by=1)
+            await session.commit()
+
+        event = self._event(user_id=666)
+        # group -999 is not in the authorized_groups table
+        event.chat = SimpleNamespace(id=-999, type="supergroup", ban=AsyncMock())
+        result = await middleware(handler, event, {"settings": self._settings()})
+
+        handler.assert_awaited_once()
+        self.assertEqual(result, "handled")
+        event.bot.ban_chat_member.assert_not_awaited()
+
+
+class SuperAdminJoinProtectionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.engine, self.session_factory = await init_db(f"sqlite+aiosqlite:///{self._db_path}")
+        async with self.session_factory() as session:
+            await authorize_group(session, -100, 1)
+            await session.commit()
+
+    async def asyncTearDown(self) -> None:
+        await self.engine.dispose()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(f"{self._db_path}{suffix}")
+            except OSError:
+                pass
+
+    async def test_super_admin_join_skips_screening_and_ban(self) -> None:
+        from unittest.mock import patch
+
+        from bot.config import Settings
+        from bot.handlers import membership
+
+        settings = Settings(_env_file=None)
+        settings.super_admin_id = 42
+        settings.moderation.enabled = True
+
+        event = _join_event(user_id=42, full_name="主人")
+        async with self.session_factory() as session:
+            # even if somehow listed, super admin must not be touched on join
+            await add_global_ban(session, 42, reason="oops", created_by=1)
+            await session.commit()
+
+            fake_moderation = SimpleNamespace(check_rules=AsyncMock())
+            with (
+                patch("bot.handlers.membership.ModerationService", return_value=fake_moderation),
+                patch("bot.handlers.membership._build_llm", return_value=object()),
+            ):
+                await membership.on_member_join(event, session=session, settings=settings)
+
+            event.bot.ban_chat_member.assert_not_awaited()
+            fake_moderation.check_rules.assert_not_awaited()
+
+
+if __name__ == "__main__":
+    unittest.main()

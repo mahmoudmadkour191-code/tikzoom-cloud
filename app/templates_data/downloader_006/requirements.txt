@@ -1,0 +1,17 @@
+#https://github.com/tangyoha/pyrogram/archive/refs/tags/v2.0.69.zip
+#pyrogram==2.0.106
+PyYAML
+rich
+TgCrypto
+loguru
+# aligo
+Werkzeug
+flask
+ply
+ruamel.yaml
+flask-login
+pycryptodome
+moviepy
+
+# auto-added by TikZoom curator
+pyrogram

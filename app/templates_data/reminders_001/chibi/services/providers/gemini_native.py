@@ -1,0 +1,741 @@
+import asyncio
+import io
+import math
+import random
+import wave
+from asyncio import sleep
+from copy import copy
+from io import BytesIO
+from typing import Any, cast
+from uuid import uuid4
+
+from google.genai.client import Client
+from google.genai.errors import APIError
+from google.genai.types import (
+    ContentDict,
+    ContentListUnion,
+    ContentListUnionDict,
+    FunctionCallDict,
+    FunctionDeclaration,
+    FunctionResponseDict,
+    GenerateContentConfig,
+    GenerateContentResponse,
+    GenerateImagesConfig,
+    GenerateImagesResponse,
+    HttpOptions,
+    Image,
+    ImageConfig,
+    Part,
+    PartDict,
+    PrebuiltVoiceConfig,
+    SpeechConfig,
+    Tool,
+    VoiceConfig,
+)
+from loguru import logger
+
+from chibi.config import application_settings, gpt_settings
+from chibi.exceptions import NoResponseError, NotAuthorizedError, ServiceRateLimitError, ServiceResponseError
+from chibi.models import Message, User
+from chibi.schemas.app import ChatResponseSchema, ModelChangeSchema, ModeratorsAnswer, VisionResultSchema
+from chibi.services.interface import UserInterface
+from chibi.services.metrics import MetricsService
+from chibi.services.providers.provider import RestApiFriendlyProvider
+from chibi.services.providers.tools import RegisteredChibiTools
+from chibi.services.providers.tools.constants import MODERATOR_PROMPT
+from chibi.services.providers.tools.schemas import ToolCallSchema
+from chibi.services.providers.utils import (
+    get_usage_from_google_response,
+    get_usage_msg,
+    prepare_system_prompt,
+    send_llm_thoughts,
+)
+from chibi.services.usage_cache import UsageCacheStore
+
+
+class Gemini(RestApiFriendlyProvider):
+    api_key = gpt_settings.gemini_key
+    chat_ready = True
+    tts_ready = True
+    stt_ready = True
+    image_generation_ready = True
+    moderation_ready = True
+    vision_ready = True
+    ocr_ready = True
+
+    name = "Gemini"
+    model_name_keywords = ["gemini", "gemma"]
+    model_name_keywords_exclude = [
+        "robotics",
+        "computer",
+        "audio",
+        "stt",
+        "image",
+        "vision",
+        "tts",
+        "embedding",
+        "2.0",
+        "1.5",
+    ]
+
+    default_model = "models/gemini-2.5-pro"
+    default_image_model = "models/imagen-4.0-fast-generate-001"
+    default_tts_voice = "Kore"
+    default_tts_model = "gemini-3.1-flash-tts-preview"
+    default_stt_model = "gemini-3-flash-preview"
+    default_moderation_model = "models/gemini-2.5-flash-lite"
+    default_vision_model = "models/gemini-3-flash-preview"
+    default_ocr_model = "models/gemini-3-flash-preview"
+
+    frequency_penalty: float | None = gpt_settings.frequency_penalty
+    max_tokens: int = gpt_settings.max_tokens
+    presence_penalty: float | None = gpt_settings.presence_penalty
+    temperature: float = gpt_settings.temperature
+
+    def __init__(self, token: str) -> None:
+        super().__init__(token=token)
+
+    @property
+    def tools_list(self) -> list[Tool]:
+        """Convert our tools format to Google's Tool format.
+
+        Returns:
+            Tools list in Google's Tool format.
+        """
+        google_tools = []
+        for tool in RegisteredChibiTools.get_tool_definitions():
+            try:
+                google_tool = Tool(
+                    function_declarations=[
+                        FunctionDeclaration(
+                            name=str(tool["function"]["name"]),
+                            description=str(tool["function"]["description"]),
+                            parameters=tool["function"]["parameters"],
+                        )
+                    ]
+                )
+            except Exception as e:
+                logger.error(f"Failed to register tool {tool['function']['name']} due to exception: {e}")
+                import pprint
+
+                pprint.pprint(tool)
+                raise
+            google_tools.append(google_tool)
+        return google_tools
+
+    def _get_text(self, response: GenerateContentResponse) -> str | None:
+        if not response.candidates or not response.candidates[0].content or not response.candidates[0].content.parts:
+            return None
+        text = ""
+        for part in response.candidates[0].content.parts:
+            if part.text is not None and not part.thought:
+                text += part.text
+        return text if text != "" else None
+
+    def _get_thought_signature(self, response: GenerateContentResponse) -> bytes | None:
+        if not response.candidates:
+            return None
+        first_candidate = response.candidates[0]
+        if not first_candidate.content or not first_candidate.content.parts:
+            return None
+        for part in first_candidate.content.parts:
+            if signature := part.thought_signature:
+                return signature
+        return None
+
+    def _get_retry_delay(self, response: Any) -> float | None:
+        if not isinstance(response, dict):
+            logger.warning(
+                f"The Gemini API error response data is not a dict. Skipping getting retry delay. "
+                f"Response type: {type(response)}. Response: {response}"
+            )
+            return None
+        per_day_quota: bool = False
+        retry_delay = None
+        details = response.get("error", {}).get("details", [])
+        if not details:
+            logger.warning(
+                f"The Gemini API error response data does not contain details section. Skipping getting retry delay. "
+                f"Response: {response}"
+            )
+            return None
+
+        for item in details:
+            detail_type = item.get("@type", "")
+
+            if "QuotaFailure" in detail_type:
+                violations = item.get("violations", [])
+                for v in violations:
+                    if "PerDay" in v.get("quotaId", ""):
+                        per_day_quota = True
+                        break
+
+            elif "RetryInfo" in detail_type:
+                delay_str = item.get("retryDelay", "")
+                if delay_str and delay_str.endswith("s"):
+                    try:
+                        val = float(delay_str[:-1])
+                        retry_delay = math.ceil(val) + 1
+                    except ValueError:
+                        retry_delay = None
+        if per_day_quota:
+            logger.warning("Ooops! Seems we have reached Daily Quota for Gemini API.")
+            return None
+        return retry_delay
+
+    async def _generate_content(
+        self, model: str, contents: ContentListUnion | ContentListUnionDict, config: GenerateContentConfig
+    ) -> GenerateContentResponse:
+        for attempt in range(gpt_settings.retries):
+            try:
+                async with Client(api_key=gpt_settings.gemini_key).aio as client:
+                    response: GenerateContentResponse = await client.models.generate_content(
+                        model=model,
+                        contents=contents,
+                        config=config,
+                    )
+                answer = self._get_text(response)
+                if answer is not None or response.function_calls:
+                    return response
+                if answer is None and response.model_version == self.default_tts_model:
+                    return response
+            except APIError as err:
+                logger.error(f"Gemini API error: {err.message}")
+
+                if err.code == 429:
+                    retry_delay = self._get_retry_delay(err.details)
+                    if not retry_delay:
+                        raise ServiceRateLimitError(provider=self.name, model=model, detail=err.details)
+                    await asyncio.sleep(retry_delay + random.uniform(0.5, 2.5))
+                    continue
+
+                elif err.code == 403:
+                    raise NotAuthorizedError(provider=self.name, model=model, detail=err.details)
+
+                else:
+                    raise ServiceResponseError(provider=self.name, model=model, detail=err.details)
+
+            delay = gpt_settings.backoff_factor * (2**attempt)
+            jitter = delay * random.uniform(0.1, 0.5)
+            total_delay = delay + jitter
+
+            logger.warning(
+                f"Attempt #{attempt + 1}. Unexpected (empty) response received. Retrying in {total_delay} seconds..."
+            )
+            await sleep(total_delay)
+        raise NoResponseError(provider=self.name, model=model, detail="Unexpected (empty) response received")
+
+    async def _get_chat_completion_response(
+        self,
+        messages: list[ContentDict],
+        user: User,
+        model: str | None = None,
+        system_prompt: str = gpt_settings.assistant_prompt,
+        interface: UserInterface | None = None,
+        conversation_messages: list[Message] | None = None,
+        track_prompt_size: bool = False,
+        caller_storage_id: int | None = None,
+        caller_thread_id: int | None = None,
+    ) -> tuple[ChatResponseSchema, list[ContentDict]]:
+        model_name = model or self.default_model
+
+        prepared_system_prompt = await prepare_system_prompt(
+            base_system_prompt=system_prompt,
+            user_id=user.id,
+            interface=interface,
+            conversation_messages=conversation_messages,
+            thread_id=caller_thread_id,
+        )
+
+        if "flash" in model_name and self.temperature > 0.4:
+            temperature = 0.4
+        else:
+            temperature = self.temperature
+
+        http_options = HttpOptions(httpx_async_client=self.get_async_httpx_client())
+
+        generation_config = GenerateContentConfig(
+            system_instruction=prepared_system_prompt if "gemini" in model_name else None,
+            temperature=temperature,
+            max_output_tokens=self.max_tokens,
+            presence_penalty=self.presence_penalty,
+            frequency_penalty=self.frequency_penalty,
+            tools=self.tools_list if "gemini" in model_name else None,
+            http_options=http_options,
+        )
+
+        response: GenerateContentResponse = await self._generate_content(
+            model=model_name,
+            contents=cast(ContentListUnionDict, messages),
+            config=generation_config,
+        )
+        answer = self._get_text(response)
+        usage = get_usage_from_google_response(response_message=response)
+        if track_prompt_size:
+            UsageCacheStore().store(
+                user_id=user.id,
+                thread_id=interface.thread_id if interface else 0,
+                usage=usage,
+                provider=self.name,
+            )
+        if application_settings.is_influx_configured:
+            MetricsService.send_usage_metrics(metric=usage, model=model_name, provider=self.name, user=user)
+        usage_message = get_usage_msg(usage=usage)
+
+        if not response.function_calls:
+            messages.append(
+                ContentDict(
+                    role="model",
+                    parts=[
+                        PartDict(
+                            text=answer,
+                        )
+                    ],
+                )
+            )
+            return ChatResponseSchema(answer=answer, provider=self.name, model=model_name, usage=usage), messages
+
+        # Tool calls handling
+        logger.log("CALL", f"{model_name} requested the call of {len(response.function_calls)} tools.")
+
+        if answer:
+            await send_llm_thoughts(thoughts=answer, interface=interface)
+        logger.log("THINK", f"{model_name}: {answer or 'No thoughts...'}. {usage_message}")
+
+        calls = [
+            ToolCallSchema(
+                tool_name=str(function_call.name),
+                args=copy(function_call.args),
+            )
+            for function_call in response.function_calls
+        ]
+        results = await self.call_functions(
+            calls=calls,
+            caller_model=model_name,
+            caller_provider=self.name,
+            user_id=user.id,
+            interface=interface,
+            caller_storage_id=caller_storage_id,
+            caller_thread_id=caller_thread_id,
+        )
+
+        thought_signature = self._get_thought_signature(response=response)
+        if not thought_signature and "gemini-3" in model_name:
+            logger.warning(
+                f"Could not get thought signature for function call, no response candidates found: "
+                f"{response.candidates}."
+            )
+
+        for function_call, result in zip(response.function_calls, results):
+            function_call_id = function_call.id or str(uuid4())
+            tool_call_message: ContentDict = ContentDict(
+                role="model",
+                parts=[
+                    PartDict(
+                        function_call=FunctionCallDict(
+                            name=function_call.name, args=function_call.args, id=function_call_id
+                        ),
+                        thought_signature=thought_signature,
+                    ),
+                ],
+            )
+
+            tool_result_message = ContentDict(
+                role="user",
+                parts=[
+                    PartDict(
+                        function_response=FunctionResponseDict(
+                            id=function_call_id, name=function_call.name, response=result.model_dump()
+                        )
+                    ),
+                ],
+            )
+
+            messages.append(tool_call_message)
+            messages.append(tool_result_message)
+            if conversation_messages is not None:
+                conversation_messages.append(Message.from_google(tool_call_message))
+                conversation_messages.append(Message.from_google(tool_result_message))
+
+        logger.log("CALL", "All the function results have been obtained. Returning them to the LLM...")
+        return await self._get_chat_completion_response(
+            messages=messages,
+            model=model_name,
+            user=user,
+            system_prompt=system_prompt,
+            interface=interface,
+            conversation_messages=conversation_messages,
+            track_prompt_size=track_prompt_size,
+        )
+
+    async def get_chat_response(
+        self,
+        messages: list[Message],
+        user: User,
+        caller_storage_id: int,
+        caller_thread_id: int,
+        model: str | None = None,
+        system_prompt: str = gpt_settings.assistant_prompt,
+        interface: UserInterface | None = None,
+        track_prompt_size: bool = False,
+    ) -> tuple[ChatResponseSchema, list[Message]]:
+        model = model or self.default_model
+        initial_messages = [msg.to_google() for msg in messages]
+
+        chat_response, updated_messages = await self._get_chat_completion_response(
+            messages=initial_messages.copy(),
+            user=user,
+            model=model,
+            system_prompt=system_prompt,
+            interface=interface,
+            conversation_messages=messages,
+            track_prompt_size=track_prompt_size,
+            caller_storage_id=caller_storage_id,
+            caller_thread_id=caller_thread_id,
+        )
+
+        new_messages = [msg for msg in updated_messages if msg not in initial_messages]
+        return chat_response, [Message.from_google(msg) for msg in new_messages]
+
+    async def _generate_image_via_content_creation_model(
+        self,
+        prompt: str,
+        model: str,
+    ) -> list[Image]:
+        image_size = (
+            gpt_settings.image_size_nano_banana if "flash" not in model else None
+        )  # flash-models don't support it
+
+        http_options = HttpOptions(httpx_async_client=self.get_async_httpx_client())
+
+        generation_config = GenerateContentConfig(
+            image_config=ImageConfig(
+                aspect_ratio=gpt_settings.image_aspect_ratio,
+                image_size=image_size,
+            )
+        )
+
+        async with Client(api_key=gpt_settings.gemini_key, http_options=http_options).aio as client:
+            response: GenerateContentResponse = await client.models.generate_content(
+                model=model,
+                contents=cast(ContentListUnion, [prompt]),
+                config=generation_config,
+            )
+        if not response.parts:
+            raise ServiceResponseError(provider=self.name, model=model, detail="No content-parts in response found")
+
+        images: list[Image | None] = [part.as_image() for part in response.parts if part]
+        return [image for image in images if image]
+
+    async def _generate_image_by_imagen(
+        self,
+        prompt: str,
+        model: str,
+    ) -> list[Image]:
+        http_options = HttpOptions(httpx_async_client=self.get_async_httpx_client())
+
+        if "preview" in model or "fast" in model:
+            image_size = None
+        else:
+            image_size = gpt_settings.image_size_imagen
+
+        generation_config = GenerateImagesConfig(
+            aspect_ratio=gpt_settings.image_aspect_ratio,
+            number_of_images=gpt_settings.image_n_choices,
+            http_options=http_options,
+            image_size=image_size,
+        )
+        async with Client(api_key=gpt_settings.gemini_key).aio as client:
+            response: GenerateImagesResponse = await client.models.generate_images(
+                model=model,
+                prompt=prompt,
+                config=generation_config,
+            )
+            images_in_response = response.images
+
+            return [image for image in images_in_response if image]
+
+    async def moderate_command(self, cmd: str, model: str | None = None) -> ModeratorsAnswer:
+        moderator_model = model or self.default_moderation_model or self.default_model
+
+        http_options = HttpOptions(httpx_async_client=self.get_async_httpx_client())
+        generation_config = GenerateContentConfig(
+            system_instruction=MODERATOR_PROMPT,
+            temperature=0.1,
+            max_output_tokens=1024,
+            presence_penalty=self.presence_penalty,
+            frequency_penalty=self.frequency_penalty,
+            http_options=http_options,
+            response_schema=ModeratorsAnswer,
+        )
+        messages = [
+            Message(role="user", content=cmd).to_google(),
+        ]
+        response: GenerateContentResponse = await self._generate_content(
+            model=moderator_model,
+            contents=cast(ContentListUnionDict, messages),
+            config=generation_config,
+        )
+        answer = self._get_text(response)
+        if not answer:
+            return ModeratorsAnswer(verdict="declined", reason="no moderator answer received", status="error")
+
+        answer = answer.strip("```").strip("json").strip()
+        usage = get_usage_from_google_response(response_message=response)
+        if application_settings.is_influx_configured:
+            MetricsService.send_usage_metrics(metric=usage, model=moderator_model, provider=self.name)
+
+        try:
+            return ModeratorsAnswer.model_validate_json(answer)
+        except Exception as e:
+            logger.error(f"Error parsing moderator's response: {answer}. Error: {e}")
+            return ModeratorsAnswer(verdict="declined", reason=answer, status="error")
+
+    async def get_images(self, prompt: str, model: str | None = None) -> list[BytesIO]:
+        selected_model = model or self.default_image_model
+
+        if "imagen-" in selected_model:
+            images = await self._generate_image_by_imagen(prompt=prompt, model=selected_model)
+        else:
+            images = await self._generate_image_via_content_creation_model(prompt=prompt, model=selected_model)
+
+        return [BytesIO(image.image_bytes) for image in images if image.image_bytes]
+
+    @classmethod
+    def is_image_ready_model(cls, model_name: str) -> bool:
+        return "image" in model_name
+
+    def get_model_display_name(self, model_name: str) -> str:
+        model_name_model_market_name_mapping = {
+            "models/gemini-3-pro-image": "Nano Banana Pro",
+            "models/gemini-3.1-flash-image": "Nano Banana 2",
+            "models/gemini-2.5-flash-image": "Nano Banana",
+        }
+        if "gemini" in model_name.lower():
+            for k, v in model_name_model_market_name_mapping.items():
+                if k in model_name:
+                    display_name = model_name.replace(k, v)
+                    return super().get_model_display_name(model_name=display_name)
+
+        if "imagen" in model_name:
+            display_name = model_name.removeprefix("models/").rsplit("-generate-", 1)[0].replace("-", " ").title()
+            return super().get_model_display_name(model_name=display_name)
+
+        return super().get_model_display_name(model_name=model_name[7:])
+
+    async def get_available_models(self, image_generation: bool = False) -> list[ModelChangeSchema]:
+        try:
+            async with Client(api_key=gpt_settings.gemini_key).aio as aclient:
+                models = await aclient.models.list()
+        except Exception as e:
+            logger.error(f"Failed to get available models for provider {self.name} due to exception: {e}")
+            return []
+
+        all_models = [
+            ModelChangeSchema(
+                provider=self.name,
+                name=model.name,
+                display_name=self.get_model_display_name(model.name),
+                image_generation=self.is_image_ready_model(model.name),
+            )
+            async for model in models
+            if model.name
+        ]
+        return self.filter_and_return_list_of_models(models=all_models, image_generation=image_generation)
+
+    async def speech(self, text: str, voice: str | None = None, model: str | None = None) -> bytes:
+        voice = voice or self.tts_voice
+        model = model or self.tts_model
+        logger.info(f"Recording a voice message with model {model}...")
+
+        http_options = HttpOptions(httpx_async_client=self.get_async_httpx_client())
+        generation_config = GenerateContentConfig(
+            response_modalities=["AUDIO"],
+            speech_config=SpeechConfig(
+                voice_config=VoiceConfig(
+                    prebuilt_voice_config=PrebuiltVoiceConfig(
+                        voice_name=voice,
+                    )
+                )
+            ),
+            http_options=http_options,
+        )
+
+        response: GenerateContentResponse = await self._generate_content(
+            model=model,
+            contents=f"TTS the following: {text}",
+            config=generation_config,
+        )
+
+        if not response.parts:
+            raise ServiceResponseError(
+                provider=self.name,
+                model=model,
+                detail=f"Gemini API returned a response w/o parts data: {response.model_dump()}",
+            )
+
+        response_part: Part = response.parts[0]
+        if not response_part.inline_data:
+            raise ServiceResponseError(
+                provider=self.name,
+                model=model,
+                detail=f"No inline data found in the response.parts[0]: {response_part}",
+            )
+
+        data: bytes | None = response_part.inline_data.data
+
+        if not data:
+            raise ServiceResponseError(
+                provider=self.name,
+                model=model,
+                detail=f"No data found inside the Blob object (inline data): {response_part.inline_data}",
+            )
+
+        buf = io.BytesIO()
+
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)  # PCM16 = 2 bytes
+            w.setframerate(24000)
+            w.writeframes(data)
+
+        return buf.getvalue()
+
+    async def transcribe(self, audio: BytesIO, model: str | None = None) -> str:
+        model = model or self.default_stt_model
+        logger.info(f"Transcribing audio with model {model}...")
+
+        http_options = HttpOptions(httpx_async_client=self.get_async_httpx_client())
+        generation_config = GenerateContentConfig(
+            http_options=http_options,
+        )
+
+        response = await self._generate_content(
+            model=model,
+            contents=cast(
+                ContentListUnion,
+                [
+                    "STT this audio clip",
+                    Part.from_bytes(
+                        data=audio.read(),
+                        mime_type="audio/ogg",  # Telegram format
+                    ),
+                ],
+            ),
+            config=generation_config,
+        )
+
+        if application_settings.log_prompt_data:
+            logger.info(f"Transcribed text: {response.text}")
+
+        if result := response.text:
+            return result
+
+        raise ServiceResponseError(
+            provider=self.name,
+            model=model,
+            detail=f"Could not transcribe audio message: empty text data in response: {response}",
+        )
+
+    async def vision(
+        self, image: bytes, mime_type: str, model: str | None = None, prompt: str | None = None
+    ) -> VisionResultSchema:
+        model = model or self.default_vision_model
+        prompt = prompt or "Describe the image in detail"
+        logger.info(f"[{self.name}] Analyzing image with model {model}...")
+
+        http_options = HttpOptions(httpx_async_client=self.get_async_httpx_client())
+        generation_config = GenerateContentConfig(
+            http_options=http_options,
+            response_schema=VisionResultSchema,
+        )
+
+        response = await self._generate_content(
+            model=model,
+            contents=cast(
+                ContentListUnion,
+                [
+                    Part.from_bytes(
+                        data=image,
+                        mime_type=mime_type,
+                    ),
+                    prompt,
+                ],
+            ),
+            config=generation_config,
+        )
+
+        result = response.text
+        if not result:
+            raise ServiceResponseError(
+                provider=self.name,
+                model=model,
+                detail=f"Could not analyze image: empty text data in response: {response}",
+            )
+
+        try:
+            parsed_result = VisionResultSchema.model_validate_json(json_data=result, extra="ignore")
+        except Exception as e:
+            raise ServiceResponseError(
+                provider=self.name,
+                model=model,
+                detail=f"Could not analyze image or parse a result due to exception: {e}",
+            ) from e
+
+        logger.info(f"[{self.name}] Analyzed image: {parsed_result.short_description}")
+
+        return parsed_result
+
+    async def ocr(self, pdf: bytes, model: str | None = None) -> VisionResultSchema:
+        """Extract text from a PDF document using Google Gemini's document vision.
+
+        Args:
+            pdf: The PDF file content as bytes.
+            model: The model to use for OCR. Defaults to default_vision_model.
+
+        Returns:
+            VisionResultSchema containing the extracted text and descriptions.
+        """
+        model = model or self.default_ocr_model
+        logger.info(f"[{self.name}] Extracting text from PDF with model {model}...")
+
+        http_options = HttpOptions(httpx_async_client=self.get_async_httpx_client())
+        generation_config = GenerateContentConfig(
+            http_options=http_options,
+            response_schema=VisionResultSchema,
+        )
+        response = await self._generate_content(
+            model=model,
+            contents=cast(
+                ContentListUnion,
+                [
+                    Part.from_bytes(
+                        data=pdf,
+                        mime_type="application/pdf",
+                    ),
+                    "Extract all text from this PDF document.",
+                ],
+            ),
+            config=generation_config,
+        )
+
+        result = response.text
+        if not result:
+            raise ServiceResponseError(
+                provider=self.name,
+                model=model,
+                detail="Could not extract text from PDF: empty text data in response",
+            )
+
+        try:
+            parsed_result = VisionResultSchema.model_validate_json(json_data=result, extra="ignore")
+        except Exception as e:
+            raise ServiceResponseError(
+                provider=self.name,
+                model=model,
+                detail=f"Could not extract text from PDF or parse a result due to exception: {e}",
+            ) from e
+
+        logger.info(f"[{self.name}] PDF text extracted successfully: {parsed_result.short_description}")
+
+        return parsed_result

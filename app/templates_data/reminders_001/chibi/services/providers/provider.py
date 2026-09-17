@@ -1,0 +1,1240 @@
+import asyncio
+import base64
+import inspect
+import json
+import random
+import re
+from abc import ABC
+from asyncio import sleep
+from functools import wraps
+from io import BytesIO
+from typing import Any, Awaitable, Callable, Generic, Literal, Optional, ParamSpec, TypeVar, cast
+from urllib.parse import urljoin
+
+import httpx
+from anthropic import AsyncClient, NotGiven, Omit
+from anthropic.types import (
+    CacheControlEphemeralParam,
+    MessageParam,
+    TextBlock,
+    TextBlockParam,
+    ToolChoiceToolParam,
+    ToolParam,
+    ToolResultBlockParam,
+    ToolUseBlock,
+)
+from anthropic.types import (
+    Message as AnthropicMessage,
+)
+from anthropic.types.tool_param import InputSchemaTyped
+from httpx import Response
+from httpx._types import QueryParamTypes, RequestData
+from loguru import logger
+from openai import (
+    APIConnectionError,
+    AsyncOpenAI,
+    AuthenticationError,
+    BadRequestError,
+    OpenAIError,
+    RateLimitError,
+    omit,
+)
+from openai import NotGiven as OpenAINotGiven
+from openai import Omit as OpenAIOmit
+from openai.types import Image, ImagesResponse, ReasoningEffort
+from openai.types.chat import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionFunctionToolParam,
+    ChatCompletionMessageParam,
+    ChatCompletionMessageToolCall,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionToolMessageParam,
+)
+from openai.types.chat.chat_completion import ChatCompletion, Choice
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+from chibi.config import application_settings, gpt_settings
+from chibi.constants import IMAGE_SIZE_OPENAI_LITERAL
+from chibi.exceptions import (
+    ContextLengthExceededError,
+    NoApiKeyProvidedError,
+    NoModelSelectedError,
+    NoResponseError,
+    NotAuthorizedError,
+    ServiceConnectionError,
+    ServiceRateLimitError,
+    ServiceResponseError,
+)
+from chibi.models import Message, User
+from chibi.schemas.app import ChatResponseSchema, ModelChangeSchema, ModeratorsAnswer, VisionResultSchema
+from chibi.services.interface import UserInterface
+from chibi.services.metrics import MetricsService
+from chibi.services.providers.tools import RegisteredChibiTools
+from chibi.services.providers.tools.constants import MODERATOR_PROMPT
+from chibi.services.providers.tools.schemas import ToolCallSchema, ToolResponseSchema
+from chibi.services.providers.utils import (
+    get_usage_from_anthropic_response,
+    get_usage_from_openai_response,
+    get_usage_msg,
+    prepare_system_prompt,
+    send_llm_thoughts,
+)
+from chibi.services.usage_cache import UsageCacheStore
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+class RegisteredProviders:
+    all: dict[str, type["Provider"]] = {}
+    available: dict[str, type["Provider"]] = {}
+
+    def __init__(self, user_api_keys: dict[str, str] | None = None) -> None:
+        self.tokens = {} if not user_api_keys else user_api_keys
+        if gpt_settings.public_mode:
+            self.available: dict[str, type["Provider"]] = {
+                provider.name.lower(): provider
+                for provider in RegisteredProviders.all.values()
+                if provider.name in self.tokens
+            }
+
+    @classmethod
+    def register(cls, provider: type["Provider"]) -> None:
+        cls.all[provider.name.lower()] = provider
+
+    @classmethod
+    def register_as_available(cls, provider: type["Provider"]) -> None:
+        cls.available[provider.name.lower()] = provider
+
+    def get_api_key(self, provider: type["Provider"]) -> str | None:
+        if not gpt_settings.public_mode:
+            return provider.api_key
+
+        if provider.name not in self.tokens:
+            return None
+
+        return self.tokens[provider.name]
+
+    @property
+    def available_instances(self) -> list["Provider"]:
+        return [
+            provider(token=self.get_api_key(provider))  # type: ignore
+            for provider in self.available.values()
+            if self.get_api_key(provider) is not None
+        ]
+
+    @property
+    def chat_ready(self) -> dict[str, type["Provider"]]:
+        return {provider_name: provider for provider_name, provider in self.available.items() if provider.chat_ready}
+
+    @property
+    def moderation_ready(self) -> dict[str, type["Provider"]]:
+        return {
+            provider_name: provider for provider_name, provider in self.available.items() if provider.moderation_ready
+        }
+
+    @property
+    def vision_ready(self) -> dict[str, type["Provider"]]:
+        return {provider_name: provider for provider_name, provider in self.available.items() if provider.vision_ready}
+
+    @property
+    def image_generation_ready(self) -> dict[str, type["Provider"]]:
+        return {name: provider for name, provider in self.available.items() if provider.image_generation_ready}
+
+    @property
+    def stt_ready(self) -> dict[str, type["Provider"]]:
+        return {name: provider for name, provider in self.available.items() if provider.stt_ready}
+
+    @property
+    def tts_ready(self) -> dict[str, type["Provider"]]:
+        return {name: provider for name, provider in self.available.items() if provider.tts_ready}
+
+    @property
+    def ocr_ready(self) -> dict[str, type["Provider"]]:
+        return {name: provider for name, provider in self.available.items() if provider.ocr_ready}
+
+    def get_instance(self, provider: type["Provider"]) -> Optional["Provider"]:
+        api_key = self.get_api_key(provider)
+        if not api_key:
+            return None
+        return provider(token=api_key)
+
+    def get(self, provider_name: str) -> Optional["Provider"]:
+        if provider_name.lower() not in self.available:
+            return None
+        provider = self.available[provider_name.lower()]
+        return self.get_instance(provider=provider)
+
+    @classmethod
+    def get_class(cls, provider_name: str) -> Optional[type["Provider"]]:
+        return cls.all.get(provider_name)
+
+    @property
+    def first_tts_ready(self) -> Optional["Provider"]:
+        if provider := next(iter(self.tts_ready.values()), None):
+            return self.get_instance(provider=provider)
+        return None
+
+    @property
+    def first_stt_ready(self) -> Optional["Provider"]:
+        if provider := next(iter(self.stt_ready.values()), None):
+            return self.get_instance(provider=provider)
+        return None
+
+    @property
+    def first_image_generation_ready(self) -> Optional["Provider"]:
+        if provider := next(iter(self.image_generation_ready.values()), None):
+            return self.get_instance(provider=provider)
+        return None
+
+    @property
+    def first_chat_ready(self) -> Optional["Provider"]:
+        if provider := next(iter(self.chat_ready.values()), None):
+            return self.get_instance(provider=provider)
+        return None
+
+    @property
+    def first_moderation_ready(self) -> Optional["Provider"]:
+        if provider := next(reversed(self.moderation_ready.values()), None):
+            return self.get_instance(provider=provider)
+        return None
+
+    @property
+    def first_vision_ready(self) -> Optional["Provider"]:
+        if provider := next(iter(self.vision_ready.values()), None):
+            return self.get_instance(provider=provider)
+        return None
+
+    @property
+    def first_ocr_ready(self) -> Optional["Provider"]:
+        if provider := next(iter(self.ocr_ready.values()), None):
+            return self.get_instance(provider=provider)
+        return None
+
+
+class Provider(ABC):
+    api_key: str | None = None
+    stt_ready: bool = False
+    tts_ready: bool = False
+    ocr_ready: bool = False
+    chat_ready: bool = False
+    vision_ready: bool = False
+    moderation_ready: bool = False
+    image_generation_ready: bool = False
+
+    name: str
+    model_name_keywords: list[str] = []
+    model_name_prefixes: list[str] = []
+    model_name_keywords_exclude: list[str] = []
+
+    default_model: str
+    default_image_model: str | None = None
+    default_stt_model: str | None = None
+    default_tts_voice: str | None = None
+    default_tts_model: str | None = None
+    default_moderation_model: str | None = None
+    default_vision_model: str | None = None
+    default_ocr_model: str | None = None
+
+    timeout: int = gpt_settings.timeout
+
+    def __init__(self, token: str) -> None:
+        self.token = token
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+
+        if hasattr(cls, "name"):
+            RegisteredProviders.register(cls)
+
+        if cls.api_key:
+            RegisteredProviders.register_as_available(cls)
+
+    @property
+    def stt_model(self) -> str:
+        if model := (gpt_settings.stt_model or self.default_stt_model):
+            return model
+        raise ValueError("No default STT model set")
+
+    @property
+    def tts_model(self) -> str:
+        if model := (gpt_settings.tts_model or self.default_tts_model):
+            return model
+        raise ValueError("No default TTS model set")
+
+    @property
+    def tts_voice(self) -> str:
+        if voice := (gpt_settings.tts_voice or self.default_tts_voice):
+            return voice
+        raise ValueError("No default TTS voice set")
+
+    async def get_chat_response(
+        self,
+        messages: list[Message],
+        user: User,
+        caller_storage_id: int,
+        caller_thread_id: int,
+        model: str | None = None,
+        system_prompt: str = gpt_settings.assistant_prompt,
+        interface: UserInterface | None = None,
+        track_prompt_size: bool = False,
+    ) -> tuple[ChatResponseSchema, list[Message]]:
+        raise NotImplementedError
+
+    async def get_available_models(self, image_generation: bool = False) -> list[ModelChangeSchema]:
+        raise NotImplementedError
+
+    def get_model_display_name(self, model_name: str) -> str:
+        return model_name.replace("-", " ").title()
+
+    async def transcribe(self, audio: BytesIO, model: str | None = None) -> str:
+        raise NotImplementedError
+
+    async def speech(self, text: str, voice: str | None = None, model: str | None = None) -> bytes:
+        raise NotImplementedError
+
+    async def moderate_command(self, cmd: str, model: str | None = None) -> ModeratorsAnswer:
+        raise NotImplementedError
+
+    async def vision(
+        self, image: bytes, mime_type: str, model: str | None = None, prompt: str | None = None
+    ) -> VisionResultSchema:
+        raise NotImplementedError
+
+    async def api_key_is_valid(self) -> bool:
+        try:
+            await self.get_available_models()
+        except Exception:  # Some providers return 403, others - 400... Okay..
+            return False
+        return True
+
+    async def ocr(self, pdf: bytes, model: str | None = None) -> VisionResultSchema:
+        raise NotImplementedError
+
+    @classmethod
+    def _model_name_has_prefix(cls, model_name: str) -> bool:
+        if not cls.model_name_prefixes:
+            return True
+        for prefix in cls.model_name_prefixes:
+            if model_name.startswith(prefix):
+                return True
+        return False
+
+    @classmethod
+    def _model_name_has_keyword(cls, model_name: str) -> bool:
+        if not cls.model_name_keywords:
+            return True
+        for keyword in cls.model_name_keywords:
+            if keyword in model_name:
+                return True
+        return False
+
+    @classmethod
+    def _model_name_has_keywords_exclude(cls, model_name: str) -> bool:
+        if not cls.model_name_keywords_exclude:
+            return False
+        for keyword in cls.model_name_keywords_exclude:
+            if keyword in model_name:
+                return True
+        return False
+
+    @classmethod
+    def is_chat_ready_model(cls, model_name: str) -> bool:
+        return all(
+            (
+                cls._model_name_has_prefix(model_name),
+                cls._model_name_has_keyword(model_name),
+                not cls._model_name_has_keywords_exclude(model_name),
+            )
+        )
+
+    @classmethod
+    def is_image_ready_model(cls, model_name: str) -> bool:
+        return "image" in model_name
+
+    @staticmethod
+    def adapt_tool_for_responses(tool: dict | ChatCompletionFunctionToolParam) -> dict[str, Any]:
+        """Convert Chat Completions tool to Responses API format.
+
+        Transforms nested function tool definition:
+            {"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}
+        To flat Responses API format:
+            {"type": "function", "name": ..., "description": ..., "parameters": ..., "strict": False}
+
+        Non-function tools pass through unchanged.
+
+        Args:
+            tool: Tool definition in Chat Completions format.
+
+        Returns:
+            Tool definition in Responses API format.
+        """
+        tool_dict = dict(tool)
+        if tool_dict.get("type") != "function":
+            return tool_dict
+
+        func = tool_dict.get("function", {})
+        return {
+            "type": "function",
+            "name": func.get("name"),
+            "description": func.get("description"),
+            "parameters": func.get("parameters"),
+            "strict": False,
+        }
+
+    async def get_images(self, prompt: str, model: str | None) -> list[str] | list[BytesIO]:
+        raise NotImplementedError
+
+    def _get_max_tokens_value(self, model_name: str) -> int:
+        return getattr(self, "max_tokens", gpt_settings.max_tokens)
+
+    def _get_temperature_value(self, model_name: str) -> float | OpenAIOmit:
+        return getattr(self, "temperature", gpt_settings.temperature)
+
+    async def call_functions(
+        self,
+        calls: list[ToolCallSchema],
+        caller_model: str,
+        caller_provider: str,
+        user_id: int | None = None,
+        interface: UserInterface | None = None,
+        caller_storage_id: int | None = None,
+        caller_thread_id: int | None = None,
+    ) -> list[ToolResponseSchema]:
+        """Execute tool calls, injecting the originating session identity.
+
+        Every tool payload receives ``caller_storage_id``/``caller_thread_id``
+        resolved from the interface when present, otherwise from the explicit
+        caller options (sub-agent requests have no interface). Tools resolve
+        their thread context via these fields when the interface is absent.
+
+        Args:
+            calls: Tool calls requested by the model.
+            caller_model: The model that issued the tool calls.
+            caller_provider: The provider that issued the tool calls.
+            user_id: The storage ID of the user, or None if unavailable.
+            interface: The interface of the top-level request, or None for
+                internal (sub-agent) requests.
+            caller_storage_id: Session storage ID propagated from a parent
+                request without an interface, or None.
+            caller_thread_id: Session thread ID propagated from a parent
+                request without an interface, or None.
+
+        Returns:
+            The collected tool responses.
+        """
+        if interface is not None:
+            context_storage_id: int | None = interface.storage_id
+            context_thread_id: int | None = interface.thread_id
+        else:
+            context_storage_id = caller_storage_id
+            context_thread_id = caller_thread_id
+
+        tool_context: dict[str, Any] = {
+            "user_id": user_id,
+            "interface": interface,
+            "caller_model": caller_model,
+            "caller_provider": caller_provider,
+            "caller_storage_id": context_storage_id,
+            "caller_thread_id": context_thread_id,
+        }
+        tool_coroutines = [
+            RegisteredChibiTools.call(tool_name=call.tool_name, tools_args=tool_context | call.args) for call in calls
+        ]
+        results = await asyncio.gather(*tool_coroutines)
+        return results
+
+    def filter_and_return_list_of_models(
+        self, models: list[ModelChangeSchema], image_generation: bool = False
+    ) -> list[ModelChangeSchema]:
+        all_models = sorted(models, key=lambda model: model.name, reverse=True)
+
+        if image_generation:
+            filtered_models = [model for model in all_models if model.image_generation]
+        else:
+            filtered_models = [model for model in all_models if self.is_chat_ready_model(model.name)]
+
+        if gpt_settings.models_whitelist:
+            return [model for model in filtered_models if model.name in gpt_settings.models_whitelist]
+
+        if gpt_settings.models_blacklist:
+            return [model for model in filtered_models if model.name not in gpt_settings.models_blacklist]
+
+        return filtered_models
+
+
+class OpenAIFriendlyProvider(Provider, Generic[P, R]):
+    temperature: float | OpenAINotGiven | None = gpt_settings.temperature
+    max_tokens: int | OpenAINotGiven | None = gpt_settings.max_tokens
+    presence_penalty: float | OpenAINotGiven | None = gpt_settings.presence_penalty
+    frequency_penalty: float | OpenAIOmit | None = gpt_settings.frequency_penalty
+    image_quality: Literal["standard", "hd", "low", "medium", "high", "auto"] | OpenAIOmit = gpt_settings.image_quality
+    image_size: IMAGE_SIZE_OPENAI_LITERAL | None = gpt_settings.image_size_openai
+    base_url: str
+    image_n_choices: int = gpt_settings.image_n_choices
+
+    def __getattribute__(self, name: str) -> object:
+        attr = super().__getattribute__(name)
+
+        if callable(attr):
+            if inspect.iscoroutinefunction(attr):
+                attr_async_callable = cast(Callable[P, Awaitable[R]], attr)
+
+                @wraps(attr_async_callable)
+                async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R | None:
+                    model_name = cast(str, kwargs.get("model", "unknown"))
+                    try:
+                        return await attr_async_callable(*args, **kwargs)
+                    except APIConnectionError:
+                        raise ServiceConnectionError(provider=self.name, model=model_name)
+                    except AuthenticationError:
+                        raise NotAuthorizedError(provider=self.name, model=model_name)
+                    except RateLimitError:
+                        raise ServiceRateLimitError(provider=self.name, model=model_name)
+                    except BadRequestError as e:
+                        logger.error(e)
+                        if e.code == "context_length_exceeded":
+                            raise ContextLengthExceededError(provider=self.name, model=model_name)
+                        raise ServiceResponseError(provider=self.name, model=model_name)
+                    except OpenAIError as e:
+                        logger.error(e)
+                        raise ServiceResponseError(provider=self.name, model=model_name)
+
+                return async_wrapper
+            else:
+                attr_callable = cast(Callable[P, R], attr)
+
+                @wraps(attr_callable)
+                def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R | None:
+                    return attr_callable(*args, **kwargs)
+
+                return sync_wrapper
+
+        return attr
+
+    @property
+    def client(self) -> AsyncOpenAI:
+        if not self.token:
+            raise NoApiKeyProvidedError(provider=self.name)
+        return AsyncOpenAI(api_key=self.token, base_url=self.base_url)
+
+    @client.setter
+    def client(self, value: AsyncOpenAI) -> None:
+        """Setter for client property to allow mocking in tests."""
+        # Store the mock value in the instance __dict__ to bypass the property getter
+        self.__dict__["_mock_client"] = value
+
+    def get_client(self) -> AsyncOpenAI:
+        """Get the client, checking for mock first."""
+        if "_mock_client" in self.__dict__:
+            return self.__dict__["_mock_client"]
+        return self.client
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=16), reraise=True)
+    async def get_chat_response(
+        self,
+        messages: list[Message],
+        user: User,
+        caller_storage_id: int,
+        caller_thread_id: int,
+        model: str | None = None,
+        system_prompt: str = gpt_settings.assistant_prompt,
+        interface: UserInterface | None = None,
+        track_prompt_size: bool = False,
+    ) -> tuple[ChatResponseSchema, list[Message]]:
+        model = model or self.default_model
+
+        initial_messages = [msg.to_openai() for msg in messages]
+        chat_response, updated_messages = await self._get_chat_completion_response(
+            messages=initial_messages.copy(),
+            model=model,
+            system_prompt=system_prompt,
+            user=user,
+            interface=interface,
+            conversation_messages=messages,
+            track_prompt_size=track_prompt_size,
+            caller_storage_id=caller_storage_id,
+            caller_thread_id=caller_thread_id,
+        )
+        new_messages = [msg for msg in updated_messages if msg not in initial_messages]
+        return (
+            chat_response,
+            [Message.from_openai(msg) for msg in new_messages],
+        )
+
+    async def _get_chat_completion_response(
+        self,
+        messages: list[ChatCompletionMessageParam],
+        model: str,
+        user: User,
+        system_prompt: str | None = None,
+        interface: UserInterface | None = None,
+        conversation_messages: list[Message] | None = None,
+        track_prompt_size: bool = False,
+        caller_storage_id: int | None = None,
+        caller_thread_id: int | None = None,
+    ) -> tuple[ChatResponseSchema, list[ChatCompletionMessageParam]]:
+        dialog: list[ChatCompletionMessageParam]
+        if not system_prompt:
+            dialog = messages
+        else:
+            prepared_system_prompt = await prepare_system_prompt(
+                base_system_prompt=system_prompt,
+                user_id=user.id,
+                interface=interface,
+                conversation_messages=conversation_messages,
+                thread_id=caller_thread_id,
+            )
+            system_message = ChatCompletionSystemMessageParam(role="system", content=prepared_system_prompt)
+            dialog = [system_message] + messages
+
+        response: ChatCompletion = await self.client.chat.completions.create(  # type: ignore
+            model=model,
+            messages=dialog,
+            temperature=self._get_temperature_value(model_name=model),
+            max_tokens=self._get_max_tokens_value(model_name=model),
+            presence_penalty=self.presence_penalty,
+            frequency_penalty=self.frequency_penalty,
+            timeout=self.timeout,
+            tools=RegisteredChibiTools.get_tool_definitions(),
+            tool_choice="auto",
+            reasoning_effort=self.get_reasoning_effort_value(model_name=model),
+        )
+        choices: list[Choice] = response.choices
+
+        if len(choices) == 0:
+            raise ServiceResponseError(provider=self.name, model=model, detail="Unexpected (empty) response received")
+
+        data = choices[0]
+        answer: str = data.message.content or ""
+
+        usage = get_usage_from_openai_response(response_message=response)
+        if track_prompt_size:
+            UsageCacheStore().store(
+                user_id=user.id,
+                thread_id=interface.thread_id if interface else 0,
+                usage=usage,
+                provider=self.name,
+            )
+        if application_settings.is_influx_configured:
+            MetricsService.send_usage_metrics(metric=usage, model=model, provider=self.name, user=user)
+        usage_message = get_usage_msg(usage=usage)
+
+        tool_calls: list[ChatCompletionMessageToolCall] | None = data.message.tool_calls  # type: ignore
+
+        if not tool_calls:
+            if hasattr(data.message, "reasoning_content") and data.message.reasoning_content:
+                await send_llm_thoughts(thoughts=data.message.reasoning_content, interface=interface)
+                logger.log("THINK", data.message.reasoning_content)
+            messages.append(ChatCompletionAssistantMessageParam(**data.message.model_dump()))  # type: ignore
+            return ChatResponseSchema(answer=answer, provider=self.name, model=model, usage=usage), messages
+
+        # Tool calls handling
+        logger.log("CALL", f"{model} requested the call of {len(tool_calls)} tools.")
+
+        thoughts = answer or "No thoughts"
+        if answer:
+            await send_llm_thoughts(thoughts=thoughts, interface=interface)
+        logger.log("THINK", f"{model}: {thoughts}. {usage_message}")
+
+        calls = [
+            ToolCallSchema(
+                tool_name=tool_call.function.name,
+                args=json.loads(tool_call.function.arguments),
+            )
+            for tool_call in tool_calls
+        ]
+        results = await self.call_functions(
+            calls=calls,
+            caller_model=model,
+            caller_provider=self.name,
+            user_id=user.id,
+            interface=interface,
+            caller_storage_id=caller_storage_id,
+            caller_thread_id=caller_thread_id,
+        )
+
+        for tool_call, result in zip(tool_calls, results):
+            # Temporary hotfix: preserve reasoning_content for DeepSeek/Moonshot thinking mode
+            message_dict: dict[str, Any] = {
+                "role": "assistant",
+                "content": answer,
+                "tool_calls": [
+                    {
+                        "id": tool_call.id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments,
+                        },
+                    }
+                ],
+            }
+            # Add reasoning_content if present (DeepSeek-Reasoner, Moonshot KIMI, etc.)
+            if hasattr(data.message, "reasoning_content") and data.message.reasoning_content:
+                await send_llm_thoughts(thoughts=data.message.reasoning_content, interface=interface)
+                logger.log("THINK", data.message.reasoning_content)
+                message_dict["reasoning_content"] = data.message.reasoning_content
+
+            messages.append(message_dict)  # type: ignore
+            tool_result_message = ChatCompletionToolMessageParam(
+                tool_call_id=tool_call.id,
+                role="tool",
+                content=result.model_dump_json(),
+            )
+            messages.append(tool_result_message)
+            if conversation_messages is not None:
+                conversation_messages.append(Message.from_openai(cast(ChatCompletionMessageParam, message_dict)))
+                conversation_messages.append(Message.from_openai(tool_result_message))
+
+        logger.log("CALL", "All the function results have been obtained. Returning them to the LLM...")
+        return await self._get_chat_completion_response(
+            messages=messages,
+            model=model,
+            user=user,
+            system_prompt=system_prompt,
+            interface=interface,
+            conversation_messages=conversation_messages,
+            track_prompt_size=track_prompt_size,
+        )
+
+    def get_reasoning_effort_value(self, model_name: str) -> ReasoningEffort | OpenAIOmit | None:
+        return omit
+
+    async def moderate_command(self, cmd: str, model: str | None = None) -> ModeratorsAnswer:
+        moderator_model = model or self.default_moderation_model or self.default_model
+        system_message = ChatCompletionSystemMessageParam(role="system", content=MODERATOR_PROMPT)
+
+        messages = [
+            Message(role="user", content=cmd).to_openai(),
+        ]
+
+        dialog: list[ChatCompletionMessageParam] = [system_message] + messages
+        temperature = (
+            1 if moderator_model.startswith("o") or "mini" in moderator_model or "nano" in moderator_model else 0.0
+        )
+        response: ChatCompletion = await self.client.chat.completions.create(
+            model=moderator_model,
+            messages=dialog,
+            temperature=temperature,
+            max_completion_tokens=1024,
+            presence_penalty=self.presence_penalty,  # type: ignore
+            frequency_penalty=self.frequency_penalty,
+            timeout=self.timeout,
+            reasoning_effort=self.get_reasoning_effort_value(model_name=moderator_model),
+        )
+
+        choices: list[Choice] = response.choices
+
+        if len(choices) == 0:
+            raise ServiceResponseError(
+                provider=self.name, model=moderator_model, detail="Unexpected (empty) response received"
+            )
+
+        data = choices[0]
+        answer: str = data.message.content or ""
+
+        usage = get_usage_from_openai_response(response_message=response)
+        if application_settings.is_influx_configured:
+            MetricsService.send_usage_metrics(metric=usage, model=moderator_model, provider=self.name)
+        # usage_message = get_usage_msg(usage=usage)
+        answer = answer.strip("```")
+        answer = answer.strip("json")
+        answer = answer.strip()
+        try:
+            result_data = json.loads(answer)
+        except Exception:
+            logger.error(f"Error parsing moderator's response: {answer}")
+            return ModeratorsAnswer(verdict="declined", reason=answer, status="error")
+
+        verdict = result_data.get("verdict", "declined")
+        if verdict == "accepted":
+            return ModeratorsAnswer(verdict="accepted", status="ok")
+
+        reason = result_data.get("reason", None)
+        if reason is None:
+            logger.error(f"Moderator did not provide reason properly: {answer}")
+
+        return ModeratorsAnswer(verdict="declined", reason=reason, status="operation aborted")
+
+    async def get_available_models(self, image_generation: bool = False) -> list[ModelChangeSchema]:
+        try:
+            models = await self.client.models.list()
+        except Exception as e:
+            logger.error(f"Failed to get available models for provider {self.name} due to exception: {e}")
+            return []
+
+        all_models = [
+            ModelChangeSchema(
+                provider=self.name,
+                name=model.id,
+                display_name=self.get_model_display_name(model.id),
+                image_generation=self.is_image_ready_model(model.id),
+            )
+            for model in models.data
+        ]
+        return self.filter_and_return_list_of_models(models=all_models, image_generation=image_generation)
+
+    async def _get_image_generation_response(self, prompt: str, model: str) -> ImagesResponse:
+        return await self.client.images.generate(
+            model=model,
+            prompt=prompt,
+            n=gpt_settings.image_n_choices,
+            quality=self.image_quality,
+            size=self.image_size,
+            timeout=gpt_settings.timeout,
+            response_format="url",
+        )
+
+    async def get_images(self, prompt: str, model: str | None = None) -> list[str] | list[BytesIO]:
+        model = model or self.default_image_model
+        if not model:
+            raise NoModelSelectedError(provider=self.name, detail="No image generation model selected")
+        response = await self._get_image_generation_response(prompt=prompt, model=model)
+        if not response.data:
+            raise ServiceResponseError(provider=self.name, model=model, detail="No image data received.")
+
+        images: list[Image] = response.data
+
+        if response.data[0].url:
+            return [image.url for image in images if image.url]
+
+        return [BytesIO(base64.b64decode(image.b64_json)) for image in images if image.b64_json]
+
+    async def vision(
+        self,
+        image: bytes,
+        mime_type: str,
+        model: str | None = None,
+        prompt: str | None = None,
+    ) -> VisionResultSchema:
+        model = model or self.default_vision_model
+        if not model:
+            raise NoModelSelectedError(provider=self.name, detail="No vision model selected")
+        prompt = prompt or "Describe the image in detail."
+        logger.info(f"[{self.name}] Analyzing image with model {model}...")
+
+        # Encode image to base64
+        image_base64 = base64.b64encode(image).decode("utf-8")
+        data_url = f"data:{mime_type};base64,{image_base64}"
+
+        # Use parse() for structured output with Pydantic models
+        response = await self.get_client().chat.completions.parse(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": data_url, "detail": "high"},
+                        },
+                    ],
+                }
+            ],
+            response_format=VisionResultSchema,
+            max_tokens=4096,
+        )
+
+        if not response.choices:
+            raise ServiceResponseError(
+                provider=self.name,
+                model=model,
+                detail=f"Could not analyze image: empty response: {response}",
+            )
+
+        result = response.choices[0].message
+        if not result or not result.parsed:
+            raise ServiceResponseError(
+                provider=self.name,
+                model=model,
+                detail=f"Could not analyze image: empty response: {response}",
+            )
+
+        logger.info(f"[{self.name}] Image analyzed successfully: {result.parsed.short_description}...")
+        return result.parsed
+
+    async def transcribe(self, audio: BytesIO, model: str | None = None) -> str:
+        model = model or self.stt_model
+        logger.info(f"[{self.name}] Transcribing audio with model {model}...")
+        response = await self.client.audio.transcriptions.create(
+            model=model,
+            file=("voice.ogg", audio.getvalue()),
+        )
+        if response:
+            logger.info(f"[{self.name}] Transcribed text: {response.text}")
+            return response.text
+        raise ValueError("Could not transcribe audio message")
+
+    async def speech(self, text: str, voice: str | None = None, model: str | None = None) -> bytes:
+        voice = voice or self.tts_voice
+        model = model or self.tts_model
+        logger.info(f"[{self.name}] Recording a voice message with model {model}...")
+        response = await self.client.audio.speech.create(
+            model=model,
+            voice=voice,
+            input=text,
+        )
+        return await response.aread()
+
+
+class RestApiFriendlyProvider(Provider):
+    @property
+    def _headers(self) -> dict[str, str]:
+        raise NotImplementedError
+
+    def get_async_httpx_client(self) -> httpx.AsyncClient:
+        transport = httpx.AsyncHTTPTransport(retries=gpt_settings.retries, proxy=gpt_settings.proxy)
+        return httpx.AsyncClient(transport=transport, timeout=gpt_settings.timeout)
+
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        data: RequestData | None = None,
+        params: QueryParamTypes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Response:
+        if not self.token:
+            raise NoApiKeyProvidedError(provider=self.name)
+
+        try:
+            async with self.get_async_httpx_client() as client:
+                response = await client.request(
+                    method=method,
+                    url=url,
+                    json=data,
+                    headers=headers or self._headers,
+                    params=params,
+                )
+        except Exception as e:
+            logger.error(f"An error occurred while calling the {self.name} API: {e}")
+            raise ServiceResponseError(provider=self.name, detail=str(e))
+
+        if response.status_code == 200:
+            return response
+
+        logger.error(
+            f"Unexpected response from {self.name} API. Status code: {response.status_code}. Data: {response.text}"
+        )
+        if response.status_code == 401:
+            raise NotAuthorizedError(provider=self.name)
+        if response.status_code == 429:
+            raise ServiceRateLimitError(provider=self.name)
+        raise ServiceResponseError(provider=self.name)
+
+
+class AnthropicFriendlyProvider(RestApiFriendlyProvider):
+    frequency_penalty: float | NotGiven | None = gpt_settings.frequency_penalty
+    max_tokens: int = gpt_settings.max_tokens
+    presence_penalty: float | NotGiven = gpt_settings.presence_penalty
+    temperature: float | Omit = gpt_settings.temperature
+    base_url: str = "https://api.anthropic.com"
+
+    @property
+    def tools_list(self) -> list[ToolParam]:
+        anthropic_tools = [
+            ToolParam(
+                name=tool["function"]["name"],
+                description=tool["function"]["description"],
+                input_schema=tool["function"]["parameters"],
+            )
+            for tool in RegisteredChibiTools.get_tool_definitions()
+        ]
+        return anthropic_tools
+
+    @property
+    def client(self) -> AsyncClient:
+        raise NotImplementedError
+
+    async def _generate_content(
+        self,
+        model: str,
+        system_prompt: str,
+        messages: list[MessageParam],
+    ) -> AnthropicMessage:
+        for attempt in range(gpt_settings.retries):
+            response_message: AnthropicMessage = await self.client.messages.create(
+                model=model,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                timeout=self.timeout,
+                tools=self.tools_list,
+                system=[
+                    TextBlockParam(
+                        text=system_prompt,
+                        type="text",
+                        cache_control=CacheControlEphemeralParam(type="ephemeral"),
+                    )
+                ],
+                messages=messages,
+            )
+
+            if response_message.content and len(response_message.content) > 0:
+                return response_message
+
+            delay = gpt_settings.backoff_factor * (2**attempt)
+            jitter = delay * random.uniform(0.1, 0.5)
+            total_delay = delay + jitter
+
+            logger.warning(
+                f"Attempt #{attempt + 1}. Unexpected (empty) response received. Retrying in {total_delay} seconds..."
+            )
+            await sleep(total_delay)
+        raise NoResponseError(provider=self.name, model=model, detail="Unexpected (empty) response received")
+
+    async def get_chat_response(
+        self,
+        messages: list[Message],
+        user: User,
+        caller_storage_id: int,
+        caller_thread_id: int,
+        model: str | None = None,
+        system_prompt: str = gpt_settings.assistant_prompt,
+        interface: UserInterface | None = None,
+        track_prompt_size: bool = False,
+    ) -> tuple[ChatResponseSchema, list[Message]]:
+        model = model or self.default_model
+        initial_messages = [msg.to_anthropic() for msg in messages]
+
+        if len(initial_messages) >= 2:
+            initial_messages[-2]["content"][0]["cache_control"] = {"type": "ephemeral"}  # type: ignore
+
+        chat_response, updated_messages = await self._get_chat_completion_response(
+            messages=initial_messages.copy(),
+            user=user,
+            model=model,
+            system_prompt=system_prompt,
+            interface=interface,
+            conversation_messages=messages,
+            track_prompt_size=track_prompt_size,
+            caller_storage_id=caller_storage_id,
+            caller_thread_id=caller_thread_id,
+        )
+        new_messages = [msg for msg in updated_messages if msg not in initial_messages]
+        return (
+            chat_response,
+            [Message.from_anthropic(msg) for msg in new_messages],
+        )
+
+    async def _get_chat_completion_response(
+        self,
+        messages: list[MessageParam],
+        model: str,
+        user: User,
+        system_prompt: str = gpt_settings.assistant_prompt,
+        interface: UserInterface | None = None,
+        conversation_messages: list[Message] | None = None,
+        track_prompt_size: bool = False,
+        caller_storage_id: int | None = None,
+        caller_thread_id: int | None = None,
+    ) -> tuple[ChatResponseSchema, list[MessageParam]]:
+        prepared_system_prompt = await prepare_system_prompt(
+            base_system_prompt=system_prompt,
+            user_id=user.id,
+            interface=interface,
+            conversation_messages=conversation_messages,
+            thread_id=caller_thread_id,
+        )
+        response_message: AnthropicMessage = await self._generate_content(
+            model=model,
+            system_prompt=prepared_system_prompt,
+            messages=messages,
+        )
+        usage = get_usage_from_anthropic_response(response_message=response_message)
+        if track_prompt_size:
+            UsageCacheStore().store(
+                user_id=user.id,
+                thread_id=interface.thread_id if interface else 0,
+                usage=usage,
+                provider=self.name,
+            )
+
+        if application_settings.is_influx_configured:
+            MetricsService.send_usage_metrics(metric=usage, user=user, model=model, provider=self.name)
+
+        tool_call_parts = [part for part in response_message.content if isinstance(part, ToolUseBlock)]
+        if not tool_call_parts:
+            messages.append(
+                MessageParam(
+                    role="assistant",
+                    content=[content.model_dump() for content in response_message.content],  # type: ignore
+                )
+            )
+            answer = None
+            for block in response_message.content:
+                if answer := getattr(block, "text", None):
+                    break
+
+            return ChatResponseSchema(
+                answer=answer or "no data",
+                provider=self.name,
+                model=model,
+                usage=usage,
+            ), messages
+
+        # Tool calls handling
+        logger.log("CALL", f"{model} requested the call of {len(tool_call_parts)} tools.")
+        thoughts_part: TextBlock | None = next(
+            (part for part in response_message.content if isinstance(part, TextBlock)), None
+        )
+
+        if thoughts_part:
+            await send_llm_thoughts(thoughts=thoughts_part.text, interface=interface)
+
+        logger.log(
+            "THINK", f"{model}: {thoughts_part.text if thoughts_part else 'No thoughts'}. {get_usage_msg(usage=usage)}"
+        )
+
+        calls = [
+            ToolCallSchema(
+                tool_name=tool_call_part.name,
+                args=tool_call_part.input,
+            )
+            for tool_call_part in tool_call_parts
+        ]
+        results = await self.call_functions(
+            calls=calls,
+            caller_model=model,
+            caller_provider=self.name,
+            user_id=user.id,
+            interface=interface,
+            caller_storage_id=caller_storage_id,
+            caller_thread_id=caller_thread_id,
+        )
+
+        for tool_call_part, result in zip(tool_call_parts, results):
+            tool_call_message = MessageParam(
+                role="assistant",
+                content=[part.model_dump() for part in (thoughts_part, tool_call_part) if part is not None],  # type: ignore
+            )
+
+            tool_result_message = MessageParam(
+                role="user",
+                content=[
+                    ToolResultBlockParam(
+                        type="tool_result",
+                        tool_use_id=tool_call_part.id,
+                        content=result.model_dump_json(),
+                    )
+                ],
+            )
+            messages.append(tool_call_message)
+            messages.append(tool_result_message)
+            if conversation_messages is not None:
+                conversation_messages.append(Message.from_anthropic(tool_call_message))
+                conversation_messages.append(Message.from_anthropic(tool_result_message))
+
+        logger.log("CALL", "All the function results have been obtained. Returning them to the LLM...")
+        return await self._get_chat_completion_response(
+            messages=messages,
+            model=model,
+            user=user,
+            system_prompt=system_prompt,
+            interface=interface,
+            conversation_messages=conversation_messages,
+            track_prompt_size=track_prompt_size,
+        )
+
+    async def moderate_command(self, cmd: str, model: str | None = None) -> ModeratorsAnswer:
+        moderator_model = model or self.default_moderation_model or self.default_model
+        messages = [Message(role="user", content=cmd).to_anthropic()]
+        moderator_prompt = (
+            MODERATOR_PROMPT + "\n**HARD RULE:** call the print_moderator_verdict tool to provide your verdict"
+        )
+
+        response_message: AnthropicMessage = await self.client.messages.create(
+            model=moderator_model,
+            max_tokens=1024,
+            temperature=0.1,
+            timeout=self.timeout,
+            system=[
+                TextBlockParam(
+                    text=moderator_prompt,
+                    type="text",
+                )
+            ],
+            tools=[
+                ToolParam(
+                    name="print_moderator_verdict",
+                    description="Provide moderator's verdict via calling this tool.",
+                    input_schema=InputSchemaTyped(
+                        type="object",
+                        properties={
+                            "verdict": {"type": "string"},
+                            "status": {"type": "string", "default": "ok"},
+                            "reason": {"type": "string"},
+                        },
+                        required=["verdict"],
+                    ),
+                )
+            ],
+            tool_choice=ToolChoiceToolParam(type="tool", name="print_moderator_verdict"),
+            messages=messages,
+        )
+        if not response_message.content:
+            return ModeratorsAnswer(status="error", verdict="declined", reason="no response from moderator received")
+        usage = get_usage_from_anthropic_response(response_message=response_message)
+
+        if application_settings.is_influx_configured:
+            MetricsService.send_usage_metrics(metric=usage, model=moderator_model, provider=self.name)
+        tool_call: ToolUseBlock | None = next(
+            (part for part in response_message.content if isinstance(part, ToolUseBlock)), None
+        )
+
+        if tool_call is not None:
+            answer = tool_call.input
+            try:
+                return ModeratorsAnswer.model_validate(answer, extra="ignore")
+            except Exception as e:
+                msg = f"Error parsing moderator's response: {answer}. Error: {e}"
+                logger.error(msg)
+                return ModeratorsAnswer(verdict="declined", reason=msg, status="error")
+
+        # Fallback: some models (e.g. MiniMax M2.7/M3 on the Anthropic-compatible API) ignore the
+        # forced tool_choice and reply with plain text instead of a tool_use block. The moderator
+        # prompt already instructs the model to emit a JSON verdict as plain text, so we parse it.
+        text_part: TextBlock | None = next(
+            (part for part in response_message.content if isinstance(part, TextBlock)), None
+        )
+        if text_part is None or not text_part.text.strip():
+            return ModeratorsAnswer(status="error", verdict="declined", reason="no response from moderator received")
+
+        raw_text = text_part.text.strip()
+        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        if match is None:
+            msg = f"Moderator returned no tool call and no JSON verdict. Raw: {raw_text[:200]}"
+            logger.error(msg)
+            return ModeratorsAnswer(verdict="declined", reason=msg, status="error")
+
+        try:
+            parsed = json.loads(match.group(0))
+            return ModeratorsAnswer.model_validate(parsed, extra="ignore")
+        except Exception as e:
+            msg = f"Error parsing moderator's text verdict: {raw_text[:200]}. Error: {e}"
+            logger.error(msg)
+            return ModeratorsAnswer(verdict="declined", reason=msg, status="error")
+
+    async def get_available_models(self, image_generation: bool = False) -> list[ModelChangeSchema]:
+        if image_generation:
+            return []
+
+        try:
+            response = await self._request(method="GET", url=urljoin(self.base_url, "v1/models"))
+        except Exception as e:
+            logger.error(f"Failed to get available models for provider {self.name} due to exception: {e}")
+            return []
+
+        response_data = response.json().get("data", [])
+        all_models = [
+            ModelChangeSchema(
+                provider=self.name,
+                name=model.get("id"),
+                display_name=model.get("display_name") or model.get("id"),
+                image_generation=False,
+            )
+            for model in response_data
+            if model.get("id") and (model.get("type") == "model" or model.get("object") == "model")
+        ]
+        return self.filter_and_return_list_of_models(models=all_models, image_generation=image_generation)

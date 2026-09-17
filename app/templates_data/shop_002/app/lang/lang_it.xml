@@ -1,0 +1,315 @@
+<?xml version="1.0"?>
+<translation>
+    <!--
+        Generic
+    -->
+
+    <!-- Help command message -->
+    <sentence id="HELP_CMD">**MENU DI AIUTO**
+Ciao {name},
+benvenuto nel Telegram Payment Bot.
+
+ℹ️ Qui trovi la lista dei comandi supportati.
+
+**Generici**
+• **/help** : mostra questo messaggio
+• **/alive** : mostra se il bot è attivo
+• **/paybot_set_test_mode** __true/false__ : attiva/disattiva la modalità di test
+• **/paybot_is_test_mode** : mostra se la modalità di test è attiva
+• **/paybot_auth_users** : mostra la lista degli utenti autorizzati a usare il bot
+• **/paybot_chat_info** : mostra le informazioni sulla chat - **Solo Gruppo**
+• **/paybot_users_list** : mostra la lista di tutti gli utenti del gruppo - **Solo Gruppo**
+• **/paybot_invite_link** : genera un nuovo link di invito - **Solo Gruppo**
+• **/paybot_version** : mostra la versione del bot
+
+**Username**
+• **/paybot_check_username** __[HOURS_LEFT]__ : mostra gli utenti senza username - **Solo Gruppo**
+• **/paybot_remove_username** : rimuove gli utenti senza username - **Solo Gruppo**
+
+**Pagamenti**
+• **/paybot_set_check_on_join** __true/false__ : attiva/disattiva il controllo dei pagamenti sui membri appena entrati nel gruppo
+• **/paybot_is_check_on_join** : mostra se il controllo dei pagamenti sui membri appena entrati nel gruppo è attivo
+• **/paybot_check_data** : mostra se i dati di pagamento contengono degli errori
+• **/paybot_email_payment** __[DAYS_LEFT]__ : invia una email agli utenti il cui pagamento sta per scadere
+• **/paybot_check_payment** __[DAYS_LEFT] [LAST_DAY]__ : mostra gli utenti il cui pagamento sta per scadere - **Solo Gruppo**
+• **/paybot_remove_payment** : rimuove gli utenti il cui pagamento sta per scadere - **Solo Gruppo**
+
+**Task Controllo Pagamenti**
+• **/paybot_task_start** __PERIOD_HOURS__ : avvia il task di controllo pagamenti con il periodo specificato
+• **/paybot_task_stop** : ferma il task di controllo pagamenti
+• **/paybot_task_add_chat** : aggiunge la chat corrente al task di controllo pagamenti - **Solo Gruppo**
+• **/paybot_task_remove_chat** : rimuove la chat corrente dal task di controllo pagamenti - **Solo Gruppo**
+• **/paybot_task_remove_all_chats** : rimuove tutte le chat dal task di controllo pagamenti
+• **/paybot_task_info** : mostra le informazioni del task di controllo pagamenti
+
+I comandi che possono essere eseguiti solo nella chat di gruoppo sono specificati in grassetto.
+I parametri tra parentesi quadre sono opzionali.
+
+**NOTA:** è possibile aggiungere "quiet" o "q" come ultimo parametro per ottenere il risultato del comando in chat privata, per evitare di intasare il gruppo</sentence>
+    <!-- Invite link command message (sent to authorized users) -->
+    <sentence id="INVITE_LINK_AUTH_CMD">**LINK DI INVITO**
+Nuovo link di invito per il gruppo **"{chat_title}"**: {invite_link}
+Il vecchio link è stato revocato.
+Se avete un link di invito generato da voi, revocatelo e usate quello generato dal bot.</sentence>
+    <!-- Invite link command message (sent to all users) -->
+    <sentence id="INVITE_LINK_ALL_CMD">**LINK DI INVITO**
+Nuovo link di invito generato.
+Il link è stato inviato in privato agli utenti autorizzati.</sentence>
+    <!-- Alive command message -->
+    <sentence id="ALIVE_CMD">**STATO**
+✅ Il bot è attivo.</sentence>
+
+    <!-- Set test mode command enabled message -->
+    <sentence id="SET_TEST_MODE_EN_CMD">**MODALITÀ TEST**
+✅ Modalità di test attivata.</sentence>
+    <!-- Set test mode command disabled message -->
+    <sentence id="SET_TEST_MODE_DIS_CMD">**MODALITÀ TEST**
+✅ Modalità di test disattivata.</sentence>
+
+    <!-- Is test mode command enabled message -->
+    <sentence id="IS_TEST_MODE_EN_CMD">**MODALITÀ TEST**
+ℹ️ La modalità di test è attualmente attivata.</sentence>
+    <!-- Is test mode command disabled message -->
+    <sentence id="IS_TEST_MODE_DIS_CMD">**MODALITÀ TEST**
+ℹ️ La modalità di test è attualmente disattivata.</sentence>
+
+    <!-- Authorized users command message -->
+    <sentence id="AUTH_USERS_CMD">**UTENTI AUTORIZZATI**
+Utenti autorizzati a utilizzare il bot:
+{auth_users_list}</sentence>
+    <!-- Chat information command message -->
+    <sentence id="CHAT_INFO_CMD">**INFORMAZIONI CHAT**
+Titolo: {chat_title}
+Tipo: {chat_type}
+ID: {chat_id}</sentence>
+    <!-- Users list command message -->
+    <sentence id="USERS_LIST_CMD">**LISTA UTENTI**
+Gruppo: **{chat_title}**
+Numero membri: **{members_count}**
+Lista membri:
+{members_list}</sentence>
+    <!-- Version command message -->
+    <sentence id="VERSION_CMD">**Telegram Payment Bot**
+
+Autore: Emanuele Bellocchia (ebellocchia@gmail.com)
+Versione: **{version}**</sentence>
+
+    <!--
+        Username
+    -->
+
+    <!-- Check username command message (notice) -->
+    <sentence id="CHECK_NO_USERNAME_NOTICE_CMD">**CONTROLLO USERNAME**
+Gruppo: **{chat_title}**
+Membri senza username: **{members_count}**
+Lista membri:
+{members_list}
+
+Siete pregati di impostare lo username {hours_left} o verrete rimossi dal gruppo.
+Per impostarlo: **Impostazioni -> Account -> username**</sentence>
+    <!-- Check username command message (email/telegram) -->
+    <sentence id="CHECK_NO_USERNAME_EMAIL_TG_CMD">\n\n**Lo username deve essere inviato via email a {support_email} o in privato a @{support_telegram}**.</sentence>
+    <!-- Check username command message (only email) -->
+    <sentence id="CHECK_NO_USERNAME_ONLY_EMAIL_CMD">\n\n**Lo username deve essere inviato via email a {support_email}**.</sentence>
+    <!-- Check username command message (only telegram) -->
+    <sentence id="CHECK_NO_USERNAME_ONLY_TG_CMD">\n\n**Lo username deve essere inviato in privato a @{support_telegram}**.</sentence>
+    <!-- Check username command message (all ok) -->
+    <sentence id="CHECK_NO_USERNAME_ALL_OK_CMD">**CONTROLLO USERNAME**
+Gruppo: **{chat_title}**
+✅ Tutti i membri hanno impostato lo username.</sentence>
+
+    <!-- Remove no username command message (notice) -->
+    <sentence id="REMOVE_NO_USERNAME_NOTICE_CMD">**CONTROLLO USERNAME**
+Gruppo: **{chat_title}**
+
+⏳ I membri senza username stanno per essere rimossi.</sentence>
+    <!-- Remove no username command message (completed) -->
+    <sentence id="REMOVE_NO_USERNAME_COMPLETED_CMD">✅ Operazione completata.
+Membri rimossi: **{members_count}**</sentence>
+    <!-- Remove no username command message (list) -->
+    <sentence id="REMOVE_NO_USERNAME_LIST_CMD">\nLista membri:
+{members_list}</sentence>
+
+    <!--
+        Payments
+    -->
+
+    <!-- Set payment check on joined members command enabled message -->
+    <sentence id="SET_CHECK_PAYMENT_ON_JOIN_EN_CMD">**CONTROLLO NUOVI MEMBRI**
+✅ Controllo pagamento sui membri appena entrati attivato.</sentence>
+    <!-- Set payment check on joined members command disabled message -->
+    <sentence id="SET_CHECK_PAYMENT_ON_JOIN_DIS_CMD">**CONTROLLO NUOVI MEMBRI**
+✅ Controllo pagamento sui membri appena entrati disattivato.</sentence>
+
+    <!-- Is payment check on joined members command enabled message -->
+    <sentence id="IS_CHECK_PAYMENT_ON_JOIN_EN_CMD">**CONTROLLO NUOVI MEMBRI**
+Il controllo pagamento sui membri appena entrati è attualmente attivato.</sentence>
+    <!-- Is payment check on joined members command disabled message -->
+    <sentence id="IS_CHECK_PAYMENT_ON_JOIN_DIS_CMD">**CONTROLLO NUOVI MEMBRI**
+Il controllo pagamento sui membri appena entrati è attualmente disattivato.</sentence>
+
+    <!-- Check payment data command message (notice) -->
+    <sentence id="CHECK_PAYMENTS_DATA_NOTICE_CMD">**CONTROLLO DATI PAGAMENTO**
+⏳ I dati di pagamento stanno per essere controllati...</sentence>
+    <!-- Check payment data command message (completed) -->
+    <sentence id="CHECK_PAYMENTS_DATA_COMPLETED_CMD">✅ Operazione completata.
+
+Errori trovati: **{errors_count}**</sentence>
+    <!-- Check payment data command message (duplicated error) -->
+    <sentence id="CHECK_PAYMENTS_DATA_DUPLICATED_ERR_CMD">
+- La riga {row_index} contiene dati duplicati (utente o email)</sentence>
+    <!-- Check payment data command message (expiration error) -->
+    <sentence id="CHECK_PAYMENTS_DATA_DATE_ERR_CMD">
+- La data di scadenza per lo user {user} alla riga {row_index} non è valida ({expiration_date})</sentence>
+    <!-- Check payment data command message (all ok) -->
+    <sentence id="CHECK_PAYMENTS_DATA_ALL_OK_CMD">✅ I dati di pagamento sono corretti, nessun errore trovato.</sentence>
+
+    <!-- Email no payment command message (disabled) -->
+    <sentence id="EMAIL_NO_PAYMENT_DISABLED_CMD">**AVVISO PAGAMENTI**
+❗️ L'invio email è al momento disabilitato.</sentence>
+    <!-- Email no payment command message (notice) -->
+    <sentence id="EMAIL_NO_PAYMENT_NOTICE_CMD">**AVVISO PAGAMENTI**
+Gruppo: **{chat_title}**
+
+⏳ I membri il cui pagamento sta per scadere stanno per essere avvisati via email...</sentence>
+    <!-- Email no payment command message (completed) -->
+    <sentence id="EMAIL_NO_PAYMENT_COMPLETED_CMD">✅ Operazione completata.
+
+Membri il cui pagamento sta per cadere {days_left}: **{members_count}**
+Lista membri:
+{members_list}
+
+Una email è stata inviata a tutti i membri.</sentence>
+    <!-- Email no payment command message (all ok) -->
+    <sentence id="EMAIL_NO_PAYMENT_ALL_OK_CMD">Tutti i membri hanno pagato, nessuna email inviata.</sentence>
+    <!-- Email no payment command message (error) -->
+    <sentence id="EMAIL_NO_PAYMENT_ERR_CMD">❌ Si sono verificati degli errori durante l'invio delle email.</sentence>
+
+    <!-- Check no payment command message (notice) -->
+    <sentence id="CHECK_NO_PAYMENT_NOTICE_CMD">**CONTROLLO PAGAMENTI**
+Gruppo: **{chat_title}**
+
+⏳ I membri il cui pagamento sta per scadere stanno per essere controllati...</sentence>
+    <!-- Check no payment command message (completed) -->
+    <sentence id="CHECK_NO_PAYMENT_COMPLETED_CMD">✅ Operazione completata.
+
+Membri il cui pagamento sta per cadere {days_left}: **{members_count}**
+Lista membri:
+{members_list}
+
+Siete pregati di pagare entro {last_day} o verrete rimossi dal gruppo.</sentence>
+    <!-- Check no payment command message (website) -->
+    <sentence id="CHECK_NO_PAYMENT_WEBSITE_CMD">\n\nPotete pagare direttamente dal sito: {website}</sentence>
+    <!-- Check no payment command message (email/telegram) -->
+    <sentence id="CHECK_NO_PAYMENT_EMAIL_TG_CMD">\n\nSe siete nella lista ma avete pagato, inviate una email a {support_email} o contattate @{support_telegram} **specificando il vostro username Telegram**.</sentence>
+    <!-- Check no payment command message (only email) -->
+    <sentence id="CHECK_NO_PAYMENT_ONLY_EMAIL_CMD">\n\nSe siete nella lista ma avete pagato, inviate una email a {support_email} **specificando il vostro username Telegram**.</sentence>
+    <!-- Check no payment command message (only telegram) -->
+    <sentence id="CHECK_NO_PAYMENT_ONLY_TG_CMD">\n\nSe siete nella lista ma avete pagato, contattate @{support_telegram} **specificando il vostro username Telegram**.</sentence>
+    <!-- Check no payment command message (all ok) -->
+    <sentence id="CHECK_NO_PAYMENT_ALL_OK_CMD">✅ Tutti i membri hanno rinnovato il pagamento.</sentence>
+
+    <!-- Remove no payment command message (notice) -->
+    <sentence id="REMOVE_NO_PAYMENT_NOTICE_CMD">**CONTROLLO PAGAMENTI**
+Gruppo: **{chat_title}**
+
+⏳ I membri il cui pagamento sta per scadere stanno per essere rimossi...</sentence>
+    <!-- Remove no payment command message (completed) -->
+    <sentence id="REMOVE_NO_PAYMENT_COMPLETED_CMD">✅ Operazione completata.
+
+Membri rimossi: **{members_count}**</sentence>
+    <!-- Remove no payment command message (all ok) -->
+    <sentence id="REMOVE_NO_PAYMENT_LIST_CMD">\nLista membri:
+{members_list}</sentence>
+
+    <!--
+        Payment check task
+    -->
+
+    <!-- Payment task start command (ok) -->
+    <sentence id="PAYMENT_TASK_START_OK_CMD">**TASK COTROLLO PAGAMENTI**
+✅ Task di controllo pagamenti avviato con successo (periodo: {period}h).</sentence>
+
+    <!-- Payment task stop command (ok) -->
+    <sentence id="PAYMENT_TASK_STOP_OK_CMD">**TASK COTROLLO PAGAMENTI**
+✅ Task di controllo pagamenti fermato con successo.</sentence>
+
+    <!-- Payment task info command (state) -->
+    <sentence id="PAYMENT_TASK_INFO_STATE_CMD">**TASK COTROLLO PAGAMENTI**
+Stato: **{state}**</sentence>
+
+    <!-- Payment task info command (period) -->
+    <sentence id="PAYMENT_TASK_INFO_PERIOD_CMD">
+Periodo: **{period}h**</sentence>
+
+    <!-- Payment task info command (groups) -->
+    <sentence id="PAYMENT_TASK_INFO_GROUPS_CMD">
+Numero gruppi attivi: **{chats_count}**
+Lista gruppi:
+{chats_list}</sentence>
+
+    <!-- Payment task add chat command (ok) -->
+    <sentence id="PAYMENT_TASK_ADD_CHAT_OK_CMD">**TASK COTROLLO PAGAMENTI**
+✅ Chat corrente aggiunta con successo al task di controllo pagamenti.</sentence>
+    <!-- Payment task add chat command (error) -->
+    <sentence id="PAYMENT_TASK_ADD_CHAT_ERR_CMD">**TASK COTROLLO PAGAMENTI**
+❌ La chat corrente è già stata aggiunta al task di controllo pagamenti.</sentence>
+
+    <!-- Payment task remove chat command (ok) -->
+    <sentence id="PAYMENT_TASK_REMOVE_CHAT_OK_CMD">**TASK COTROLLO PAGAMENTI**
+✅ Chat corrente rimossa con successo dal task di controllo pagamenti.</sentence>
+    <!-- Payment task remove chat command (error) -->
+    <sentence id="PAYMENT_TASK_REMOVE_CHAT_ERR_CMD">**TASK COTROLLO PAGAMENTI**
+❌ La chat corrente non è presente nel task di controllo pagamenti.</sentence>
+
+    <!-- Payment task remove all chats command (ok) -->
+    <sentence id="PAYMENT_TASK_REMOVE_ALL_CHATS_CMD">**TASK COTROLLO PAGAMENTI**
+✅ Tutte le chat rimosse con successo dal task di controllo pagamenti.</sentence>
+
+    <!--
+        Generic errors
+    -->
+
+    <!-- Generic error message -->
+    <sentence id="GENERIC_ERR_MSG">**ERRORE**
+❌ Si è verificato un errore durante l'esecuzione del comando.</sentence>
+    <!-- Authorized-only users error message -->
+    <sentence id="AUTH_ONLY_ERR_MSG">**ERRORE**
+❌ Non sei autorizzato a utilizzare il comando.</sentence>
+    <!-- Group-only error message -->
+    <sentence id="GROUP_ONLY_ERR_MSG">**ERRORE**
+❌ Questo comando può essere eseguito solo nel gruppo.</sentence>
+    <!-- Parameter error message -->
+    <sentence id="PARAM_ERR_MSG">**ERRORE**
+❌ Parametri non validi.</sentence>
+    <!-- Task already existent error message -->
+    <sentence id="TASK_EXISTENT_ERR_MSG">**ERRORE**
+❌ Task di controllo pagamenti già attivo.</sentence>
+    <!-- Task not existent error message -->
+    <sentence id="TASK_NOT_EXISTENT_ERR_MSG">**ERRORE**
+❌ Task di controllo pagamenti non attivo.</sentence>
+    <!-- Task period error message -->
+    <sentence id="TASK_PERIOD_ERR_MSG">**ERRORE**
+❌ Il periodo deve essere compreso tra 1 e 24.</sentence>
+
+    <!--
+        Misc
+    -->
+
+    <sentence id="BOT_WELCOME_MSG">Ciao!
+Grazie per aver scelto il **Telegram Payment Bot**.
+Usa __/help__ per vedere la lista dei comandi supportati.
+Non dimenticarti di **farmi amministratore del gruppo** o non potrò funzionare correttamente.</sentence>
+    <sentence id="TASK_RUNNING_MSG">attivo</sentence>
+    <sentence id="TASK_STOPPED_MSG">inattivo</sentence>
+    <sentence id="WITHIN_HOURS_MSG">entro {hours} ore</sentence>
+    <sentence id="WITHIN_DAYS_MSG">entro {days} giorni</sentence>
+    <sentence id="ASAP_MSG">il prima possibile</sentence>
+    <sentence id="IN_DAYS_MSG">in {days} giorni</sentence>
+    <sentence id="TODAY_MSG">oggi</sentence>
+    <sentence id="TOMORROW_MSG">domani</sentence>
+    <sentence id="DAY_OF_MONTH_MSG">il giorno {day_of_month} del mese</sentence>
+    <sentence id="FEW_DAYS_MSG">pochi giorni</sentence>
+    <sentence id="JOINED_MEMBER_KICKED_FOR_PAYMENT_MSG">❗️ Nuovo membro {name} rimosso (si è unito al gruppo senza pagamento)</sentence>
+    <sentence id="JOINED_MEMBER_KICKED_FOR_USERNAME_MSG">❗️ Nuovo membro {name} rimosso (si è unito al gruppo senza username)</sentence>
+</translation>

@@ -1,0 +1,140 @@
+*.db
+assets/external/
+.states
+.web
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Tool caches (mypy / pytest / ruff auto-generate these; some tools
+# drop their own inner .gitignore but it's fragile, so list them here
+# explicitly so VS Code doesn't surface them as untracked).
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Piper Models (zu groß für Git)
+piper_models/
+
+# XTTS Runtime-Daten (Diagnose-Dumps bei CUDA-Crash, Runtime-only)
+docker/xtts/crash_dumps/
+
+# Firebird 2.5 embedded libraries (binaries, ~67 MB)
+lib/firebird25/
+
+# EPIM database files (private data!)
+data/epim/
+
+# SSL Certificates (privat!)
+ssl/
+*.pem
+*.key
+*.crt
+
+# User Settings (persönlich)
+assistant_settings.json
+
+# Claude Code Settings (persönlich)
+settings.json
+**/settings.json  # Alle settings.json in allen Unterordnern
+
+# Environment Variables (API Keys - NIEMALS committen!)
+.env
+.env.local
+
+# Machine-specific scripts (contain hardcoded paths/domains)
+scripts/patch-vite-config.sh
+
+# Logs
+*.log
+/var/log/
+logs
+
+# Temporary files
+/tmp/
+*.tmp
+*.bak
+
+# Test output files
+test_output/
+
+# Backups
+*.backup
+*.backup-*
+
+# Benchmark Results
+benchmark_output.log
+benchmark_results_*.json
+MODEL_BENCHMARK_RESULTS_*.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Gradio
+.gradio/
+Bilder/
+
+# Reflex
+.web/
+reflex.db
+assets/generated/
+assets/html_preview/
+
+# Python Backups (additional patterns)
+*_backup.py
+*.tar.gz
+*.tar
+*.zip
+
+Mathematik_Loesungen.html
+
+# TTS Audio Cache
+assets/tts_audio/
+
+# Centralized Data Directory (user data, not code)
+# Contains: sessions/, images/, tts_audio/, html_preview/, logs/
+# Plus: settings.json, accounts.json, allowed_users.json, model_vram_cache.json
+data/*
+# Exception: tracked config/data files that must ship with the repo
+!data/agents.json
+!data/non_scrapable_domains.txt
+
+# Local machine-specific configuration (absolute paths, never commit)
+config/
+
+# Test Directory (local test files)
+Test/
+
+# Internal drafts (marketing, notes, etc.)
+docs/drafts/
+
+# F5-TTS (experimental, buggy - not production ready)
+docker/f5-tts/
+scripts/tts_compare.py
+
+# Agent Prompts: all tracked (agents are created via Agent Editor)
+tools/echo_dot/tflite/lib/
+tools/echo_dot/tflite/*.tflite
+tools/echo_dot/
+data/FreeEchoDot2/
+
+# Private PR-/Marketing-Drafts (Foren-Posts, Redaktions-Mails) — nicht öffentlich
+/_private/
+
+# Plugin-Manager verschiebt deaktivierte Plugins hierher (transienter Zustand)
+aifred/plugins/disabled/
+
+# Sicherungen von User-Configs vor Aenderungen (vllm_runtime.yaml, Betriebspunkte)
+backups/

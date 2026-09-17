@@ -1,0 +1,4 @@
+aiogram==2.25.2
+aiogram~=2.25
+pyrebase4
+python-dotenv

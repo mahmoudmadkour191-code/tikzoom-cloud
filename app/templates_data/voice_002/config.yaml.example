@@ -1,0 +1,197 @@
+# SirChatalot configuration.
+# Copy this file to ./data/config.yaml and fill in your keys.
+# Optional sections (rate_limit, image_generation, audio, web, files) can be removed
+# entirely to disable the corresponding feature.
+
+telegram:
+  token: "0000000000:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  # Users get whitelisted by sending one of these codes to the bot.
+  # Remove or leave empty to make the bot available to everyone.
+  access_codes: [whitelistcode, secondwhitelistcode]
+  banlist_enabled: false
+  reply_to_message: false
+  # admin_id: 123456789       # this user gets error notifications
+  # Bot API connectivity. The defaults below are already tuned for a proxied,
+  # flaky link — override only if you know why.
+  # network:
+  #   connect_timeout: 20      # seconds; PTB's own default is a very tight 5
+  #   read_timeout: 30
+  #   write_timeout: 30
+  #   pool_timeout: 20         # PTB's default of 1s causes "Pool timeout" errors
+  #   connection_pool_size: 256
+  #   get_updates_pool_size: 8 # PTB's default of 1 connection is easily exhausted
+  #   poll_interval: 1.0       # pause between getUpdates calls
+  #   poll_timeout: 30         # long polling timeout
+  #   heartbeat_seconds: 60    # API ping + heartbeat file for the container healthcheck
+  #   watchdog_seconds: 900    # reconnect after the API is unreachable this long (0 = off)
+
+# Any OpenAI-compatible API works: OpenAI, OpenRouter, Ollama, vLLM,
+# Anthropic/Yandex via their OpenAI-compatible endpoints, etc.
+# Prices are USD per 1M tokens (used only for the /statistics estimate).
+models:
+  - name: gpt-4o-mini
+    model: gpt-4o-mini
+    api_key: "sk-..."
+    prompt_price: 0.15
+    completion_price: 0.6
+    max_history_tokens: 16000
+    temperature: 0.7
+    vision: true
+    tools: true
+  - name: claude-sonnet
+    model: anthropic/claude-sonnet-4.5
+    base_url: https://openrouter.ai/api/v1
+    api_key: "sk-or-..."
+    prompt_price: 3.0
+    completion_price: 15.0
+    vision: true
+    tools: true
+  # Keyless endpoints (Ollama, local vLLM) — api_key can be omitted entirely:
+  # - name: local-llama
+  #   model: llama3.1
+  #   base_url: http://localhost:11434/v1
+  #   tools: true
+
+default_model: gpt-4o-mini
+# On API errors/timeouts/rate limits the request is retried on these models in order.
+fallback_chain: [claude-sonnet]
+
+chat:
+  system_message: >-
+    You are a helpful assistant named Sir Chat-a-lot,
+    who answers in a style of a knight in the middle ages.
+  # Smart history compaction: when the history exceeds compact_threshold of the
+  # model's max_history_tokens, older messages are folded into a rolling summary;
+  # the last keep_recent_messages stay verbatim. summarize_too_long: false = plain trim.
+  summarize_too_long: true
+  compact_threshold: 0.75
+  keep_recent_messages: 8
+  moderation: false           # check user messages with the OpenAI moderation API
+  image_size: 512             # long side for downscaling incoming photos (vision)
+  end_user_id: true           # pass a hashed user id to the API
+  # max_session_length: 15    # warn the user when the session gets this long
+
+# Persistent memory about the user: the model saves facts with the save_memory
+# tool, they are injected into the system prompt; users manage them with /memory.
+# Remove the section to disable.
+memory:
+  max_items: 30
+
+# MCP (Model Context Protocol) servers. Their tools become available to the
+# model; users can toggle each server with /tools. stdio (command) or
+# streamable-http (url) transports.
+mcp_servers: []
+#  - name: filesystem
+#    command: npx
+#    args: ["-y", "@modelcontextprotocol/server-filesystem", "/data/shared"]
+#  - name: remote-search
+#    url: https://example.com/mcp
+#    headers: {Authorization: "Bearer xxx"}
+
+# Bot personalities for the /style command.
+styles:
+  Alice:
+    description: Alice is empathetic and friendly
+    system_message: >-
+      You are an empathetic and friendly woman named Alice, who answers helpful, funny and a bit flirty.
+  Bob:
+    description: Bob is brutal and honest
+    system_message: >-
+      You are a brutal and honest man named Bob, who answers directly and without any sugarcoating.
+
+rate_limit:
+  window_seconds: 3600
+  general_limit: 100
+  # Per-user overrides (0 = unlimited).
+  user_overrides: {}
+  #   123456789: 500
+
+image_generation:
+  api_key: "sk-..."
+  # base_url: null
+  model: dall-e-3
+  api: images                 # images = OpenAI images endpoint (OpenAI, xAI, Together...)
+  # OpenRouter image models work through chat completions instead
+  # (image-only models like FLUX are supported too — the bot retries with
+  # image-only output if the model rejects image+text):
+  # api: chat
+  # model: google/gemini-2.5-flash-image
+  # base_url: https://openrouter.ai/api/v1
+  # api_key: "sk-or-..."
+  base_price: 0.04            # USD per image, for /statistics
+  size: 1024x1024
+  style: vivid
+  quality: standard
+  rate_limit: {count: 16, window_seconds: 3600}
+
+audio:
+  api_key: "sk-..."
+  # base_url: null
+  model: whisper-1
+  api: transcriptions         # transcriptions = OpenAI audio endpoint (Whisper etc.)
+  price_per_minute: 0.006
+  format: mp3                 # chat mode requires wav or mp3
+  transcribe_only: false      # true = reply with the transcript instead of answering
+  # OpenRouter has no transcriptions endpoint — use a multimodal model instead:
+  # api: chat
+  # model: google/gemini-2.5-flash
+  # base_url: https://openrouter.ai/api/v1
+  # api_key: "sk-or-..."
+
+web:
+  # provider: google (api_key + cse_id) | searxng (url) | tavily (api_key) | brave (api_key)
+  search:
+    provider: searxng
+    url: http://localhost:8080
+    results: 5
+  # search:
+  #   provider: tavily
+  #   api_key: "tvly-..."
+  # search:
+  #   provider: brave
+  #   api_key: "BSA..."
+  # search:
+  #   provider: google
+  #   api_key: "..."
+  #   cse_id: "..."
+  url_open:
+    enabled: true
+    summarize: false
+    trim_length: 3000
+    via_jina: true            # fetch pages through r.jina.ai (clean markdown);
+    # jina_api_key: "jina_..."  # optional, higher rate limits
+
+# Document upload + agentic RAG (semantic search over uploaded files).
+files:
+  embeddings:
+    provider: openai          # openai = any OpenAI-compatible API;
+                              # local = bundled ONNX model, no API calls at all
+    api_key: "sk-..."
+    # base_url: null
+    model: text-embedding-3-small
+  # Fully local RAG (embeddings computed on the bot's machine):
+  # embeddings:
+  #   provider: local
+  max_file_size_mb: 20
+  chunk_size: 600
+  overlap_percent: 0.1
+  max_distance: 1.0
+  search_results: 4
+
+# HTTP proxies per traffic kind (all optional). Format: http://user:pass@host:port
+proxies:
+  telegram: null   # Telegram Bot API traffic
+  llm: null        # all OpenAI-compatible calls (chat/images/audio/embeddings);
+                   # a per-model `proxy` in models[] overrides this
+  search: null     # web search providers
+  jina: null       # URL opening (Jina Reader and the direct fallback)
+
+agent:
+  max_iterations: 5           # max tool-calling rounds per turn
+  # max_turn_tokens: 30000    # hard token budget per turn; exceeded -> forced final answer
+  tool_result_keep_chars: 300 # older turns' tool results are truncated to this in history
+                              # (0 = keep full)
+
+logging:
+  level: WARNING
+  log_chats: false

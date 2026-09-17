@@ -1,0 +1,259 @@
+# Telegram Crypto Price Bot
+
+| |
+|---|
+| [![PyPI - Version](https://img.shields.io/pypi/v/telegram_crypto_price_bot.svg?logo=pypi&label=PyPI&logoColor=gold)](https://pypi.org/project/telegram_crypto_price_bot/) [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/telegram_crypto_price_bot.svg?logo=python&label=Python&logoColor=gold)](https://pypi.org/project/telegram_crypto_price_bot/) [![GitHub License](https://img.shields.io/github/license/ebellocchia/telegram_crypto_price_bot?label=License)](https://github.com/ebellocchia/telegram_crypto_price_bot?tab=MIT-1-ov-file) |
+| [![Build](https://github.com/ebellocchia/telegram_crypto_price_bot/actions/workflows/build.yml/badge.svg)](https://github.com/ebellocchia/telegram_crypto_price_bot/actions/workflows/build.yml) [![Code Analysis](https://github.com/ebellocchia/telegram_crypto_price_bot/actions/workflows/code-analysis.yml/badge.svg)](https://github.com/ebellocchia/telegram_crypto_price_bot/actions/workflows/code-analysis.yml) |
+| [![Codacy grade](https://img.shields.io/codacy/grade/e494ae8a0df847ca85dc72305bdb3ffa?label=Codacy%20Grade)](https://app.codacy.com/gh/ebellocchia/telegram_crypto_price_bot/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade) [![CodeFactor Grade](https://img.shields.io/codefactor/grade/github/ebellocchia/telegram_crypto_price_bot?label=CodeFactor%20Grade)](https://www.codefactor.io/repository/github/ebellocchia/telegram_crypto_price_bot) |
+| |
+
+## Introduction
+
+Telegram bot for displaying cryptocurrencies prices and charts based on *pyrotgfork* (a maintained fork of the *pyrogram* library) and *matplotlib* libraries.\
+Data is retrieved using CoinGecko APIs.\
+It is possible to show coin information either on demand (by manually calling a command) or periodically using background tasks.\
+A single bot instance can be used with multiple coins and in multiple groups.\
+The usage of the bot is restricted to admins, in order to prevent users from flooding the chat with price requests.
+
+## Setup
+
+### Create Telegram app
+
+In order to use the bot, you need a Telegram bot token, an API ID, and an API hash.
+
+To obtain them, create an app on the following website: [https://my.telegram.org/apps](https://my.telegram.org/apps).
+
+### Installation
+
+This package requires **Python >= 3.7**.
+
+
+1. **Set up a virtual environment (optional but recommended)**:
+
+```
+python -m venv venv
+source venv/bin/activate    # On Windows use: venv\Scripts\activate
+```
+
+2. **Install the bot:**
+
+```
+pip install telegram_crypto_price_bot
+```
+
+**IMPORTANT NOTE:** This bot uses *pyrotgfork*. If you are not using a virtual environment, ensure that the standard *pyrogram* library (or forks) is not installed in your Python environment.
+Since both libraries use the same package name, having both installed will cause conflicts and the bot will not function correctly.
+
+3. **Set up the bot:**
+Copy the **app** folder from the repository to your device. Edit the configuration file by specifying your API ID, API hash, bot token, and other parameters according to your needs (see the "Configuration" chapter).
+4. **Run the bot:**
+Inside the **app** folder, launch the **bot_start.py** script to start the bot:
+
+```
+python bot_start.py
+```
+
+---
+
+#### Custom Configuration
+
+When run without parameters, the bot uses **conf/config.ini** as the default configuration file. To specify a different configuration file, use:
+
+```
+python bot_start.py -c another_conf.ini
+```
+
+or:
+
+```
+python bot_start.py --config another_conf.ini
+```
+
+This allows you to manage different bots easily, each one with its own configuration file.
+
+### Code analysis
+
+To run code analysis:
+
+```
+mypy .
+ruff check .
+```
+
+## Configuration
+
+An example configuration file is provided in the **app/conf** folder.
+The list of all configurable fields is shown below.
+
+| Name | Description |
+|---|---|
+| **[pyrogram]** | *Configuration for Pyrogram* |
+| `session_name` | Path of the file used to store the session. |
+| `api_id` | API ID from [https://my.telegram.org/apps](https://my.telegram.org/apps). |
+| `api_hash` | API hash from [https://my.telegram.org/apps](https://my.telegram.org/apps). |
+| `bot_token` | Bot token from *BotFather*. |
+| **[app]** | *Configuration for the app* |
+| `app_is_test_mode` | Set to `true` to activate test mode, `false` otherwise. |
+| `app_lang_file` | Path of custom language file in XML format (default: English). |
+| **[task]** | *Configuration for tasks* |
+| `tasks_max_num` | Maximum number of total running tasks, across all groups (default: `20`). |
+| **[coingecko]** | *Configuration for CoinGecko* |
+| `coingecko_api_key_demo` | Demo key (free) for CoinGecko APIs. Free APIs can also be used with an empty key (default: empty string). |
+| `coingecko_api_key_pro` | Pro key (paid) for CoinGecko APIs (default: empty string). |
+| `coingecko_api_max_retries` | Maximum number of retries for failed CoinGecko requests (default: `7`). |
+| `coingecko_api_timeout_sec` | Timeout in seconds for each CoinGecko request (default: `10.0`). |
+| **[chart]** | *Configuration for the price chart* |
+| `chart_display` | Set to `true` to display the price chart, `false` otherwise (default: `true`). If `false`, the following fields are ignored. |
+| `chart_date_format` | Date format for the price chart (default: `%%d/%%m/%%Y %%H:00`) |
+| `chart_background_color` | Background color for the price chart (default: `white`) |
+| `chart_title_color` | Title color for the price chart (default: `black`) |
+| `chart_frame_color` | Frame color for the price chart (default: `black`) |
+| `chart_axes_color` | Axes color for the price chart (default: `black`) |
+| `chart_line_color` | Line color for the price chart (default: `#3475AB`) |
+| `chart_line_style` | Line style for the price chart (default: `-`). Same as matplotlib styles: `-`, `--`, `-.`, `:` |
+| `chart_line_width` | Line width for the price chart (default: `1`) |
+| `chart_display_grid` | Set to `true` to display the grid, `false` otherwise (default: `true`). If `false`, the following fields are ignored. |
+| `chart_grid_max_size` | Maximum size for the price chart grid (default: `4`) |
+| `chart_grid_color` | Line color for the price chart grid (default: `#DFDFDF`) |
+| `chart_grid_line_style` | Line style for the grid (default: `--`). Same as matplotlib styles: `-`, `--`, `-.`, `:` |
+| `chart_grid_line_width` | Line width for the grid (default: `1`) |
+| **[price]** | *Configuration for price info* |
+| `price_display_market_cap` | Set to `true` to display market cap, `false` otherwise (default: `true`) |
+| `price_display_market_cap_rank` | Set to `true` to display market cap rank, `false` otherwise (default: `false`) |
+| **[logging]** | *Configuration for logging* |
+| `log_level` | Log level, same as Python logging (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`). Default: `INFO`. |
+| `log_console_enabled` | Set to `true` to enable logging to console, `false` otherwise (default: `true`) |
+| `log_file_enabled` | Set to `true` to enable logging to file, `false` otherwise (default: `false`). If `false`, the following fields are ignored. |
+| `log_file_name` | Log file name |
+| `log_file_use_rotating` | Set to `true` to use a rotating log file, `false` otherwise |
+| `log_file_max_bytes` | Maximum size in bytes before rotating. Valid only if `log_file_use_rotating` is `true`. |
+| `log_file_backup_cnt` | Maximum number of log files to keep. Valid only if `log_file_use_rotating` is `true`. |
+| `log_file_append` | Set to `true` to append to the log file, `false` to overwrite it. Valid only if `log_file_use_rotating` is `false`. |
+
+All colors can be specified as a name or an RGB color in `#RRGGBB` format (same as *matplotlib*).
+Chart and price configurations are global and will be applied to all coins in all groups.
+
+**NOTE:** While CoinGecko APIs can still work with an empty API key, it is highly recommended to create a free API key.
+Please note that the free tier has strict rate limits: running too many price tasks simultaneously may lead to rate limit errors.
+
+## Supported Commands
+
+List of supported commands:
+- `/help`: show help message
+- `/alive`: show if the bot is active
+- `/pricebot_set_test_mode true/false`: enable/disable test mode
+- `/pricebot_is_test_mode`: show if test mode is enabled
+- `/pricebot_version`: show the bot version
+- `/pricebot_get_single COIN_ID COIN_VS LAST_DAYS [SAME_MSG]`: show chart and price information for the specified pair (single request).
+    - `COIN_ID`: CoinGecko *ID*
+    - `COIN_VS`: CoinGecko *vs_currency*
+    - `LAST_DAYS`: number of days for the price chart
+    - `SAME_MSG` (optional): `true` to send chart and price info in the same message (price info as a caption), `false` to send them separately. Default: `true`.
+- `/pricebot_task_start PERIOD_HOURS START_HOUR COIN_ID COIN_VS LAST_DAYS`: start a periodic price task (in the current chat/topic). If the task already exists, an error is shown. To restart it, stop it first with `/pricebot_task_stop`.
+    - `PERIOD_HOURS`: task period in hours (must be between 1 and 24)
+    - `START_HOUR`: task start hour (must be between 0 and 23)
+    - `COIN_ID`: CoinGecko *ID*
+    - `COIN_VS`: CoinGecko *vs_currency*
+    - `LAST_DAYS`: number of days for the price chart
+- `/pricebot_task_stop COIN_ID COIN_VS`: stop the specified price task (in the current chat/topic).
+    - `COIN_ID`: CoinGecko *ID*
+    - `COIN_VS`: CoinGecko *vs_currency*
+- `/pricebot_task_stop_all`: stop all price tasks in the current chat (all topics included).
+- `/pricebot_task_pause COIN_ID COIN_VS`: pause the specified price task (in the current chat/topic).
+    - `COIN_ID`: CoinGecko *ID*
+    - `COIN_VS`: CoinGecko *vs_currency*
+- `/pricebot_task_resume COIN_ID COIN_VS`: resume the specified price task (in the current chat/topic).
+    - `COIN_ID`: CoinGecko *ID*
+    - `COIN_VS`: CoinGecko *vs_currency*
+- `/pricebot_task_send_in_same_msg COIN_ID COIN_VS true/false`: enable/disable sending chart and price info in the same message for the specified price task (in the current chat/topic).
+    - `COIN_ID`: CoinGecko *ID*
+    - `COIN_VS`: CoinGecko *vs_currency*
+    - `flag`: `true` for a single message (price as caption), `false` for separate messages.
+- `/pricebot_task_delete_last_msg COIN_ID COIN_VS true/false`: enable/disable deletion of the previous message for the specified price task (in the current chat/topic).
+    - `COIN_ID`: CoinGecko *ID*
+    - `COIN_VS`: CoinGecko *vs_currency*
+    - `flag`: `true` or `false`
+- `/pricebot_task_info`: show the list of active price tasks in the current chat (all topics included).
+
+**Default behavior:**
+- Price tasks send chart and price info in the same message. This can be toggled via `/pricebot_task_send_in_same_msg`.
+- Price tasks delete the last sent message when sending a new one. This can be toggled via `/pricebot_task_delete_last_msg`.
+
+**Scheduling Logic:**
+The task period starts from the specified hour (ensure the VPS time is correct):
+
+- Period of 8h starting at 00:00: sends at 00:00, 08:00, 16:00
+- Period of 6h starting at 10:00: sends at 10:00, 16:00, 22:00, 04:00
+
+**Examples**
+
+Show the price of BTC/USD of the last 14 days in the current chat (single call):
+
+```
+/pricebot_get_single bitcoin usd 14
+```
+
+Show the price of ETH/BTC of the last 30 days periodically every 8 hours starting from 10:00 in the current chat:
+
+```
+/pricebot_task_start 8 10 ethereum btc 30
+```
+
+Pause/Resume/Stop the previous task:
+
+```
+/pricebot_task_pause ethereum btc
+/pricebot_task_resume ethereum btc
+/pricebot_task_stop ethereum btc
+```
+
+Set task so that it sends chart and price information in the same message:
+
+```
+/pricebot_task_send_in_same_msg ethereum btc true
+```
+
+Set task so that it doesn't delete the last sent message:
+
+```
+/pricebot_task_delete_last_msg ethereum btc false
+```
+
+## Run the Bot
+
+The bot should be a group administrator to ensure it can delete previous messages.
+
+It is recommended to run the bot 24/7 on a VPS.
+
+### Docker
+
+Docker files are also provided, to run the bot in a Docker container.
+In this case, the configuration file can be set by setting the `CONFIG_FILE` variable, for example:
+
+```
+CONFIG_FILE=conf/config.ini docker compose up -d --build
+```
+
+**NOTE:** Adjust the `TZ=Europe/Rome` variable in `docker-compose.yml` to match your timezone.
+
+## Test Mode
+
+In test mode, the task period is applied in **minutes** instead of hours, allowing for rapid testing.
+
+## Translation
+
+Bot messages can be translated using a custom XML file specified in the `app_lang_file` field. An Italian example is provided in **app/lang**.
+
+## Image Examples
+
+**Example with chart and price information on different messages:**
+
+<img src="https://github.com/ebellocchia/telegram_crypto_price_bot/blob/master/img/example_diff_msg.png" width="450px">
+
+**Example with chart and price information on the same message:**
+
+<img src="https://github.com/ebellocchia/telegram_crypto_price_bot/blob/master/img/example_same_msg.png" width="450px">
+
+# License
+
+This software is available under the MIT license.

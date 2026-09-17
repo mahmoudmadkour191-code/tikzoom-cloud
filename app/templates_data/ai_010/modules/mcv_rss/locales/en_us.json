@@ -1,0 +1,8 @@
+{
+    "mcv_rss.help.mcbv-rss.desc": "When enabled, the bot will automatically push message when the store updates Bedrock Edition.",
+    "mcv_rss.help.mcv-jira-rss.desc": "When enabled, the bot will automatically push message when Mojira updates Java Edition.",
+    "mcv_rss.help.mcv-rss.desc": "When enabled, the bot will automatically push message when Minecraft Launcher updates Java Edition.",
+    "mcv_rss.message.mcbv-rss": "Bedrock Edition ${version} is now released in Google Play Store.",
+    "mcv_rss.message.mcv-rss.release": "${version} is now released in Minecraft Launcher.\nUpdate time: ${record_time}\nPost time: ${posted_time}",
+    "mcv_rss.message.mcv-rss.snapshot": "Snapshot ${version} is now released in Minecraft Launcher.\nUpdate time: ${record_time}\nPost time: ${posted_time}"
+}

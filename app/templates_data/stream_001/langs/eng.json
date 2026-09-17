@@ -1,0 +1,99 @@
+{
+    "language_name": "🇺🇸 English",
+    "language_icon": "🇺🇸",
+    "language_select_error": "❌ Error selecting language!\n\n{error_text}",
+    "language_select": "Please select an interface language",
+    "language_changed": "🇺🇸 You've selected English\n\nYou can change the language at any time by typing the /lang command",
+    "start_message": "Hello, 👋 choomba! 👋\n\n📄 GPT-Telegramus version {version}\n\n💜 GPT-Telegramus author: Fern (aka F3RNI)\n💻 Contributors:\n🤍 Keepalove (Azarell) (Sprav04ka)\n🤍 Hanssen\n🤍 https://github.com/F33RNI/GPT-Telegramus#-contributors\n\n😺 GitHub page: https://github.com/F33RNI/GPT-Telegramus\n\n🎵 Support the project by buying my music: https://f3rni.bandcamp.com",
+    "help_message": "📄 /start - Welcome message and bot version\n❓ /help - Show this message\n↕ /module - Change module to chat with\n🧹 /clear - Clear chat history\n🌎 /lang - Change the language\n🆔 /chatid - Show your chat_id\n\nNow to get started send me any message 💬",
+    "help_message_admin": "Admin commands:\n\n💬 /queue - Show requests queue\n🔃 /restart [module, optional] - Restart module (or all of them), reload config, languages and commands\n👤 /users - Show list of all users\n🔨 /ban <id> [reason] - Ban a user by their id with reason (optional)\n🔓 /unban <id> - Unban a user by their id\n📢 /broadcast <message> - Send text message to everyone except banned users",
+    "empty_request_module_changed": "✅ Your module has been changed to {module_name}\nNow send me your request as a message",
+    "media_group_response": "Generated images for \"{request_text}\" request",
+    "permissions_deny": "❌ You do not have permission for this command!",
+    "queue_overflow": "Queue is full. Try again later ⏳",
+    "queue_empty": "🗑 Queue is empty",
+    "queue_accepted": "✅ Request to the {module_name} module added to the queue.\nPosition: {queue_size}/{queue_max} ⏳",
+    "response_error": "❌ Error: {error_text}\n\nClear the history and make another request or try again later",
+    "empty_message": "⚠️ Empty! See logs for details",
+    "regenerate_error_not_last": "❌ Error! Can only regenerate the last request!",
+    "regenerate_error_empty": "❌ Error! Empty request!",
+    "continue_error_not_last": "❌ Error! Can only continue the last request!",
+    "stop_error_not_last": "❌ Error! Can only abort the last request!",
+    "stop_error": "❌ Error! Can not stop generating!",
+    "response_link_format": "\n📄 {source_name}: {link}",
+    "suggestion_format": "💡 {suggestion}",
+    "suggestion_error": "❌ It is possible to use the suggested request only from the last message!",
+    "users_read_error": "❌ Error reading or parsing list of users!",
+    "users_admin": "Banned? Admin? Language Module ID Name - Requests\n\n{users_data}",
+    "users_total_stats": "Users: {users_num}, banned {banned_num}, admins: {admins_num}",
+    "restarting": "🙏 Restarting in progress...\nPlease wait",
+    "restarting_done": "{reload_logs}\n✅ The restart is completed",
+    "chat_cleared": "✅ Chat history cleared for {module_name}",
+    "clear_error": "❌ Error clearing chat history!\n\n{error_text}",
+    "clear_select_module": "Select the module whose chat history you want to clear,\nor ignore this message",
+    "module_select_module": "Your current module: {current_module}\nSelect the module to chat with,\nor ignore this message",
+    "user_cooldown_error": "❌ Please wait {time_formatted} before sending request to the {module_name} module!",
+    "hours": "h",
+    "minutes": "m",
+    "seconds": "s",
+    "ban_message_admin": "✅ Banned user: {banned_user}\n\nReason: {ban_reason}",
+    "ban_no_user_id": "❌ Error! Please specify user_id",
+    "ban_message_user": "❌ You're not whitelisted or you have been banned!\n\nReason: {ban_reason}",
+    "ban_reason_default": "Reason not specified",
+    "unban_message_admin": "✅ Unbanned user: {unbanned_user}",
+    "broadcast_no_message": "❌ No message to broadcast!",
+    "broadcast": "📢 {message}",
+    "broadcast_initiated": "⏳ Broadcasting in progress... Please wait and don't send new messages!",
+    "broadcast_done": "✅ Broadcast completed! Messages sent to users:\n{broadcast_ok_users}",
+    "style_changed": "✅ Conversation style changed to {changed_style}",
+    "style_change_error": "❌ Error changing conversation style!\n\n{error_text}",
+    "style_select": "Your conversation style: {current_style}\nSelect new conversation style of Bing,\nor ignore this message",
+    "style_precise": "📏 Precise",
+    "style_balanced": "⚖️ Balanced",
+    "style_creative": "🎨 Creative",
+    "model_changed": "✅ Model from module {module_name} changed to {changed_model}",
+    "model_select": "Your model of {module_name} module: {current_model}\nSelect new model of {module_name} module,\nor ignore this message",
+    "model_change_error": "❌ Error changing model!\n\n{error_text}",
+    "model_no_models": "❌ You can't change model of current module!",
+    "button_model_change": "⚙️ Change model",
+    "button_stop_generating": "🛑 Stop generating",
+    "button_continue": "⏩ Continue",
+    "button_regenerate": "🔄 Regenerate",
+    "button_clear": "🧹 Clear history",
+    "button_module": "↕️ Change module",
+    "button_style_change": "⚙️ Change style",
+    "modules": {
+        "lmao_chatgpt": {
+            "icon": "💬",
+            "name": "ChatGPT (LMAO API)"
+        },
+        "lmao_ms_copilot": {
+            "icon": "🟦",
+            "name": "MS Copilot (LMAO API)"
+        },
+        "chatgpt": {
+            "icon": "💬",
+            "name": "ChatGPT"
+        },
+        "dalle": {
+            "icon": "🖼",
+            "name": "DALL-E"
+        },
+        "ms_copilot": {
+            "icon": "🔵",
+            "name": "MS Copilot"
+        },
+        "ms_copilot_designer": {
+            "icon": "🎨",
+            "name": "MS Copilot designer"
+        },
+        "gemini": {
+            "icon": "♊",
+            "name": "Gemini"
+        },
+        "groq": {
+            "icon": "🔴",
+            "name": "Groq"
+        }
+    }
+}

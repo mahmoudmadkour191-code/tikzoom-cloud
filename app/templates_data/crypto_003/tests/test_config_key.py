@@ -1,0 +1,410 @@
+"""Smoke tests for `AnalysisConfigKey` — the single source of truth for
+the (provider, deep, quick, rounds, effort, temperature) tuple shared
+across the cache slug, the caption "via" line, and the Telegraph title.
+
+Cross-cutting invariant #1 in CLAUDE.md is the human-enforced "keep all
+three shapes in sync when adding a knob" rule; these scenarios are the
+structural enforcement — extending the dataclass with a new field
+without updating slug/caption/title produces visible test failures.
+
+Callers (cache.py, callbacks.py, analysis.py) consume the dataclass
+directly — there are no longer any thin delegators (`cache._slug` and
+`formatters.build_config_summary` were inlined in the cleanup PR).
+
+Run with: pytest tests/test_config_key.py
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+PASS = "\033[92m✓\033[0m"
+FAIL = "\033[91m✗\033[0m"
+
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+from tg_bot.pipeline.config_key import AnalysisConfigKey  # noqa: E402
+
+
+# ---------- from_config ----------
+
+
+def test_from_config_default_rounds_no_effort() -> None:
+    """Default-config user (rounds=1 omitted from the dict, no effort
+    set anywhere) — `from_config` should produce rounds=1 + effort=None."""
+    k = AnalysisConfigKey.from_config(
+        {
+            "llm_provider": "openai",
+            "deep_think_llm": "gpt-4o",
+            "quick_think_llm": "o4-mini",
+        }
+    )
+    assert k.provider == "openai"
+    assert k.deep == "gpt-4o"
+    assert k.quick == "o4-mini"
+    assert k.rounds == 1
+    assert k.effort is None
+
+
+def test_from_config_custom_rounds() -> None:
+    k = AnalysisConfigKey.from_config(
+        {
+            "llm_provider": "deepseek",
+            "deep_think_llm": "deepseek-v4-pro",
+            "quick_think_llm": "deepseek-v4-flash",
+            "max_debate_rounds": 2,
+        }
+    )
+    assert k.rounds == 2
+    assert k.effort is None
+
+
+def test_from_config_openai_effort_picks_up() -> None:
+    """OpenAI stores effort under `openai_reasoning_effort` — `from_config`
+    iterates `EFFORT_KEY_BY_PROVIDER.values()` so the provider-specific
+    key gets picked up without the dataclass knowing the mapping."""
+    k = AnalysisConfigKey.from_config(
+        {
+            "llm_provider": "openai",
+            "deep_think_llm": "gpt-4o",
+            "quick_think_llm": "o4-mini",
+            "openai_reasoning_effort": "high",
+        }
+    )
+    assert k.effort == "high"
+
+
+def test_from_config_anthropic_effort_picks_up() -> None:
+    k = AnalysisConfigKey.from_config(
+        {
+            "llm_provider": "anthropic",
+            "deep_think_llm": "claude-sonnet-4",
+            "quick_think_llm": "claude-haiku-4",
+            "anthropic_effort": "medium",
+        }
+    )
+    assert k.effort == "medium"
+
+
+def test_from_config_stale_provider_effort_key_wins_first() -> None:
+    """First-truthy-wins iteration over EFFORT_KEY_BY_PROVIDER means a
+    stale `openai_reasoning_effort` lingering in the dict beats the
+    current-provider `anthropic_effort`. This is the silent
+    misattribution flagged in pipeline/CLAUDE.md — pin it so a future
+    iteration-order change (or alphabetical sort) is loud."""
+    k = AnalysisConfigKey.from_config(
+        {
+            "llm_provider": "anthropic",
+            "deep_think_llm": "claude-sonnet-4",
+            "quick_think_llm": "claude-haiku-4",
+            # Stale leftover from a prior provider — should NOT win in
+            # principle, but the iteration order makes it.
+            "openai_reasoning_effort": "high",
+            "anthropic_effort": "medium",
+        }
+    )
+    # provider tracks the user's current selection; effort silently
+    # misattributes to the stale openai value because EFFORT_KEY_BY_PROVIDER
+    # iterates openai → anthropic → google and stops at the first truthy.
+    assert k.provider == "anthropic"
+    assert k.deep == "claude-sonnet-4"
+    assert k.quick == "claude-haiku-4"
+    assert k.effort == "high", (
+        "first-truthy-wins should pick openai's stale value before anthropic's; "
+        "if this fails, the iteration order changed — re-audit pipeline/CLAUDE.md"
+    )
+
+
+def test_from_config_missing_provider_falls_back() -> None:
+    """Defensive: bot defaults to 'unknown' if provider key is missing
+    so the key still constructs and the slug is still filesystem-safe."""
+    k = AnalysisConfigKey.from_config({})
+    assert k.provider == "unknown"
+    assert k.deep == "default"
+    assert k.quick == "default"
+
+
+def test_from_config_effort_resolution_first_truthy_wins_across_providers() -> None:
+    """Effort lookup iterates `EFFORT_KEY_BY_PROVIDER.values()` in insertion
+    order (`openai_reasoning_effort` → `anthropic_effort` → `google_thinking_level`)
+    and returns the first truthy value, regardless of the active `llm_provider`.
+
+    Pinning this matters because two simultaneously-armed effort keys (an
+    operator who set both `TRADINGAGENTS_OPENAI_REASONING_EFFORT` and
+    `TRADINGAGENTS_ANTHROPIC_EFFORT` while `provider=anthropic`) silently
+    pick openai's value for the cache slug + pool key + caption — misattribution
+    that is documented in `pipeline/CLAUDE.md` as a documented gotcha. If a
+    future refactor changes `EFFORT_KEY_BY_PROVIDER` insertion order, the
+    winning key changes too; this test fails loudly so the consequence is
+    visible at review time."""
+    # provider=anthropic but openai's effort key is also armed → openai wins
+    # because it appears first in EFFORT_KEY_BY_PROVIDER iteration order.
+    k = AnalysisConfigKey.from_config(
+        {
+            "llm_provider": "anthropic",
+            "deep_think_llm": "claude-opus-4-7",
+            "quick_think_llm": "claude-sonnet-4-6",
+            "openai_reasoning_effort": "high",
+            "anthropic_effort": "low",
+        }
+    )
+    assert k.effort == "high", (
+        f"expected openai's 'high' to win first-truthy iteration, got {k.effort!r}"
+    )
+
+
+# ---------- slug() ----------
+
+
+def test_slug_default_shape_omits_rounds_and_effort() -> None:
+    """Default user (rounds=1, effort=None) → no `__r{n}` / `__e{level}`
+    suffixes. Critical for backward compat — existing default-config
+    users mustn't lose their cache slot."""
+    k = AnalysisConfigKey(provider="openai", deep="gpt-4o", quick="o4-mini")
+    assert k.slug() == "openai__gpt-4o__o4-mini"
+
+
+def test_slug_appends_rounds_when_nondefault() -> None:
+    k = AnalysisConfigKey(
+        provider="deepseek",
+        deep="deepseek-v4-pro",
+        quick="deepseek-v4-flash",
+        rounds=2,
+    )
+    assert k.slug() == "deepseek__deepseek-v4-pro__deepseek-v4-flash__r2"
+
+
+def test_slug_appends_effort_when_set() -> None:
+    k = AnalysisConfigKey(
+        provider="openai", deep="gpt-4o", quick="o4-mini", effort="high"
+    )
+    assert k.slug() == "openai__gpt-4o__o4-mini__ehigh"
+
+
+def test_slug_appends_both_when_both_customized() -> None:
+    k = AnalysisConfigKey(
+        provider="openai", deep="gpt-4o", quick="o4-mini", rounds=3, effort="low"
+    )
+    assert k.slug() == "openai__gpt-4o__o4-mini__r3__elow"
+
+
+def test_slug_sanitizes_filesystem_unsafe_chars() -> None:
+    """OpenRouter / Azure use `provider/model` form. The slug must be
+    filesystem-safe — slashes squashed to underscores."""
+    k = AnalysisConfigKey(
+        provider="openrouter", deep="openai/gpt-4o", quick="anthropic/claude-haiku-4"
+    )
+    s = k.slug()
+    assert "/" not in s
+    assert "openai_gpt-4o" in s
+    assert "anthropic_claude-haiku-4" in s
+
+
+# ---------- caption() ----------
+
+
+def test_caption_default_shape() -> None:
+    k = AnalysisConfigKey(provider="openai", deep="gpt-4o", quick="o4-mini")
+    assert k.caption() == "openai · gpt-4o/o4-mini"
+
+
+def test_caption_appends_rounds_when_nondefault() -> None:
+    k = AnalysisConfigKey(
+        provider="deepseek",
+        deep="deepseek-v4-pro",
+        quick="deepseek-v4-flash",
+        rounds=2,
+    )
+    assert k.caption() == "deepseek · deepseek-v4-pro/deepseek-v4-flash · r2"
+
+
+def test_caption_appends_effort_with_equals_prefix() -> None:
+    k = AnalysisConfigKey(
+        provider="anthropic",
+        deep="claude-sonnet-4",
+        quick="claude-haiku-4",
+        effort="medium",
+    )
+    assert k.caption() == "anthropic · claude-sonnet-4/claude-haiku-4 · e=medium"
+
+
+def test_caption_both_customized_in_order() -> None:
+    """Rounds before effort — keeps the line predictably parseable."""
+    k = AnalysisConfigKey(
+        provider="openai",
+        deep="gpt-4o",
+        quick="o4-mini",
+        rounds=3,
+        effort="high",
+    )
+    assert k.caption() == "openai · gpt-4o/o4-mini · r3 · e=high"
+
+
+# ---------- telegraph_title() ----------
+
+
+def test_telegraph_title_includes_ticker_and_caption() -> None:
+    """The title is what Telegraph slugifies into the URL — putting the
+    config in it makes the URL self-document which config produced the
+    page, and prevents `NVDA Analysis` collision across configs."""
+    k = AnalysisConfigKey(provider="openai", deep="gpt-4o", quick="o4-mini")
+    assert k.telegraph_title("NVDA") == "NVDA Analysis · openai · gpt-4o/o4-mini"
+
+
+def test_telegraph_title_extends_with_customization_suffixes() -> None:
+    k = AnalysisConfigKey(
+        provider="deepseek",
+        deep="deepseek-v4-pro",
+        quick="deepseek-v4-flash",
+        rounds=2,
+        effort="high",
+    )
+    assert k.telegraph_title("INTU") == (
+        "INTU Analysis · deepseek · deepseek-v4-pro/deepseek-v4-flash · r2 · e=high"
+    )
+
+
+def test_telegraph_title_differs_across_configs_preventing_collision() -> None:
+    """Two users on the same ticker but different configs should get
+    different Telegraph titles so the slugifier produces distinct URLs
+    (Telegraph appends `-2`/`-3` on title collision)."""
+    a = AnalysisConfigKey(provider="openai", deep="gpt-4o", quick="o4-mini")
+    b = AnalysisConfigKey(
+        provider="deepseek", deep="deepseek-v4-pro", quick="deepseek-v4-flash"
+    )
+    assert a.telegraph_title("NVDA") != b.telegraph_title("NVDA")
+
+
+# ---------- temperature (cross-provider knob, v0.3.0+) ----------
+
+
+def test_from_config_temperature_picks_up() -> None:
+    """`temperature` is a single cross-provider config key — `from_config`
+    reads it directly (no EFFORT_KEY_BY_PROVIDER iteration). Stored as a
+    string for the identity, matching how the env overlay lands it."""
+    k = AnalysisConfigKey.from_config(
+        {
+            "llm_provider": "openai",
+            "deep_think_llm": "gpt-4o",
+            "quick_think_llm": "o4-mini",
+            "temperature": "0.7",
+        }
+    )
+    assert k.temperature == "0.7"
+
+
+def test_from_config_temperature_unset_and_empty_are_none() -> None:
+    """Upstream default is None (provider default) → omitted from the
+    identity so default-config users keep their cache slot. An empty
+    string is treated as unset too (tradingagents' own `!= ""` gate)."""
+    unset = AnalysisConfigKey.from_config(
+        {
+            "llm_provider": "openai",
+            "deep_think_llm": "gpt-4o",
+            "quick_think_llm": "o4-mini",
+        }
+    )
+    empty = AnalysisConfigKey.from_config(
+        {
+            "llm_provider": "openai",
+            "deep_think_llm": "gpt-4o",
+            "quick_think_llm": "o4-mini",
+            "temperature": "",
+        }
+    )
+    assert unset.temperature is None
+    assert empty.temperature is None
+
+
+def test_slug_appends_temperature_when_set() -> None:
+    k = AnalysisConfigKey(
+        provider="openai", deep="gpt-4o", quick="o4-mini", temperature="0.7"
+    )
+    # `.` is filesystem-safe (kept by _SLUG_SAFE); the suffix is sanitized.
+    assert k.slug() == "openai__gpt-4o__o4-mini__t0.7"
+
+
+def test_slug_default_temperature_none_omits_suffix() -> None:
+    """No temperature → no `__t` suffix, so existing cache slots survive
+    the knob shipping (backward compat, same guarantee as rounds/effort)."""
+    k = AnalysisConfigKey(provider="openai", deep="gpt-4o", quick="o4-mini")
+    assert "__t" not in k.slug()
+
+
+def test_slug_appends_all_knobs_in_order() -> None:
+    """rounds → effort → temperature suffix order is stable."""
+    k = AnalysisConfigKey(
+        provider="openai",
+        deep="gpt-4o",
+        quick="o4-mini",
+        rounds=3,
+        effort="high",
+        temperature="0.2",
+    )
+    assert k.slug() == "openai__gpt-4o__o4-mini__r3__ehigh__t0.2"
+
+
+def test_caption_appends_temperature_with_equals_prefix() -> None:
+    k = AnalysisConfigKey(
+        provider="openai", deep="gpt-4o", quick="o4-mini", temperature="0.7"
+    )
+    assert k.caption() == "openai · gpt-4o/o4-mini · t=0.7"
+
+
+def test_telegraph_title_includes_temperature() -> None:
+    k = AnalysisConfigKey(
+        provider="openai", deep="gpt-4o", quick="o4-mini", temperature="0.7"
+    )
+    assert (
+        k.telegraph_title("NVDA") == "NVDA Analysis · openai · gpt-4o/o4-mini · t=0.7"
+    )
+
+
+# ---------- ordering ----------
+
+# ─── caption rendering — moved from test_user_config.py ─────────────────
+
+
+async def test_config_summary_default() -> None:
+    out = AnalysisConfigKey.from_config(
+        {
+            "llm_provider": "openai",
+            "deep_think_llm": "gpt-4o",
+            "quick_think_llm": "o4-mini",
+            "max_debate_rounds": 1,
+        }
+    ).caption()
+    assert out == "openai · gpt-4o/o4-mini", out
+
+
+async def test_config_summary_custom_rounds() -> None:
+    out = AnalysisConfigKey.from_config(
+        {
+            "llm_provider": "deepseek",
+            "deep_think_llm": "deepseek-v4-pro",
+            "quick_think_llm": "deepseek-v4-flash",
+            "max_debate_rounds": 2,
+        }
+    ).caption()
+    # Both models present, rounds suffix appended, no effort marker.
+    assert "deepseek-v4-pro/deepseek-v4-flash" in out, out
+    assert "· r2" in out, out
+    assert "e=" not in out, out
+
+
+async def test_config_summary_with_effort() -> None:
+    out = AnalysisConfigKey.from_config(
+        {
+            "llm_provider": "anthropic",
+            "deep_think_llm": "claude-sonnet-4",
+            "quick_think_llm": "claude-haiku-4",
+            "max_debate_rounds": 2,
+            "anthropic_effort": "high",
+        }
+    ).caption()
+    assert "claude-sonnet-4/claude-haiku-4" in out, out
+    assert "· r2 · e=high" in out, out

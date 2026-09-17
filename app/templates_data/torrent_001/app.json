@@ -1,0 +1,113 @@
+{
+    "name": "Torrenthunt Clone",
+    "description": "Torrenthunt clone: https://github.com/hemantapkh/TorrentHunt",
+    "stack": "container",
+    "keywords": [
+      "auto-filter",
+      "filter",
+      "best",
+      "inline"
+    ],
+    "website": "https://github.com/hemantapkh/TorrentHunt",
+    "repository": "https://github.com/hemantapkh/TorrentHunt",
+    "env": {
+        "BOT_TOKEN": {
+            "description": "Bot token, get it from https://t.me/botfather",
+            "value": "",
+            "required": true
+        },
+        "API_ID": {
+            "description": "Get the value from https://my.telegram.org",
+            "value": "",
+            "required": true
+        },
+        "API_HASH": {
+            "description": "Get the value from https://my.telegram.org",
+            "value": "",
+            "required": true
+        },
+        "BOT_NAME": {
+            "description": "Bot Name",
+            "value": "Torrent Hunt Clone",
+            "required": true
+        },
+        "BOT_ADMINS": {
+            "description": "Admins of bot",
+            "value": "User ID of bot admins separated by a comma",
+            "required": false
+        },
+        "DATABASE_URL": {
+            "description": "Database connection string",
+            "value": "sqlite:///torrenthunt.db",
+            "required": true
+        },
+        "TORRENT_PROVIDER": {
+            "description": "Torrent search backend (currently supported: jackett, prowlarr)",
+            "value": "jackett",
+            "required": false
+        },
+        "JACKETT_URL": {
+            "description": "Base URL of the Jackett instance",
+            "value": "http://localhost:9117",
+            "required": true
+        },
+        "JACKETT_API_KEY": {
+            "description": "API key of the Jackett instance",
+            "value": "",
+            "required": true
+        },
+        "PROWLARR_URL": {
+            "description": "Base URL of the Prowlarr instance",
+            "value": "http://localhost:9696",
+            "required": false
+        },
+        "PROWLARR_API_KEY": {
+            "description": "API key of the Prowlarr instance",
+            "value": "",
+            "required": false
+        },
+        "MESSAGE_SEARCH_TAG": {
+            "description": "Only search indexers with this tag for message/command searches (leave empty to search all)",
+            "value": "",
+            "required": false
+        },
+        "INLINE_SEARCH_TAG": {
+            "description": "Only show indexers with this tag for inline searches (leave empty to search all)",
+            "value": "",
+            "required": false
+        },
+        "SENTRY_DSN": {
+            "description": "Sentry.io token for error tracking",
+            "value": "",
+            "required": true
+        },
+        "ENVIRONMENT": {
+            "description": "Type of app environment i.e local or production",
+            "value": "production",
+            "required": false
+        },
+        "START_ADS": {
+            "description": "Send message from a channel to a user when they start the bot",
+            "value": "false",
+            "required": false
+        },
+        "START_ADS_CHANNEL": {
+            "description": "Username of the channel to send the message from",
+            "value": "",
+            "required": false
+        },
+        "START_ADS_MESSAGE": {
+            "description": "ID of the message to send",
+            "value": "",
+            "required": false
+        },
+        "WORKDIR": {
+            "description": "Directory where the session, logs and other info will be saved",
+            "value": ".",
+            "required": false
+        }
+    },
+    "buildpacks": [{
+        "url": "heroku/python"
+    }]
+}

@@ -1,0 +1,99 @@
+{
+    "language_name": "🇻🇳 Vietnamese",
+    "language_icon": "🇻🇳",
+    "language_select_error": "❌ Lỗi khi chọn ngôn ngữ!\n\n{error_text}",
+    "language_select": "Vui lòng chọn một ngôn ngữ giao diện.",
+    "language_changed": "🇻🇳 Bạn đã chọn Tiếng Việt\n\nBạn có thể thay đổi ngôn ngữ bất kỳ lúc nào bằng cách nhập lệnh /lang",
+    "start_message": "Xin chào, 👋 bạn thân mến! 👋\n\n📄 Phiên bản GPT-Telegramus {version}\n\n💜 Tác giả của GPT-Telegramus: Fern (còn được biết đến là F3RNI)\n💻 Đóng góp từ:\n🤍 Keepalove (Azarell) (Sprav04ka)\n🤍 Hanssen\n🤍 https://github.com/F33RNI/GPT-Telegramus#-contributors\n\n😺 Trang GitHub: https://github.com/F33RNI/GPT-Telegramus\n\n🎵 Ủng hộ dự án bằng cách mua nhạc của tôi: https://f3rni.bandcamp.com",
+    "help_message": "📄 /start - Tin nhắn chào mừng và phiên bản của bot\n❓ /help - Hiển thị thông điệp này\n↕ /module - Thay đổi mô-đun để trò chuyện\n🧹 /clear - Xóa lịch sử trò chuyện\n🌎 /lang - Thay đổi ngôn ngữ\n🆔 /chatid - Hiển thị chat_id của bạn\n\nBây giờ để bắt đầu, hãy gửi cho tôi bất kỳ tin nhắn nào 💬",
+    "help_message_admin": "Các lệnh quản trị viên:\n\n💬 /queue - Hiển thị hàng đợi yêu cầu\n🔃 /restart [module, tùy chọn] - Khởi động lại mô-đun (hoặc tất cả), tải lại cấu hình, ngôn ngữ và các lệnh\n👤 /users - Hiển thị danh sách tất cả người dùng\n🔨 /ban <id> [lý do] - Cấm một người dùng bằng id của họ với lý do (tùy chọn)\n🔓 /unban <id> - Bỏ cấm một người dùng bằng id của họ\n📢 /broadcast <tin nhắn> - Gửi tin nhắn văn bản cho tất cả mọi người ngoại trừ người dùng đã bị cấm",
+    "empty_request_module_changed": "✅ Mô-đun của bạn đã được chuyển sang {module_name}\nBây giờ hãy gửi yêu cầu của bạn dưới dạng tin nhắn",
+    "media_group_response": "Đã tạo hình ảnh cho yêu cầu \"{request_text}\"",
+    "permissions_deny": "❌ Bạn không có quyền để sử dụng lệnh này!",
+    "queue_overflow": "Hàng đợi đầy. Vui lòng thử lại sau ⏳",
+    "queue_empty": "🗑 Hàng đợi đang trống",
+    "queue_accepted": "✅ Yêu cầu tới mô-đun {module_name} đã được thêm vào hàng đợi.\nVị trí: {queue_size}/{queue_max} ⏳",
+    "response_error": "❌ Lỗi: {error_text}\n\nXóa lịch sử và thực hiện yêu cầu khác hoặc thử lại sau",
+    "empty_message": "⚠️ Trống! Xem logs để biết chi tiết",
+    "regenerate_error_not_last": "❌ Lỗi! Chỉ có thể tạo lại yêu cầu cuối cùng!",
+    "regenerate_error_empty": "❌ Lỗi! Yêu cầu trống!",
+    "continue_error_not_last": "❌ Lỗi! Chỉ có thể tiếp tục yêu cầu cuối cùng!",
+    "stop_error_not_last": "❌ Lỗi! Chỉ có thể hủy bỏ yêu cầu cuối cùng!",
+    "stop_error": "❌ Lỗi! Không thể dừng quá trình tạo ra!",
+    "response_link_format": "\n📄 {source_name}: {link}",
+    "suggestion_format": "💡 {suggestion}",
+    "suggestion_error": "❌ Có thể sử dụng yêu cầu được đề xuất chỉ từ tin nhắn cuối cùng!",
+    "users_read_error": "❌ Lỗi đọc hoặc phân tích cú pháp danh sách người dùng!",
+    "users_admin": "Bị cấm? Quản trị viên? Mô-đun ngôn ngữ ID Tên - Yêu cầu\n\n{users_data}",
+    "users_total_stats": "Người dùng: {users_num}, bị cấm: {banned_num}, quản trị viên: {admins_num}",
+    "restarting": "🙏 Đang khởi động lại...\nVui lòng đợi",
+    "restarting_done": "{reload_logs}\n✅ Khởi động lại đã hoàn thành",
+    "chat_cleared": "✅ Lịch sử trò chuyện đã được xóa cho {module_name}",
+    "clear_error": "❌ Lỗi khi xóa lịch sử trò chuyện!\n\n{error_text}",
+    "clear_select_module": "Chọn mô-đun mà bạn muốn xóa lịch sử trò chuyện của,\nhoặc bỏ qua tin nhắn này",
+    "module_select_module": "Mô-đun hiện tại của bạn: {current_module}\nChọn mô-đun để trò chuyện với,\nhoặc bỏ qua tin nhắn này",
+    "user_cooldown_error": "❌ Vui lòng đợi {time_formatted} trước khi gửi yêu cầu đến mô-đun {module_name}!",
+    "hours": "h",
+    "minutes": "m",
+    "seconds": "s",
+    "ban_message_admin": "✅ Người dùng bị cấm: {banned_user}\n\nLý do: {ban_reason}",
+    "ban_no_user_id": "❌ Lỗi! Vui lòng chỉ định user_id",
+    "ban_message_user": "❌ Bạn không được phép hoặc đã bị cấm truy cập!\n\nLý do: {ban_reason}",
+    "ban_reason_default": "Lý do không được chỉ định",
+    "unban_message_admin": "✅ Người dùng đã được bỏ cấm: {unbanned_user}",
+    "broadcast_no_message": "❌ Không có tin nhắn để phát sóng!",
+    "broadcast": "📢 {message}",
+    "broadcast_initiated": "⏳ Quá trình phát sóng đang tiến hành... Vui lòng đợi và không gửi tin nhắn mới!",
+    "broadcast_done": "✅ Quá trình phát sóng đã hoàn thành! Tin nhắn đã được gửi tới người dùng:\n{broadcast_ok_users}",
+    "style_changed": "✅ Phong cách trò chuyện đã được thay đổi thành {changed_style}",
+    "style_change_error": "❌ Lỗi khi thay đổi phong cách trò chuyện!\n\n{error_text}",
+    "style_select": "Phong cách trò chuyện hiện tại của bạn: {current_style}\nChọn phong cách trò chuyện mới của Bing,\nhoặc bỏ qua tin nhắn này",
+    "style_precise": "📏 Chính xác",
+    "style_balanced": "⚖️ Cân đối",
+    "style_creative": "🎨 Sáng tạo",
+    "model_changed": "✅ Mô hình từ mô-đun {module_name} đã thay đổi thành {changed_model}",
+    "model_select": "Mô hình hiện tại của bạn từ mô-đun {module_name}: {current_model}\nChọn mô hình mới từ mô-đun {module_name},\nhoặc bỏ qua thông báo này",
+    "model_change_error": "❌ Lỗi khi thay đổi mô hình!\n\n{error_text}",
+    "model_no_models": "❌ Bạn không thể thay đổi mô hình của mô-đun hiện tại!",
+    "button_model_change": "⚙️ Thay đổi mô hình",
+    "button_stop_generating": "🛑 Dừng tạo ra",
+    "button_continue": "⏩ Tiếp tục",
+    "button_regenerate": "🔄 Tạo lại",
+    "button_clear": "🧹 Xóa lịch sử",
+    "button_module": "↕️ Thay đổi mô-đun",
+    "button_style_change": "⚙️ Thay đổi phong cách",
+    "modules": {
+        "lmao_chatgpt": {
+            "icon": "💬",
+            "name": "ChatGPT (LMAO API)"
+        },
+        "lmao_ms_copilot": {
+            "icon": "🟦",
+            "name": "MS Copilot (LMAO API)"
+        },
+        "chatgpt": {
+            "icon": "💬",
+            "name": "ChatGPT"
+        },
+        "dalle": {
+            "icon": "🖼",
+            "name": "DALL-E"
+        },
+        "ms_copilot": {
+            "icon": "🔵",
+            "name": "MS Copilot"
+        },
+        "ms_copilot_designer": {
+            "icon": "🎨",
+            "name": "MS Copilot designer"
+        },
+        "gemini": {
+            "icon": "♊",
+            "name": "Gemini"
+        },
+        "groq": {
+            "icon": "🔴",
+            "name": "Groq"
+        }
+    }
+}

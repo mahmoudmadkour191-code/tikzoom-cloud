@@ -1,0 +1,30 @@
+services:
+  # Proton - Open Source Streaming Database
+  # For enterprise Timeplus, replace with: timeplus/timeplusd:latest
+  proton:
+    image: timeplus/pulsebot-proton:0.7.2
+    platform: linux/amd64  # Required for ARM Macs (runs via Rosetta)
+    ports:
+      - "8123:8123"   # HTTP port (batch queries)
+      - "3218:3218"   # Streaming port
+      - "8463:8463"   # Native TCP
+      - "8001:8001"   # Agent API and Web UI
+    environment:
+      - PULSEBOT_PROVIDER=ollama
+      - PULSEBOT_MODEL=kimi-k2.5:cloud
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    volumes:
+      - proton_data:/var/lib/proton
+      - ./workspaces:/app/workspaces:rw
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8123/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  proton_data:

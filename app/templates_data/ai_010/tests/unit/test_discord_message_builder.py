@@ -1,0 +1,221 @@
+"""Discord 消息聚合构建器单元测试。"""
+
+import os
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+from core.builtins.message.chain import MessageChain
+from core.builtins.message.internal import ActionText, Button, Embed, Image, Mention, Plain, Audio
+from core.builtins.session.info import SessionInfo
+from core.i18n import Locale
+from core.tester import Tester, func_case
+from bots.discord.message_builder import (
+    DiscordPayload,
+    build_discord_payloads,
+    execute_discord_payloads,
+    split_discord_text,
+)
+
+
+def _session():
+    return SessionInfo(
+        target_id="Discord|Channel|1",
+        target_from="Discord|Channel",
+        client_name="Discord",
+        sender_id="Discord|Client|1",
+        sender_from="Discord|Client",
+        locale=Locale("zh_cn"),
+        support_image=True,
+        support_audio=True,
+        support_mention=True,
+        support_embed=True,
+        support_button=True,
+    )
+
+
+def _test_text_splits_at_2000():
+    text = "a" * 2001
+    chunks = split_discord_text(text)
+    return [len(chunk) for chunk in chunks] == [2000, 1] and "".join(chunks) == text
+
+
+def _test_text_prefers_newline():
+    chunks = split_discord_text("a" * 1500 + "\n" + "b" * 600)
+    return chunks == ["a" * 1500, "b" * 600]
+
+
+async def _test_plain_atcode_is_converted():
+    payloads = await build_discord_payloads(_session(), MessageChain.assign(Plain("hello <AT:Discord|2>")))
+    return payloads[0].content == "hello <@2>"
+
+
+async def _test_plain_allow_parse_skips_atcode():
+    payloads = await build_discord_payloads(
+        _session(),
+        MessageChain.assign(Plain("hello <AT:Discord|2>", allow_parse=False)),
+    )
+    return payloads[0].content == "hello <AT:Discord|2>"
+
+
+async def _test_action_text_keeps_inline_fallback_and_metadata():
+    session = _session()
+    session.support_action_text = True
+    chain = MessageChain.assign([Plain("提示："), ActionText("~help ", show="帮助"), Plain("参数")])
+    payloads = await build_discord_payloads(session, chain)
+    return (
+        payloads[0].content == "提示：帮助（~help ）参数"
+        and len(payloads[-1].action_texts) == 1
+        and payloads[-1].action_texts[0].text.text == "~help "
+    )
+
+
+async def _test_button_rows_are_collected():
+    payloads = await build_discord_payloads(
+        _session(),
+        MessageChain.assign([Plain("hello"), Button("Docs", "https://example.com"), Button("Help", "~help")]),
+    )
+    rows = payloads[-1].button_rows
+    return payloads[0].content == "hello" and [(button.show, button.value) for button in rows[0].buttons] == [
+        ("Docs", "https://example.com"),
+        ("Help", "~help"),
+    ]
+
+
+async def _test_button_only_message_gets_placeholder():
+    payloads = await build_discord_payloads(_session(), MessageChain.assign(Button("Help", "~help")))
+    return (
+        len(payloads) == 1
+        and payloads[0].content == "\u200b"
+        and payloads[0].button_rows[0].buttons[0] == Button("Help", "~help")
+    )
+
+
+async def _test_mixed_elements_fit_one_payload():
+    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as audio_file:
+        audio_file.write(b"audio fixture")
+        audio_path = audio_file.name
+    try:
+        chain = MessageChain.assign(
+            [Plain("hello"), Mention("Discord|2"), Image("image.png"), Audio(audio_path), Embed(title="card")]
+        )
+        fake_file = SimpleNamespace(filename="direct.bin")
+        fake_embed = SimpleNamespace()
+        with (
+            patch("bots.discord.message_builder.discord.File", return_value=fake_file),
+            patch("bots.discord.message_builder.convert_embed", new=AsyncMock(return_value=(fake_embed, []))),
+            patch("core.builtins.message.elements.ImageElement.get", new=AsyncMock(return_value=b"image")),
+        ):
+            payloads = await build_discord_payloads(_session(), chain)
+    finally:
+        os.unlink(audio_path)
+    payload = payloads[0]
+    return (
+        len(payloads) == 1
+        and payload.content == "hello\n<@2>"
+        and len(payload.files) == 2
+        and payload.embeds == [fake_embed]
+    )
+
+
+async def _test_unavailable_media_elements_are_skipped():
+    """图片/音频底层文件缺失时不产生附件，仅保留文本。"""
+    chain = MessageChain.assign(
+        [Plain("hello"), Image("missing-image-fixture.png"), Audio("missing-audio-fixture.mp3")]
+    )
+    with patch("bots.discord.message_builder.discord.File", side_effect=lambda *_args, **kwargs: kwargs):
+        payloads = await build_discord_payloads(_session(), chain)
+    return len(payloads) == 1 and payloads[0].content == "hello" and payloads[0].files == []
+
+
+async def _test_file_limit_creates_second_payload():
+    chain = MessageChain.assign([Image(f"{index}.png") for index in range(11)])
+    with (
+        patch("bots.discord.message_builder.discord.File", side_effect=lambda *_args, **kwargs: kwargs),
+        patch("core.builtins.message.elements.ImageElement.get", new=AsyncMock(return_value=b"image")),
+    ):
+        payloads = await build_discord_payloads(_session(), chain)
+    return [len(payload.files) for payload in payloads] == [10, 1]
+
+
+async def _test_embed_limit_creates_second_payload():
+    chain = MessageChain.assign([Embed(title=str(index)) for index in range(11)])
+    with patch(
+        "bots.discord.message_builder.convert_embed",
+        new=AsyncMock(side_effect=[(SimpleNamespace(index=index), []) for index in range(11)]),
+    ):
+        payloads = await build_discord_payloads(_session(), chain)
+    return [len(payload.embeds) for payload in payloads] == [10, 1]
+
+
+async def _test_embed_attachment_stays_with_embed():
+    chain = MessageChain.assign([Image(f"{index}.png") for index in range(10)] + [Embed(title="card")])
+    embed = SimpleNamespace()
+    embed_file = SimpleNamespace(filename="embed-image.png")
+    with (
+        patch("bots.discord.message_builder.discord.File", side_effect=lambda *_args, **kwargs: kwargs),
+        patch("core.builtins.message.elements.ImageElement.get", new=AsyncMock(return_value=b"image")),
+        patch("bots.discord.message_builder.convert_embed", new=AsyncMock(return_value=(embed, [embed_file]))),
+    ):
+        payloads = await build_discord_payloads(_session(), chain)
+    embed_payload = next(payload for payload in payloads if embed in payload.embeds)
+    return embed_file in embed_payload.files and len(embed_payload.files) <= 10
+
+
+async def _test_execute_uses_reference_first_and_view_last():
+    sent = [SimpleNamespace(id=1), SimpleNamespace(id=2)]
+    channel = SimpleNamespace(send=AsyncMock(side_effect=sent))
+    reference = SimpleNamespace()
+    view = SimpleNamespace()
+    payloads = [DiscordPayload(content="one"), DiscordPayload(content="two")]
+    messages = await execute_discord_payloads(channel, payloads, reference=reference, view=view)
+    first, second = channel.send.await_args_list
+    return (
+        messages == sent
+        and first.kwargs["reference"] is reference
+        and first.kwargs["view"] is None
+        and second.kwargs["reference"] is None
+        and second.kwargs["view"] is view
+        and first.kwargs["content"] == "one"
+        and second.kwargs["content"] == "two"
+    )
+
+
+async def _test_execute_preserves_messages_before_send_failure():
+    first = SimpleNamespace(id=1)
+    channel = SimpleNamespace(send=AsyncMock(side_effect=[first, RuntimeError("send failed")]))
+    payloads = [DiscordPayload(content="one"), DiscordPayload(content="two")]
+    try:
+        messages = await execute_discord_payloads(channel, payloads)
+    except Exception:
+        return False
+    return messages == [first] and channel.send.await_count == 2
+
+
+def _test_interaction_reference_uses_component_message():
+    from bots.discord.context import resolve_discord_reference
+
+    message = SimpleNamespace(id=1)
+    interaction = SimpleNamespace(message=message)
+    return resolve_discord_reference(interaction, quote=True) is message
+
+
+@func_case
+async def test_discord_message_builder(tester: Tester):
+    """Discord 消息聚合构建器。"""
+    await tester.test(_test_text_splits_at_2000, "文本按 2000 字符拆分")
+    await tester.test(_test_text_prefers_newline, "文本优先在换行处分段")
+    await tester.test(_test_plain_atcode_is_converted, "Plain 中的提及转换为 Discord 格式")
+    await tester.test(_test_plain_allow_parse_skips_atcode, "Plain.allow_parse=False 保留 Discord 提及文本")
+    await tester.test(_test_action_text_keeps_inline_fallback_and_metadata, "ActionText 保持行内降级并收集交互信息")
+    await tester.test(_test_button_rows_are_collected, "ButtonElement 收集按钮行")
+    await tester.test(_test_button_only_message_gets_placeholder, "纯按钮消息补充不可见正文")
+    await tester.test(_test_mixed_elements_fit_one_payload, "混合元素合并为一个负载")
+    await tester.test(_test_unavailable_media_elements_are_skipped, "不可用的媒体元素被跳过")
+    await tester.test(_test_file_limit_creates_second_payload, "附件超过 10 个时拆包")
+    await tester.test(_test_embed_limit_creates_second_payload, "Embed 超过 10 个时拆包")
+    await tester.test(_test_embed_attachment_stays_with_embed, "Embed 附件与 Embed 保持同包")
+    await tester.test(_test_execute_uses_reference_first_and_view_last, "引用仅首条且按钮仅末条")
+    await tester.test(_test_execute_preserves_messages_before_send_failure, "后续发送失败时保留已发送消息")
+    await tester.test(_test_interaction_reference_uses_component_message, "Interaction 引用原按钮消息")
+    return tester

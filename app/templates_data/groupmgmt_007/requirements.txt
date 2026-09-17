@@ -1,0 +1,31 @@
+future
+emoji
+requests
+telethon
+sqlalchemy
+python-telegram-bot==12.8
+psycopg2-binary
+pythonping
+feedparser
+pytz
+gtts
+bs4
+lxml
+demjson
+wget
+bs4
+telegraph
+pillow
+psutil
+speedtest-cli>=2.0.2
+googletrans
+wikipedia
+spamwatch
+bleach
+alphabet_detector
+
+# auto-added by TikZoom curator
+googletrans==4.0.0rc1
+
+# auto-added by TikZoom curator
+googletrans==4.0.0rc1

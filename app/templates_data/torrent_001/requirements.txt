@@ -1,0 +1,6 @@
+# auto-added by TikZoom curator
+SQLAlchemy
+asyncpg
+pydantic-settings
+sentry-sdk
+uvloop

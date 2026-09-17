@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid" style="grid-template-columns: 1fr 1fr;">
+  <div class="card">
+    <h3>Общая статистика</h3>
+    <div class="row" style="margin-top:8px; gap:16px;">
+      <div>
+        <div style="color:#9aa4b2; font-size:12px;">Пользователи</div>
+        <div style="font-size:20px; font-weight:700;">{{ stats['users'] }}</div>
+      </div>
+      <div>
+        <div style="color:#9aa4b2; font-size:12px;">Товаров</div>
+        <div style="font-size:20px; font-weight:700;">{{ stats['items'] }}</div>
+      </div>
+      <div>
+        <div style="color:#9aa4b2; font-size:12px;">Оплачено заказов</div>
+        <div style="font-size:20px; font-weight:700;">{{ stats['paid_orders'] }}</div>
+      </div>
+      <div>
+        <div style="color:#9aa4b2; font-size:12px;">Выручка</div>
+        <div style="font-size:20px; font-weight:700;">{{ '%.2f' % (stats['revenue']/100) }} ₽</div>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Справка</h3>
+    <p>Минималистичная админка для управления товарами и услугами.</p>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,170 @@
+import asyncio
+import locale
+import os
+import signal
+import sys
+from typing import Any, Unpack
+
+from loguru import logger
+from openai.types.chat import ChatCompletionToolParam
+from openai.types.shared_params import FunctionDefinition
+
+from chibi.config import gpt_settings
+from chibi.schemas.app import ModeratorsAnswer
+from chibi.services.providers.tools.constants import CMD_STDOUT_LIMIT
+from chibi.services.providers.tools.exceptions import ToolException
+from chibi.services.providers.tools.tool import ChibiTool
+from chibi.services.providers.tools.utils import AdditionalOptions, resolve_session_context
+from chibi.services.user import get_chibi_user, get_moderation_provider
+
+
+def _decode_output(data: bytes) -> str:
+    """Decode subprocess output with locale-aware fallback.
+
+    On Windows the console emits output in the OEM code page (e.g. cp866), which differs
+    from the ANSI code page returned by `locale.getpreferredencoding` (e.g. cp1252), so the
+    OEM code page is tried first to avoid mojibake.
+
+    Args:
+        data: Raw bytes from subprocess stdout or stderr.
+
+    Returns:
+        Decoded string.
+    """
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+
+    if sys.platform == "win32":
+        try:
+            return data.decode("oem")
+        except (UnicodeDecodeError, LookupError):
+            pass
+
+    preferred_encoding = locale.getpreferredencoding(False)
+    try:
+        return data.decode(preferred_encoding)
+    except (UnicodeDecodeError, LookupError):
+        return data.decode("utf-8", errors="replace")
+
+
+class RunCommandInTerminalTool(ChibiTool):
+    register = gpt_settings.filesystem_access
+    definition = ChatCompletionToolParam(
+        type="function",
+        function=FunctionDefinition(
+            name="run_command_in_terminal",
+            description=(
+                "Run command in the zsh shell (MacOS). Will run via python's subprocess.run() "
+                "Will return json including return code, stdout and stderr."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "cmd": {"type": "string", "description": "Shell command to run."},
+                    "cwd": {
+                        "type": "string",
+                        "description": (
+                            "The working directory to run the command in. The default value provided in user data."
+                        ),
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": (
+                            "The timeout for command execution in seconds. Default is 30 sec. "
+                            "Change it if you're expecting longer execution."
+                        ),
+                    },
+                },
+                "required": ["cmd"],
+            },
+        ),
+    )
+    name = "run_command_in_terminal"
+
+    @classmethod
+    async def function(
+        cls, cmd: str, cwd: str | None = None, timeout: int = 30, **kwargs: Unpack[AdditionalOptions]
+    ) -> dict[str, Any]:
+        caller_model = kwargs.get("caller_model", "unknown model")
+        user_id = kwargs.get("user_id")
+        if not user_id:
+            raise ToolException("This function requires user_id to be automatically provided.")
+
+        if not cwd:
+            _, thread_id = resolve_session_context(**kwargs)
+            user = await get_chibi_user(user_id=user_id)
+            cwd = user.get_effective_working_dir(thread_id=thread_id)
+
+        if cmd.startswith("cat ") and "|" not in cmd:
+            raise ToolException("To read the whole file, please use the 'read_file' tool instead.")
+
+        moderation_provider = await get_moderation_provider(user_id=user_id)
+
+        logger.log("MODERATOR", f"[{caller_model}] Pre-moderating command: '{cmd}'. CWD: {cwd}")
+        moderator_answer: ModeratorsAnswer = await moderation_provider.moderate_command(
+            cmd=cmd, model=gpt_settings.moderation_model
+        )
+        if moderator_answer.verdict == "declined":
+            raise ToolException(
+                f"Moderator ({moderation_provider.name}) DECLINED command '{cmd}' from model "
+                f"{caller_model}. Reason: {moderator_answer.reason}"
+            )
+
+        logger.log(
+            "MODERATOR",
+            (
+                f"[{caller_model}] Moderator ({moderation_provider.name}) ACCEPTED command '{cmd}' "
+                f"from model {caller_model}"
+            ),
+        )
+        logger.log("TOOL", f"[{caller_model}] Running command in terminal: {cmd}. CWD: {cwd}. Timeout: {timeout}")
+        try:
+            process = await asyncio.create_subprocess_shell(
+                cmd=cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                start_new_session=True,
+            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=float(timeout))
+        except asyncio.TimeoutError:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+            try:
+                process.kill()
+                await process.wait()
+            except ProcessLookupError:
+                pass
+
+            raise ToolException(f"Command execution timed out after {timeout} seconds. Process group killed.")
+        except Exception as e:
+            raise ToolException(f"Failed to run command in terminal! Command: '{cmd}'. Error: {e}")
+
+        raw_stdout = _decode_output(stdout)
+        raw_stderr = _decode_output(stderr)
+
+        result: dict[str, str | int | None] = {"return_code": process.returncode}
+
+        if len(raw_stdout) > CMD_STDOUT_LIMIT or len(raw_stderr) > CMD_STDOUT_LIMIT:
+            result["WARNING"] = (
+                "The volume of stdout/stderr data is excessively large "
+                f"(over {CMD_STDOUT_LIMIT} characters). If this is the "
+                f"result of reading from a file, try reading it in parts."
+            )
+        result["stdout"] = (
+            raw_stdout if len(raw_stdout) < CMD_STDOUT_LIMIT else f"...truncated... {raw_stdout[CMD_STDOUT_LIMIT:]}"
+        )
+        result["stderr"] = (
+            raw_stderr if len(raw_stderr) < CMD_STDOUT_LIMIT else f"...truncated... {raw_stderr[CMD_STDOUT_LIMIT:]}"
+        )
+
+        logger.log(
+            "TOOL",
+            f"[{caller_model}] Command '{cmd}' executed. Return code: {process.returncode}.",
+        )
+        return result

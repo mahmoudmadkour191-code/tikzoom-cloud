@@ -1,0 +1,14 @@
+__pycache__/
+.env
+test.py
+chech.py
+newfile.py
+benchmark.py
+bot/__pycache__/
+bot/utils/__pycache__/
+test*
+users.json
+realUsers.json
+*.zip
+realUsers.*
+activeUsers.json

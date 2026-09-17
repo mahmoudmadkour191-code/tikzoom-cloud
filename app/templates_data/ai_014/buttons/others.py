@@ -1,0 +1,96 @@
+from telegram.ext import ContextTypes, ConversationHandler
+from telegram import (
+    Update,
+    ReplyKeyboardRemove)
+
+import time
+import json
+import openai
+import asyncio
+import traceback
+from typing import Dict
+
+from db.MySqlConn import config
+from buttons import get_project_root
+from config import (
+    TYPING_REPLY,
+    logger)
+
+
+async def non_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Stores the photos and asks for a location."""
+    project_root = get_project_root()
+    user = update.message.from_user
+    if len(update.message.photo) != 0:
+        await update.message.reply_text(text='Only text, thanks!')
+        photo_file = await update.message.photo[-1].get_file()
+        # can't get photo's name
+        await photo_file.download_to_drive(
+            f'{project_root}/data/photos/{user.name}-{time.strftime("%Y%m%d-%H%M%S")}.jpg')
+        logger.info("Photo of %s: %s", user.first_name, 'user_photo.jpg')
+    else:
+        await update.message.reply_text(text='Only text, thanks!')
+        if update.message.document:
+            file = await update.message.document.get_file()
+            await file.download_to_drive(
+                f'{project_root}/data/documents/{user.name}-{time.strftime("%Y%m%d-%H%M%S")}.jpg')
+        if update.message.video:
+            video = await update.message.video.get_file()
+            await video.download_to_drive(
+                f'{project_root}/data/videos/{user.name}-{time.strftime("%Y%m%d-%H%M%S")}.jpg')
+    return TYPING_REPLY
+
+
+def facts_to_str(user_data: Dict[str, str]) -> str:
+    """Helper function for formatting the gathered user info."""
+    facts = [f'{key} - {value}' for key, value in user_data.items()]
+    return "\n".join(facts).join(['\n', '\n'])
+
+
+async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Conversation canceled.", reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the error and send a telegram message to notify the developer."""
+    # Log the error before we do anything else, so we can see it even if something breaks.
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
+    # traceback.format_exception returns the usual python message about an exception, but as a
+    # list of strings rather than a single string, so we have to join them together.
+    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_string = "".join(tb_list)
+
+    # Build the message with some markup and additional information about what happened.
+    # You might need to add some logic to deal with messages longer than the 4096-character limit.
+    update_str = update.to_dict() if isinstance(update, Update) else str(update)
+    message = (
+        "An exception was raised while handling an update\n"
+        f"update = {json.dumps(update_str, indent=2, ensure_ascii=False)}\n\n"
+        f"error type = {type(context.error)}\n"
+        f"context.chat_data = {context.chat_data}\n\n"
+        f"context.user_data = {context.user_data}\n\n"
+        f"prompt = {update.message.text if isinstance(update, Update) and update.message else 'N/A'}\n\n"
+        f"{tb_string}"
+    )
+
+    # Finally, send the message
+    error_reply = ""
+    if type(context.error) in (openai.ErrorObject.error.InvalidRequestError, openai.BadRequestError):
+        error_reply = "The response was filtered due to the prompt triggering OpenAI’s content management " \
+                      "policy. Please modify your prompt and retry. To learn more about our content filtering. "
+    elif type(context.error) in [openai.ErrorObject.error.Timeout, asyncio.exceptions.TimeoutError]:
+        error_reply = "Time out. Retry please!"
+
+    user_message = update.message if isinstance(update, Update) else None
+    if user_message:
+        if error_reply:
+            await user_message.reply_text(error_reply, parse_mode="Markdown", disable_web_page_preview=True)
+        else:
+            await user_message.reply_text(
+                "Oops, our servers are overloaded due to high demand. Please take a break and try again later!",
+                parse_mode="Markdown", disable_web_page_preview=True)
+    await context.bot.send_message(
+        chat_id=config["DEVELOPER_CHAT_ID"], text=message[:4096]
+    )

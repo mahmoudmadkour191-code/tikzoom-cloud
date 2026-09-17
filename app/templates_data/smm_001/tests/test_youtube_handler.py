@@ -1,0 +1,414 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
+from handlers import youtube
+from services.inline.video_requests import create_inline_video_request, get_inline_video_request
+from tests.conftest import FakeYoutubeDL
+from utils.download_manager import DownloadMetrics, DownloadRateLimitError
+
+
+def test_get_video_stream_prefers_progressive():
+    yt = {
+        "webpage_url": "https://youtube.com/watch?v=abc",
+        "formats": [
+            {"height": "480", "vcodec": "avc1", "acodec": "mp4a", "ext": "mp4"},
+            {"height": "720", "vcodec": "avc1", "acodec": "mp4a", "ext": "mp4"},
+            {"height": "1080", "vcodec": "avc1", "acodec": "none", "ext": "mp4"},
+        ],
+    }
+
+    stream = youtube.get_video_stream(yt)
+
+    assert stream["height"] == "720"
+    assert stream["webpage_url"] == yt["webpage_url"]
+
+
+def test_get_video_stream_returns_none_for_video_only_formats():
+    yt = {
+        "webpage_url": "https://youtube.com/watch?v=xyz",
+        "formats": [
+            {"height": "1080", "vcodec": "avc1", "acodec": "none", "ext": "mp4"},
+            {"height": "480", "vcodec": "avc1", "acodec": "none", "ext": "webm"},
+        ],
+    }
+
+    assert youtube.get_video_stream(yt, max_height=1080) is None
+
+
+def test_get_video_stream_returns_none_when_missing():
+    yt = {"webpage_url": "https://youtube.com/watch?v=nope", "formats": []}
+    assert youtube.get_video_stream(yt) is None
+
+
+def test_get_audio_stream_selects_highest_bitrate():
+    yt = {
+        "webpage_url": "https://youtube.com/watch?v=abc",
+        "formats": [
+            {"abr": "96", "ext": "m4a", "vcodec": "none"},
+            {"abr": "128", "ext": "m4a", "vcodec": "none"},
+        ],
+    }
+    stream = youtube.get_audio_stream(yt)
+    assert stream["abr"] == "128"
+    assert stream["webpage_url"] == yt["webpage_url"]
+
+
+def test_get_audio_stream_returns_none_when_missing():
+    yt = {
+        "webpage_url": "https://youtube.com/watch?v=abc",
+        "formats": [
+            {"abr": None, "ext": "mp3", "vcodec": "avc1"},
+        ],
+    }
+
+    assert youtube.get_audio_stream(yt) is None
+
+
+def test_get_audio_artist_deduplicates_repeated_provider_entries():
+    yt = {
+        "artists": [
+            {"name": "SUDNO"},
+            {"name": "sudno"},
+            " SUDNO ",
+            {"name": "Sudno"},
+        ]
+    }
+
+    assert youtube.get_audio_artist(yt) == "SUDNO"
+
+
+def test_get_youtube_thumbnail_url_falls_back_to_hqdefault():
+    yt = {"id": "abc123"}
+    assert youtube._get_youtube_thumbnail_url(yt) == "https://i.ytimg.com/vi/abc123/hqdefault.jpg"
+
+
+def test_get_youtube_thumbnail_url_prefers_largest_jpeg_for_audio_metadata():
+    yt = {
+        "thumbnail": "https://i.ytimg.com/vi_webp/abc/maxresdefault.webp",
+        "thumbnails": [
+            {"url": "https://i.ytimg.com/vi/abc/hqdefault.jpg", "width": 480, "height": 360},
+            {"url": "https://i.ytimg.com/vi/abc/maxresdefault.jpg", "width": 1920, "height": 1080},
+            {"url": "https://i.ytimg.com/vi_webp/abc/maxresdefault.webp", "width": 1920, "height": 1080},
+        ],
+    }
+
+    assert youtube._get_youtube_thumbnail_url(yt) == (
+        "https://i.ytimg.com/vi/abc/maxresdefault.jpg"
+    )
+
+
+@pytest.mark.asyncio
+async def test_download_stream_calls_downloader(monkeypatch, tmp_path):
+    async def fake_download(url, filename, headers=None, skip_if_exists=False):
+        path = tmp_path / filename
+        path.write_bytes(b"data")
+        return DownloadMetrics(
+            url=url,
+            path=str(path),
+            size=path.stat().st_size,
+            elapsed=0.01,
+            used_multipart=False,
+            resumed=False,
+        )
+
+    monkeypatch.setattr(youtube.youtube_downloader, "download", fake_download)
+
+    metrics = await youtube.download_stream({"url": "https://cdn.example.com/v.mp4"}, "out.mp4", "youtube")
+
+    assert metrics is not None
+    assert (tmp_path / "out.mp4").exists()
+
+
+def test_get_youtube_video_returns_none_on_error(monkeypatch):
+    monkeypatch.setattr(youtube, "YoutubeDL", lambda opts: FakeYoutubeDL(opts, extract_info_error=youtube.DownloadError("boom")))
+
+    result = youtube.get_youtube_video("https://example.com/video")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_chosen_inline_youtube_result_supports_regular_video(monkeypatch, tmp_path):
+    settings = {
+        "captions": "on",
+        "delete_message": "off",
+        "info_buttons": "on",
+        "url_button": "on",
+        "audio_button": "on",
+    }
+    token = create_inline_video_request(
+        "youtube",
+        "https://www.youtube.com/watch?v=abc123",
+        42,
+        settings,
+    )
+    result = SimpleNamespace(
+        result_id=f"youtube_inline:{token}",
+        inline_message_id="inline-message-1",
+        from_user=SimpleNamespace(full_name="Inline User"),
+    )
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"video")
+    metrics = DownloadMetrics(
+        url="https://cdn.example.com/video.mp4",
+        path=str(video_path),
+        size=video_path.stat().st_size,
+        elapsed=0.1,
+        used_multipart=False,
+        resumed=False,
+    )
+
+    monkeypatch.setattr(
+        youtube,
+        "get_youtube_video",
+        lambda url: {
+            "id": "abc123",
+            "title": "Regular Video",
+            "webpage_url": url,
+            "view_count": 10,
+            "like_count": 2,
+        },
+    )
+    monkeypatch.setattr(
+        youtube,
+        "get_video_stream",
+        lambda yt: {"url": "https://cdn.example.com/video.mp4", "filesize": 1024},
+    )
+    monkeypatch.setattr(youtube, "download_stream", AsyncMock(return_value=metrics))
+    monkeypatch.setattr(youtube.db, "get_file_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(youtube.db, "add_file", AsyncMock())
+    monkeypatch.setattr(youtube, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(youtube, "safe_edit_inline_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(youtube, "safe_edit_inline_media", AsyncMock(return_value=True))
+    monkeypatch.setattr(youtube, "remove_file", AsyncMock())
+    monkeypatch.setattr(
+        youtube.bot,
+        "send_video",
+        AsyncMock(return_value=SimpleNamespace(video=SimpleNamespace(file_id="cached-file-id"))),
+    )
+
+    await youtube.chosen_inline_youtube_result(result)
+
+    assert youtube.safe_edit_inline_text.await_count == 2
+    assert youtube.safe_edit_inline_text.await_args_list[0].args[2] == youtube.bm.downloading_video_status()
+    assert youtube.safe_edit_inline_text.await_args_list[1].args[2] == youtube.bm.uploading_status()
+    media = youtube.safe_edit_inline_media.await_args.args[2]
+    assert media.media == "cached-file-id"
+    request = get_inline_video_request(token)
+    assert request is not None
+    assert request.state == "completed"
+
+
+@pytest.mark.asyncio
+async def test_download_music_uses_cached_audio_file_id(monkeypatch):
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=7, username="tester", full_name="Tester"),
+        business_connection_id=None,
+        chat=SimpleNamespace(id=99, type="private"),
+        answer=AsyncMock(return_value=SimpleNamespace(delete=AsyncMock())),
+        reply_audio=AsyncMock(),
+        reply=AsyncMock(),
+    )
+    yt = {
+        "id": "abc123",
+        "title": "Cached Audio",
+        "webpage_url": "https://youtube.com/watch?v=abc123",
+        "duration": 181,
+    }
+
+    monkeypatch.setattr(youtube, "get_message_text", lambda _message: "https://music.youtube.com/watch?v=abc123")
+    monkeypatch.setattr(youtube, "react_to_message", AsyncMock())
+    monkeypatch.setattr(youtube.db, "user_settings", AsyncMock(return_value={"delete_message": "off"}))
+    monkeypatch.setattr(youtube, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(youtube, "get_bot_avatar_thumbnail", AsyncMock(return_value="thumb-id"))
+    monkeypatch.setattr(youtube, "get_youtube_video", lambda _url: yt)
+    monkeypatch.setattr(youtube, "get_audio_stream", lambda _yt: {"ext": "m4a"})
+    monkeypatch.setattr(youtube.db, "get_file_id", AsyncMock(return_value="cached-audio-id"))
+    monkeypatch.setattr(youtube, "send_chat_action_if_needed", AsyncMock())
+    monkeypatch.setattr(youtube, "safe_edit_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(youtube, "safe_delete_message", AsyncMock())
+    monkeypatch.setattr(youtube, "download_stream", AsyncMock())
+    monkeypatch.setattr(youtube, "update_info", AsyncMock())
+
+    await youtube.download_music(message)
+
+    assert youtube.download_stream.await_count == 0
+    assert message.reply_audio.await_args.kwargs["audio"] == "cached-audio-id"
+    assert "thumbnail" not in message.reply_audio.await_args.kwargs
+    assert message.reply_audio.await_args.kwargs["performer"] == "@maxloadbot"
+    assert message.reply_audio.await_args.kwargs["duration"] == 181
+
+
+@pytest.mark.asyncio
+async def test_download_music_handles_missing_youtube_metadata(monkeypatch):
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=7, username="tester", full_name="Tester"),
+        business_connection_id=None,
+        chat=SimpleNamespace(id=99, type="private"),
+        answer=AsyncMock(return_value=SimpleNamespace(delete=AsyncMock())),
+        reply_audio=AsyncMock(),
+        reply=AsyncMock(),
+    )
+
+    monkeypatch.setattr(youtube, "get_message_text", lambda _message: "https://music.youtube.com/watch?v=abc123")
+    monkeypatch.setattr(youtube, "react_to_message", AsyncMock())
+    monkeypatch.setattr(youtube.db, "user_settings", AsyncMock(return_value={"delete_message": "off"}))
+    monkeypatch.setattr(youtube, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(youtube, "get_bot_avatar_thumbnail", AsyncMock(return_value=None))
+    monkeypatch.setattr(youtube, "get_youtube_video", lambda _url: None)
+    monkeypatch.setattr(youtube, "safe_delete_message", AsyncMock())
+    monkeypatch.setattr(youtube, "update_info", AsyncMock())
+
+    await youtube.download_music(message)
+
+    message.reply.assert_awaited_once_with(youtube.bm.nothing_found())
+
+
+@pytest.mark.asyncio
+async def test_download_music_falls_back_to_ytdlp_without_direct_audio_stream(monkeypatch, tmp_path):
+    audio_path = tmp_path / "audio.mp3"
+    audio_path.write_bytes(b"audio")
+    metrics = DownloadMetrics(
+        url="https://youtube.com/watch?v=abc123",
+        path=str(audio_path),
+        size=audio_path.stat().st_size,
+        elapsed=0.1,
+        used_multipart=False,
+        resumed=False,
+    )
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=7, username="tester", full_name="Tester"),
+        business_connection_id=None,
+        chat=SimpleNamespace(id=99, type="private"),
+        answer=AsyncMock(return_value=SimpleNamespace(delete=AsyncMock())),
+        reply_audio=AsyncMock(return_value=SimpleNamespace(audio=SimpleNamespace(file_id="telegram-audio-id"))),
+        reply=AsyncMock(),
+    )
+    yt = {
+        "id": "abc123",
+        "title": "Fallback Audio",
+        "webpage_url": "https://youtube.com/watch?v=abc123",
+        "duration": 204,
+    }
+
+    monkeypatch.setattr(youtube, "get_message_text", lambda _message: "https://music.youtube.com/watch?v=abc123")
+    monkeypatch.setattr(youtube, "react_to_message", AsyncMock())
+    monkeypatch.setattr(youtube.db, "user_settings", AsyncMock(return_value={"delete_message": "off"}))
+    monkeypatch.setattr(youtube.db, "get_file_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(youtube.db, "add_file", AsyncMock())
+    monkeypatch.setattr(youtube, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(youtube, "get_bot_avatar_thumbnail", AsyncMock(return_value=None))
+    monkeypatch.setattr(youtube, "get_youtube_video", lambda _url: yt)
+    monkeypatch.setattr(youtube, "get_audio_stream", lambda _yt: None)
+    monkeypatch.setattr(youtube, "download_mp3_with_ytdlp_metrics", AsyncMock(return_value=metrics))
+    prepared_metadata = SimpleNamespace(thumbnail_path=None, cleanup=Mock())
+    monkeypatch.setattr(
+        youtube,
+        "prepare_mp3_metadata",
+        AsyncMock(return_value=prepared_metadata),
+    )
+    monkeypatch.setattr(youtube, "download_stream", AsyncMock())
+    monkeypatch.setattr(youtube, "send_chat_action_if_needed", AsyncMock())
+    monkeypatch.setattr(youtube, "safe_edit_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(youtube, "safe_delete_message", AsyncMock())
+    monkeypatch.setattr(youtube, "remove_file", AsyncMock())
+    monkeypatch.setattr(youtube, "update_info", AsyncMock())
+
+    await youtube.download_music(message)
+
+    youtube.download_mp3_with_ytdlp_metrics.assert_awaited_once()
+    youtube.download_stream.assert_not_awaited()
+    message.reply_audio.assert_awaited_once()
+    assert message.reply_audio.await_args.kwargs["title"] == "Fallback Audio"
+    assert message.reply_audio.await_args.kwargs["performer"] == "@maxloadbot"
+    assert message.reply_audio.await_args.kwargs["audio"].filename == "Fallback Audio.mp3"
+    assert message.reply_audio.await_args.kwargs["duration"] == 204
+    youtube.db.add_file.assert_awaited_once()
+    prepared_metadata.cleanup.assert_called_once_with()
+
+
+def _make_mp3_callback(status_message):
+    return SimpleNamespace(
+        data="audio:youtube:abc123",
+        answer=AsyncMock(),
+        from_user=SimpleNamespace(id=7, username="tester"),
+        message=SimpleNamespace(
+            business_connection_id=None,
+            chat=SimpleNamespace(id=99, type="private"),
+            answer=AsyncMock(return_value=status_message),
+            reply_audio=AsyncMock(),
+            reply=AsyncMock(),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_download_youtube_mp3_callback_removes_file_when_send_fails(monkeypatch, tmp_path):
+    audio_path = tmp_path / "audio.mp3"
+    audio_path.write_bytes(b"audio")
+    metrics = DownloadMetrics(
+        url="https://www.youtube.com/watch?v=abc123",
+        path=str(audio_path),
+        size=audio_path.stat().st_size,
+        elapsed=0.1,
+        used_multipart=False,
+        resumed=False,
+    )
+    status_message = SimpleNamespace(delete=AsyncMock())
+    call = _make_mp3_callback(status_message)
+    yt = {
+        "id": "abc123",
+        "title": "Broken Audio",
+        "webpage_url": "https://www.youtube.com/watch?v=abc123",
+        "duration": 100,
+    }
+
+    monkeypatch.setattr(youtube, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(youtube, "get_bot_avatar_thumbnail", AsyncMock(return_value=None))
+    monkeypatch.setattr(youtube, "get_youtube_video", lambda _url: yt)
+    monkeypatch.setattr(youtube.db, "get_file_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(youtube.db, "add_file", AsyncMock())
+    monkeypatch.setattr(youtube, "download_mp3_with_ytdlp_metrics", AsyncMock(return_value=metrics))
+    prepared_metadata = SimpleNamespace(thumbnail_path=None, cleanup=Mock())
+    monkeypatch.setattr(youtube, "prepare_mp3_metadata", AsyncMock(return_value=prepared_metadata))
+    monkeypatch.setattr(youtube, "send_audio_with_thumbnail", AsyncMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(youtube, "send_chat_action_if_needed", AsyncMock())
+    monkeypatch.setattr(youtube, "safe_edit_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(youtube, "safe_delete_message", AsyncMock())
+    monkeypatch.setattr(youtube, "remove_file", AsyncMock())
+    monkeypatch.setattr(youtube, "handle_download_error", AsyncMock())
+
+    await youtube.download_youtube_mp3_callback(call)
+
+    youtube.remove_file.assert_awaited_once_with(str(audio_path))
+    prepared_metadata.cleanup.assert_called_once_with()
+    youtube.handle_download_error.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_download_youtube_mp3_callback_reports_backpressure(monkeypatch):
+    status_message = SimpleNamespace(delete=AsyncMock())
+    call = _make_mp3_callback(status_message)
+    yt = {
+        "id": "abc123",
+        "title": "Rate Limited Audio",
+        "webpage_url": "https://www.youtube.com/watch?v=abc123",
+        "duration": 100,
+    }
+    rate_limit_error = DownloadRateLimitError(retry_after=30.0)
+
+    monkeypatch.setattr(youtube, "get_bot_url", AsyncMock(return_value="https://t.me/maxloadbot"))
+    monkeypatch.setattr(youtube, "get_bot_avatar_thumbnail", AsyncMock(return_value=None))
+    monkeypatch.setattr(youtube, "get_youtube_video", lambda _url: yt)
+    monkeypatch.setattr(youtube.db, "get_file_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(youtube, "retry_async_operation", AsyncMock(side_effect=rate_limit_error))
+    monkeypatch.setattr(youtube, "handle_download_backpressure_error", AsyncMock())
+    monkeypatch.setattr(youtube, "safe_edit_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(youtube, "safe_delete_message", AsyncMock())
+
+    await youtube.download_youtube_mp3_callback(call)
+
+    youtube.handle_download_backpressure_error.assert_awaited_once()
+    assert youtube.handle_download_backpressure_error.await_args.args[0] is rate_limit_error

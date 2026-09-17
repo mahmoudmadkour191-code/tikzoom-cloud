@@ -1,0 +1,92 @@
+from typing import Any, Awaitable, Callable, Dict
+
+from aiogram import BaseMiddleware
+from aiogram.enums import ChatType
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNotFound
+from aiogram.types import Message
+
+import keyboards as kb
+import messages as bm
+from services.links.detection import extract_supported_link
+from services.runtime.pending_requests import PendingRequest, get_pending, set_pending
+from services.runtime.request_dedupe import same_request
+
+_bot_username: str | None = None
+_can_dm_cache: dict[int, tuple[float, bool]] = {}
+_CAN_DM_CACHE_TTL = 60.0
+
+
+class PrivateChatGuardMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
+        event: Message,
+        data: Dict[str, Any],
+    ) -> Any:
+        if not isinstance(event, Message):
+            return await handler(event, data)
+
+        if event.chat.type == ChatType.PRIVATE:
+            return await handler(event, data)
+
+        if not event.from_user or event.from_user.is_bot:
+            return await handler(event, data)
+
+        text = event.text or event.caption or ""
+        detected = extract_supported_link(text)
+        if detected is None:
+            return await handler(event, data)
+        service, source_url = detected
+
+        bot = data.get("bot")
+        if not bot:
+            return await handler(event, data)
+
+        import time
+        now = time.monotonic()
+        cached = _can_dm_cache.get(event.from_user.id)
+        if cached is not None and now - cached[0] <= _CAN_DM_CACHE_TTL:
+            if cached[1]:
+                return await handler(event, data)
+        else:
+            try:
+                await bot.send_chat_action(chat_id=event.from_user.id, action="typing")
+                _can_dm_cache[event.from_user.id] = (now, True)
+                return await handler(event, data)
+            except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest):
+                _can_dm_cache[event.from_user.id] = (now, False)
+
+        # Cleanup expired cache entries periodically
+        if len(_can_dm_cache) > 2048:
+            _can_dm_cache.clear()
+
+        pending = get_pending(event.from_user.id)
+        if pending and same_request(pending.service, pending.url, service, source_url):
+            return None
+
+        if pending:
+            try:
+                await bot.delete_message(pending.notice_chat_id, pending.notice_message_id)
+            except Exception:
+                pass
+
+        global _bot_username
+        if not _bot_username:
+            bot_info = await bot.get_me()
+            _bot_username = bot_info.username
+        notice = await event.reply(
+            bm.dm_start_required(),
+            reply_markup=kb.start_private_chat_keyboard(_bot_username),
+        )
+        set_pending(
+            event.from_user.id,
+            PendingRequest(
+                service=service,
+                url=source_url,
+                notice_chat_id=notice.chat.id,
+                notice_message_id=notice.message_id,
+                source_chat_id=getattr(event.chat, "id", None),
+                source_message_id=getattr(event, "message_id", None),
+            ),
+        )
+        return None

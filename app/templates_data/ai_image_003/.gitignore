@@ -1,0 +1,7 @@
+venv
+*.pyc
+*.env
+log.txt
+whitelist.txt
+config.toml
+.DS_Store

@@ -1,0 +1,81 @@
+# PageFly Capture — XcodeGen spec.
+# Run `xcodegen` from this directory to regenerate PageflyCapture.xcodeproj.
+# The generated project is gitignored; this YAML is the canonical source.
+
+name: PageflyCapture
+options:
+  bundleIdPrefix: top.yrzhe
+  deploymentTarget:
+    macOS: "13.0"
+  developmentLanguage: en
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Automatic
+    DEAD_CODE_STRIPPING: YES
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    from: "7.0.0"
+
+targets:
+  PageflyCapture:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+      # Asset catalogs must live under `sources` so xcodegen runs actool on
+      # them; listing under `resources` only copies the raw folder.
+      - path: Resources/Assets.xcassets
+    resources:
+      - path: Resources
+        excludes:
+          - Assets.xcassets
+          - Assets.xcassets/**
+    dependencies:
+      - package: GRDB
+        product: GRDB
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleName: PageFly Capture
+        CFBundleDisplayName: PageFly Capture
+        CFBundleIdentifier: top.yrzhe.PageflyCapture
+        CFBundleShortVersionString: "0.0.1"
+        CFBundleVersion: "1"
+        CFBundleIconName: AppIcon
+        CFBundleIconFile: AppIcon
+        LSMinimumSystemVersion: "13.0"
+        LSUIElement: true  # Menu bar only — no Dock icon, no main window on launch.
+        NSAccessibilityUsageDescription: >
+          PageFly Capture reads the focused app, window title, and visible text
+          via macOS Accessibility to build your personal work log. Password
+          fields are always skipped.
+        NSMicrophoneUsageDescription: >
+          PageFly Capture uses your microphone only when you start a recording,
+          to capture your voice during meetings for later transcription on your
+          server.
+        NSScreenCaptureUsageDescription: >
+          PageFly Capture uses screen capture for two opt-in features: (1)
+          system-audio tap via ScreenCaptureKit while recording a meeting,
+          (2) the "OCR this window" button, which takes a single screenshot
+          of the currently focused window and runs local on-device text
+          recognition to rescue content from AX-blind apps (WeChat, Feishu,
+          etc.). Both are user-triggered — no automatic screenshots.
+
+    entitlements:
+      path: Resources/PageflyCapture.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+        com.apple.security.network.client: true
+        com.apple.security.device.microphone: true
+        com.apple.security.device.audio-input: true

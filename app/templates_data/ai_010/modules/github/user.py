@@ -1,0 +1,53 @@
+from core.builtins.bot import Bot
+from core.builtins.message.internal import I18NContext, Plain, Url
+from core.utils.dirty_check import rickroll
+from core.utils.http import get_url
+from modules.github.utils import time_diff, dirty_check, dark_check
+
+
+async def user(msg: Bot.MessageSession, name: str, pat: str):
+    try:
+        result = await get_url(
+            f"https://api.github.com/users/{name}",
+            200,
+            fmt="json",
+            headers={"Authorization": f"Bearer {pat}"} if pat else {},
+        )
+        optional = []
+        if "hireable" in result and result["hireable"]:
+            optional.append("Hireable")
+        if "is_staff" in result and result["is_staff"]:
+            optional.append("GitHub Staff")
+        if "company" in result and result["company"]:
+            optional.append("Work · " + result["company"])
+        if "twitter_username" in result and result["twitter_username"]:
+            optional.append("Twitter · " + result["twitter_username"])
+        if "blog" in result and result["blog"]:
+            optional.append("Site · " + result["blog"])
+        if "location" in result and result["location"]:
+            optional.append("Location · " + result["location"])
+
+        bio = result.get("bio")
+        if not bio:
+            bio = ""
+        else:
+            bio = "\n" + bio
+
+        optional_text = "\n" + " | ".join(optional) if optional else ""
+        message = f"""{result.get("login", "")} aka {result.get("name", "")} ({result.get("id", "")}){bio}
+Type · {result.get("type", "")} | Follower · {result.get("followers", 0)} | Following · {result.get("following", 0)}
+Repo · {result.get("public_repos", 0)} | Gist · {result.get("public_gists", 0)}{optional_text}
+Account Created {time_diff(result.get("created_at", ""))} ago
+Latest activity {time_diff(result.get("updated_at", ""))} ago
+{str(Url(result.get("html_url", "")))}"""
+
+        is_dirty = await dirty_check(msg, message, result.get("login", "")) or dark_check(message)
+        if is_dirty:
+            await msg.finish(rickroll())
+
+        await msg.finish(Plain(message))
+    except ValueError as e:
+        if str(e).startswith("404"):
+            await msg.finish(I18NContext("github.message.repo.not_found"))
+        else:
+            raise e

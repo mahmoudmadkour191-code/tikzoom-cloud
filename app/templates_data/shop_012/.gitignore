@@ -1,0 +1,15 @@
+/DOWNLOADS
+/Downloads
+*.session
+shrinkwrap.yaml
+installReqsAndStart.sh
+package.json
+watch.json
+plugins/cool-file.js
+plugins/speed/speed.p
+unknown_errors.txt
+ignore
+logfile.txt
+trigger
+welcome
+plugins/welcome/welcome.py

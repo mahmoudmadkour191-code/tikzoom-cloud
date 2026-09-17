@@ -1,0 +1,404 @@
+"""Research pipeline (Search → Ranking → Scraping → Context).
+
+Single pipeline used by both:
+- Forced path (keyword override): Automatik-LLM generates queries
+- Tool call path: the web_search/web_fetch Tool-Fassade lebt seit der
+  Atomarisierung im research-PLUGIN (aifred/plugins/tools/research) und
+  ruft ``execute_research``/``hub_web_search`` hier in der lib.
+
+Every research runs fresh — deliberately no result cache: question
+similarity says nothing about whether an answer still holds (the former
+semantic cache served yesterday's weather forecast). Within a conversation
+the results stay in the history anyway.
+"""
+
+import json
+import logging
+from typing import Any, AsyncGenerator, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..state import AIState
+
+logger = logging.getLogger(__name__)
+
+
+# SSOT for the tool result when the search layer could not reach ANY search
+# engine (DNS/connection/timeout). Crucially distinct from an empty result:
+# the agent must NOT treat this as "the topic doesn't exist" — it was offline.
+WEB_SEARCH_NETWORK_ERROR = json.dumps({
+    "error": "network_unavailable",
+    "message": (
+        "Web search could not reach any search engine (DNS or network "
+        "failure). This is NOT an empty result — do not conclude the topic "
+        "does not exist or draw any factual conclusion from it. Tell the user "
+        "the network/search is temporarily unavailable and offer to retry."
+    ),
+})
+
+
+def _is_network_outage(tool_results: list[dict[str, Any]]) -> bool:
+    """True if the web-search step failed purely because no search server was
+    reachable (``error_type == 'network'``), as opposed to returning zero hits.
+    Lets callers report an outage instead of a misleading 'no results'."""
+    return any(
+        isinstance(r, dict) and r.get("error_type") == "network"
+        for r in tool_results
+    )
+
+
+# ============================================================
+# Unified Research Pipeline (async generator for progress updates)
+# ============================================================
+
+async def execute_research(
+    state: 'AIState',
+    user_query: str,
+    lang: str = "de",
+    pre_generated_queries: Optional[list[str]] = None,
+    mode: str = "deep",
+) -> AsyncGenerator[None, None]:
+    """Execute the full research pipeline.
+
+    Async generator — yields after state updates so Reflex can push
+    progress (scraping progress bar, debug messages) to the browser.
+
+    Single function for both forced path and tool-call path:
+    1. Query generation (skipped if pre_generated_queries provided)
+    2. Multi-API search (Tavily/Brave/SearXNG)
+    3. URL ranking (LLM-based, with conversation history)
+    4. Parallel scraping
+    5. Context building
+
+    Results stored in state._research_context and state._research_sources_html.
+    """
+    from .conversation_handler import generate_web_search_queries
+    from .research.query_processor import process_query_and_search
+    from .research.url_ranker import rank_urls_by_relevance
+    from .research.scraper_orchestrator import orchestrate_scraping
+    from .tools import build_context
+    from .formatting import build_sources_collapsible
+    from .llm_client import LLMClient
+    from .research.context_utils import get_agent_num_ctx
+
+    # Automatik-LLM for query generation, URL ranking and any other
+    # research-pipeline helper inference. Two separate ids:
+    #
+    # * ``automatik_model_id_base`` — bare BASE id, fed into
+    #   ``get_agent_num_ctx`` so the resolver inside it can apply
+    #   ``resolve_variant_suffix`` exactly once. Passing a pre-resolved
+    #   id here would double-suffix and miss the YAML lookup.
+    # * ``automatik_model_id`` — the SSOT-resolved id including any
+    #   active VLM / TTS / Speed suffix. This is what we send to the
+    #   LLM client → llama-swap. Without the suffix, llama-swap would
+    #   load the BASE profile while the VLM container is already
+    #   resident on the side-channel GPU → CUDA OOM the moment the
+    #   BASE profile tries to allocate its full layer footprint on
+    #   that GPU. Mirrors the chat path's ``state._effective_model_id``.
+    automatik_model_id_base = state.automatik_model_id or state.agent_tuning["aifred"].model_id  # type: ignore[has-type]
+    automatik_num_ctx, _ = get_agent_num_ctx("aifred", state, automatik_model_id_base)
+    automatik_model_id = state._effective_automatik_id  # type: ignore[attr-defined]
+
+    llm_client = LLMClient(backend_type=state.backend_type, base_url=state.backend_url)
+    if state.backend_type == "ollama":
+        automatik_llm_client = LLMClient(backend_type=state.backend_type, base_url=state.backend_url)
+    else:
+        automatik_llm_client = llm_client
+
+    # Init result state
+    state._research_context = ""  # type: ignore[attr-defined]
+    state._research_sources_html = ""  # type: ignore[attr-defined]
+
+    try:
+        # ==============================================================
+        # PHASE 1: Query Generation (skipped if pre_generated_queries)
+        # ==============================================================
+        if not pre_generated_queries:
+            state.add_debug("🔍 Generating search queries...")
+            yield
+            query_result = await generate_web_search_queries(
+                user_text=user_query,
+                automatik_llm_client=automatik_llm_client,
+                automatik_model=automatik_model_id,
+                detected_language=lang,
+                llm_history=state._chat_sub().llm_history[:-1] if len(state._chat_sub().llm_history) > 1 else None,
+                automatik_num_ctx=automatik_num_ctx,
+            )
+            pre_generated_queries = query_result["queries"]
+            query_gen_time = query_result["generation_time"]
+            state.add_debug(f"✅ {len(pre_generated_queries)} queries ({query_gen_time:.1f}s)")
+            yield
+
+        # ==============================================================
+        # PHASE 2: Multi-API Web Search
+        # (process_query_and_search logs the API-labeled queries)
+        # ==============================================================
+        related_urls: list[str] = []
+        titles: list[str] = []
+        snippets: list[str] = []
+        tool_results: list[dict[str, Any]] = []
+
+        async for item in process_query_and_search(
+            user_text=user_query,
+            llm_history=state._chat_sub().llm_history,
+            automatik_model=automatik_model_id,
+            automatik_llm_client=automatik_llm_client,
+            llm_options={},
+            vision_json_context=None,
+            pre_generated_queries=pre_generated_queries,
+        ):
+            if item["type"] == "query_result":
+                _, _, _, related_urls, titles, snippets, tool_results = item["data"]
+            elif item["type"] == "debug":
+                state.add_debug(item["message"])
+                yield
+
+        if not related_urls:
+            if _is_network_outage(tool_results):
+                state.add_debug("⚠️ Search unreachable — network/DNS failure (not 'no results')")
+                state._research_context = WEB_SEARCH_NETWORK_ERROR  # type: ignore[attr-defined]
+            else:
+                state.add_debug("⚠️ No URLs found")
+            yield
+            return
+
+        # ==============================================================
+        # PHASE 3: LLM-based URL Ranking (with conversation history)
+        # ==============================================================
+        if related_urls and titles and snippets:
+            from .config import RESEARCH_QUICK_URLS, RESEARCH_DEEP_URLS
+            top_n = RESEARCH_DEEP_URLS if mode == "deep" else RESEARCH_QUICK_URLS
+            state.add_debug(f"🎯 Ranking {len(related_urls)} URLs by relevance...")
+            yield
+
+            ranked_urls, _, debug_summary = await rank_urls_by_relevance(
+                user_question=user_query,
+                urls=related_urls,
+                titles=titles,
+                snippets=snippets,
+                automatik_llm_client=automatik_llm_client,
+                automatik_model=automatik_model_id,
+                llm_history=state._chat_sub().llm_history,
+                top_n=top_n,
+                llm_options={},
+                automatik_num_ctx=automatik_num_ctx,
+            )
+            if debug_summary:
+                state.add_debug(f"📋 {debug_summary}")
+            related_urls = ranked_urls
+            yield
+
+        # ==============================================================
+        # PHASE 4: Parallel Web Scraping (with progress bar)
+        # ==============================================================
+        model_id = state._effective_model_id("aifred")
+        # BASE id for the lookup — get_agent_num_ctx resolves the suffix itself
+        preload_num_ctx, _ = get_agent_num_ctx("aifred", state, state.agent_tuning["aifred"].model_id)  # type: ignore[has-type]
+        failed_sources: list[dict[str, Any]] = []
+
+        async for item in orchestrate_scraping(
+            related_urls=related_urls,
+            mode=mode,
+            llm_client=llm_client,
+            model_choice=model_id,
+            preload_num_ctx=preload_num_ctx,
+        ):
+            if item["type"] == "scraping_result":
+                _, scraping_tool_results = item["data"]
+                tool_results.extend(scraping_tool_results)
+            elif item["type"] == "debug":
+                state.add_debug(item["message"])
+                yield
+            elif item["type"] == "progress":
+                state.set_progress(
+                    phase=item.get("phase", ""),
+                    current=item.get("current", 0),
+                    total=item.get("total", 0),
+                    failed=item.get("failed", 0),
+                )
+                yield  # Push progress to browser
+            elif item["type"] == "failed_sources":
+                failed_sources.extend(item["data"])
+                state.add_debug(f"⚠️ {len(item['data'])} source(s) failed")
+                yield
+
+        state.clear_progress()
+        yield
+
+        # ==============================================================
+        # PHASE 5: Build context from scraped content
+        # ==============================================================
+        if not tool_results:
+            state.add_debug("⚠️ No sources available")
+            yield
+            return
+
+        context = build_context(user_query, tool_results)
+
+        # Sources collapsible for UI
+        scraped_only = [r for r in tool_results if r.get("success") and r.get("content")]
+        used_sources = [
+            {
+                "url": src.get("url", ""),
+                "word_count": src.get("word_count", 0),
+                "rank_index": src.get("rank_index", idx),
+                "success": True,
+            }
+            for idx, src in enumerate(scraped_only)
+            if src.get("url")
+        ]
+
+        sources_html = build_sources_collapsible(
+            used_sources=used_sources,
+            failed_sources=failed_sources,
+        )
+
+        state.add_debug(f"✅ Research: {len(context)} chars, {len(used_sources)} sources")
+        state._research_context = context  # type: ignore[attr-defined]
+        state._research_sources_html = sources_html  # type: ignore[attr-defined]
+        # Tag this turn so _sync_to_llm_history records in llm_history that a
+        # web search happened — even if the model's synthesis degenerates, the
+        # follow-up turn then knows it DID research (no false "I didn't search").
+        state._research_source_count = len(used_sources)  # type: ignore[attr-defined]
+        yield
+
+    finally:
+        await llm_client.close()
+        if state.backend_type == "ollama":
+            await automatik_llm_client.close()
+
+
+# ============================================================
+# Hub search (Message Hub — no Reflex State, no async generators)
+# ============================================================
+
+async def hub_web_search(queries: list[str], llm_history: list[dict], mode: str = "deep") -> str:
+    """Web search for Message Hub (Discord, Email).
+
+    Uses the same building blocks as the full pipeline:
+    - Multi-API search (Brave, Tavily, SearXNG)
+    - URL ranking (LLM-based)
+    - Parallel scraping with Playwright fallback
+    - Context building
+
+    No Reflex State needed — reads config from settings.
+    Debug messages go through the Debug Bus (session_scope must be active).
+    """
+    from .debug_bus import debug
+    from .research.query_processor import process_query_and_search
+    from .research.url_ranker import rank_urls_by_relevance
+    from .research.scraper_orchestrator import orchestrate_scraping
+    from .tools import build_context
+    from .llm_client import LLMClient
+    from .settings import load_settings
+    from .config import DEFAULT_SETTINGS, BACKEND_DEFAULT_MODELS, BACKEND_URLS
+
+    debug(f"🔍 Web search: {', '.join(queries)}")
+
+    # Resolve backend config from settings
+    from .config import get_effective_model_from_settings
+    settings = load_settings() or {}
+    backend_type = settings.get("backend_type", DEFAULT_SETTINGS["backend_type"])
+    backend_url = BACKEND_URLS.get(backend_type, "")
+    # Trennung wie im Browser-Pfad: Automatik fuer Query-Generation und
+    # URL-Ranking (Helper-Tasks), aifred nur fuer den Modell-Preload zum
+    # Haupt-Inferenz-Call. Bei "Automatik = (wie Alfred-LLM)" faellt
+    # automatik intern auf aifred zurueck — gleiches Verhalten, aber
+    # die Setting wird respektiert wenn der User sie aendert.
+    automatik_model_id = get_effective_model_from_settings("automatik")
+    aifred_model_id = get_effective_model_from_settings("aifred")
+    if not aifred_model_id:
+        backend_models = settings.get("backend_models", {}).get(backend_type, {})
+        defaults = BACKEND_DEFAULT_MODELS.get(backend_type, {})
+        aifred_model_id = backend_models.get("aifred", defaults.get("aifred", ""))
+
+    llm_client = LLMClient(backend_type=backend_type, base_url=backend_url)
+
+    try:
+        # ── Phase 1: Multi-API search ─────────────────────────
+        related_urls: list[str] = []
+        titles: list[str] = []
+        snippets: list[str] = []
+        tool_results: list[dict[str, Any]] = []
+
+        async for item in process_query_and_search(
+            user_text=queries[0],
+            llm_history=[],
+            automatik_model=automatik_model_id,
+            automatik_llm_client=llm_client,
+            llm_options={},
+            vision_json_context=None,
+            pre_generated_queries=queries,
+        ):
+            if item["type"] == "query_result":
+                _, _, _, related_urls, titles, snippets, tool_results = item["data"]
+            elif item["type"] == "debug":
+                debug(item["message"])
+
+        if not related_urls:
+            if _is_network_outage(tool_results):
+                debug("⚠️ Search unreachable — network/DNS failure (not 'no results')")
+                return WEB_SEARCH_NETWORK_ERROR
+            debug("⚠️ No URLs found")
+            return json.dumps({"error": "No results found"})
+
+        # ── Phase 2: URL ranking ──────────────────────────────
+        from .research.context_utils import get_model_native_context
+        num_ctx = get_model_native_context(automatik_model_id, backend_type)
+
+        from .config import RESEARCH_QUICK_URLS, RESEARCH_DEEP_URLS
+        top_n = RESEARCH_DEEP_URLS if mode == "deep" else RESEARCH_QUICK_URLS
+
+        if related_urls and titles and snippets:
+            debug(f"🎯 Ranking {len(related_urls)} URLs by relevance...")
+            ranked_urls, _, debug_summary = await rank_urls_by_relevance(
+                user_question=queries[0],
+                urls=related_urls,
+                titles=titles,
+                snippets=snippets,
+                automatik_llm_client=llm_client,
+                automatik_model=automatik_model_id,
+                llm_history=llm_history,
+                top_n=top_n,
+                llm_options={},
+                automatik_num_ctx=num_ctx if num_ctx > 0 else 32768,
+            )
+            if debug_summary:
+                debug(f"📋 {debug_summary}")
+            related_urls = ranked_urls
+        else:
+            debug(f"⏭️ URL ranking skipped, using top {min(top_n, len(related_urls))} URLs")
+            related_urls = related_urls[:top_n]
+
+        # ── Phase 3: Parallel scraping ────────────────────────
+        # model_choice = aifred (Haupt-LLM wird vorgeladen, da nach dem
+        # Scraping sein Inferenz-Call kommt). Kein LLM-Call zur
+        # Verarbeitung der Scrape-Daten — die werden direkt durchgereicht.
+        # Kontext wie die Hub-Inferenz (message_processor), sonst laedt
+        # Ollama beim echten Aufruf neu.
+        from .research.context_utils import get_stateless_num_ctx
+        preload_num_ctx, _ = get_stateless_num_ctx(aifred_model_id, backend_type)
+        async for item in orchestrate_scraping(
+            related_urls=related_urls,
+            mode=mode,
+            llm_client=llm_client,
+            model_choice=aifred_model_id,
+            preload_num_ctx=preload_num_ctx,
+        ):
+            if item["type"] == "scraping_result":
+                _, scraping_tool_results = item["data"]
+                tool_results.extend(scraping_tool_results)
+            elif item["type"] == "debug":
+                debug(item["message"])
+
+        if not tool_results:
+            debug("⚠️ No sources available")
+            return json.dumps({"error": "No results found"})
+
+        # ── Phase 4: Build context ────────────────────────────
+        context = build_context(queries[0], tool_results)
+        scraped_only = [r for r in tool_results if r.get("success") and r.get("content")]
+        debug(f"✅ Research: {len(context)} chars, {len(scraped_only)} sources")
+        return context
+
+    finally:
+        await llm_client.close()

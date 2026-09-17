@@ -1,0 +1,22 @@
+from typing import TYPE_CHECKING
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncAttrs
+from sqlalchemy.orm import DeclarativeBase
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.sql import ColumnElement
+
+
+class Base(AsyncAttrs, DeclarativeBase):
+    pass
+
+
+async def get_one[ModelT: Base](
+    session: AsyncSession, model: type[ModelT], *filters: ColumnElement[bool]
+) -> ModelT | None:
+    stmt = select(model)
+    if filters:
+        stmt = stmt.where(*filters)
+    return await session.scalar(stmt.limit(1))

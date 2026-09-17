@@ -1,0 +1,11 @@
+venv/
+.env
+__pycache__/
+*/__pycache__/
+data/
+*.pem
+
+# profiles/*.yaml
+# !profiles/template.yaml
+# Brag video working directory
+brag-output*/

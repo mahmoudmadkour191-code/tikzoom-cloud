@@ -1,0 +1,473 @@
+"""Discord Channel Plugin — Bot listener + reply via discord.py.
+
+Drop-in plugin for the Message Hub channel system.
+Connects as a Discord bot and listens for messages in configured channels.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import TYPE_CHECKING
+
+import discord
+
+from ....lib.plugin_base import BaseChannel, CredentialField, load_tool_description
+from ....lib.logging_utils import log_message
+
+if TYPE_CHECKING:
+    from ....lib.envelope import InboundMessage, OutboundMessage
+    from ....lib.function_calling import Tool
+    from ....lib.plugin_base import PluginContext
+
+# Discord message length limit
+_MAX_MESSAGE_LENGTH = 2000
+
+# Module-level reference to the running Discord client.
+# Needed so the reply path can send messages back.
+_discord_client: discord.Client | None = None
+
+# Event loop the client lives in (the message hub's worker loop). The
+# discord_send tool runs in the WEB worker's loop — sending through the
+# client from there makes aiohttp raise "Timeout context manager should
+# be used inside a task", so the tool must hand its coroutine over to
+# this loop via run_coroutine_threadsafe.
+_discord_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _parse_channel_ids(ids_str: str) -> set[int]:
+    """Parse comma-separated Discord IDs from a config string.
+
+    Ungültige Einträge werden geloggt statt still verworfen — sind ALLE
+    Einträge Tippfehler, lauscht der Bot sonst kommentarlos auf allen
+    Channels (leere Menge = kein Filter).
+    """
+    if not ids_str:
+        return set()
+    ids: set[int] = set()
+    for part in ids_str.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part.isdigit():
+            ids.add(int(part))
+        else:
+            log_message(f"Discord Plugin: ignoring non-numeric ID in config: {part!r}", "warning")
+    return ids
+
+
+def _is_discord_user_allowed(user_id: int) -> bool:
+    """Discord-Sender-Allowlist (gilt auch für DMs) — Logik lebt als
+    lib-SSOT in ``security.is_sender_allowed`` (geteilt mit telegram):
+    leer = niemand (fail-closed), '*' seit TD8 geblockt."""
+    from ....lib.security import is_sender_allowed
+    return is_sender_allowed("discord", "allowed_users", user_id)
+
+
+class DiscordChannel(BaseChannel):
+    """Discord channel via discord.py bot."""
+
+    # ── Identity ──────────────────────────────────────────────
+
+    @property
+    def name(self) -> str:
+        return "discord"
+
+    @property
+    def display_name(self) -> str:
+        return "Discord"
+
+    @property
+    def description(self) -> str:
+        return "Discord-Bot für Server-Kanäle — Watching, Auto-Reply und Slash-Commands."
+
+    @property
+    def icon(self) -> str:
+        return "message-circle"
+
+    @property
+    def always_reply(self) -> bool:
+        return True
+
+    # ── Credentials ───────────────────────────────────────────
+
+    @property
+    def credential_fields(self) -> list[CredentialField]:
+        return [
+            CredentialField(
+                env_key="DISCORD_BOT_TOKEN",
+                label_key="discord_cred_bot_token",
+                placeholder="MTIzNDU2Nzg5...",
+                is_password=True,
+            ),
+            # Bewusst OHNE placeholder: CredentialField macht den Placeholder
+            # zum gespeicherten Default (__post_init__) — Beispiel-IDs würden
+            # beim ungeänderten Speichern zu echten Allowlist-Einträgen.
+            # Beispiele stehen im Tooltip (i18n.json).
+            CredentialField(
+                env_key="DISCORD_CHANNEL_IDS",
+                label_key="discord_cred_channel_ids",
+            ),
+            CredentialField(
+                env_key="DISCORD_ALLOWED_USERS",
+                label_key="discord_cred_allowed_users",
+            ),
+        ]
+
+    def is_configured(self) -> bool:
+        from ....lib.credential_broker import broker
+        return (
+            broker.get("discord", "enabled").lower() == "true"
+            and broker.is_set("discord", "bot_token")
+        )
+
+    def apply_credentials(self, values: dict[str, str]) -> None:
+        """Update runtime credentials via the broker."""
+        from ....lib.credential_broker import broker
+
+        broker.set_runtime("discord", "enabled", "true")
+
+        token = values.get("DISCORD_BOT_TOKEN", "")
+        if token:
+            broker.set_runtime("discord", "bot_token", token)
+
+        channel_ids = values.get("DISCORD_CHANNEL_IDS", "")
+        broker.set_runtime("discord", "channel_ids", channel_ids)
+
+        allowed_users = values.get("DISCORD_ALLOWED_USERS", "")
+        broker.set_runtime("discord", "allowed_users", allowed_users)
+
+    # ── Listener ──────────────────────────────────────────────
+
+    async def listener_loop(self) -> None:
+        """Discord bot loop — runs until cancelled."""
+        global _discord_client, _discord_loop
+
+        from ....lib.credential_broker import broker
+
+        if not self.is_configured():
+            self.channel_log("Discord Plugin: not configured, not starting", "warning")
+            return
+
+        bot_token = broker.get("discord", "bot_token")
+        allowed_channels = _parse_channel_ids(broker.get("discord", "channel_ids"))
+        _log = self.channel_log  # Capture for use in inner functions
+
+        _log("Discord Plugin: starting bot...")
+        if allowed_channels:
+            _log(f"Discord Plugin: watching channels {allowed_channels}")
+        else:
+            _log("Discord Plugin: no channel IDs configured, listening on all channels")
+
+        intents = discord.Intents.default()
+        intents.message_content = True
+        intents.dm_messages = True
+
+        client = discord.Client(intents=intents)
+        tree = discord.app_commands.CommandTree(client)
+        _discord_client = client
+        _discord_loop = asyncio.get_running_loop()
+
+        @tree.command(name="clear", description="Reset the conversation and delete all messages in this channel")
+        async def slash_clear(interaction: discord.Interaction) -> None:
+            # TD6: clear is clear — delete everything that CAN be deleted.
+            # Always resets AIfred's conversation (route); in server channels
+            # additionally purges all messages (needs manage_messages). In
+            # DMs Discord bots cannot bulk-delete → context reset only.
+            # Sender allowlist first (fail-closed, same model as Telegram's
+            # /clear) — otherwise any server member could reset the context.
+            if not _is_discord_user_allowed(interaction.user.id):
+                await interaction.response.send_message("Not authorized.", ephemeral=True)
+                _log(f"Discord Plugin: /clear blocked — user {interaction.user.id} not in allowed_users")
+                return
+            if not interaction.channel:
+                await interaction.response.send_message("No channel context.", ephemeral=True)
+                return
+            from ....lib.routing_table import routing_table
+            routing_table.delete_route("discord", str(interaction.channel.id))
+            if not interaction.guild:
+                await interaction.response.send_message(
+                    "Conversation context reset. (Messages in DMs can't be bulk-deleted by bots.)",
+                    ephemeral=True,
+                )
+                _log("Discord Plugin: /clear in DM — context reset only")
+                return
+            # Beide Rechte prüfen: der USER braucht manage_messages
+            # (Autorisierung), der BOT braucht es auch (Fähigkeit) —
+            # sonst wirft purge() nach bereits gesendeter Response Forbidden.
+            perms = interaction.channel.permissions_for(interaction.user)  # type: ignore[union-attr, arg-type]
+            bot_perms = interaction.channel.permissions_for(interaction.guild.me)  # type: ignore[union-attr]
+            if not perms.manage_messages or not bot_perms.manage_messages:
+                who = "user" if not perms.manage_messages else "bot"
+                await interaction.response.send_message(
+                    f"Conversation context reset. (No manage_messages permission for {who} — messages not deleted.)",
+                    ephemeral=True,
+                )
+                _log(f"Discord Plugin: /clear — context reset, purge skipped (no {who} permission)")
+                return
+            await interaction.response.send_message("Clearing conversation and deleting messages...", ephemeral=True)
+            try:
+                # limit=None = ALL messages (discord.py default is only 100)
+                deleted = await interaction.channel.purge(limit=None)  # type: ignore[union-attr]
+            except discord.Forbidden as exc:
+                _log(f"Discord Plugin: /clear purge forbidden despite permission check: {exc}", "warning")
+                return
+            _log(f"Discord Plugin: /clear — context reset + purged {len(deleted)} messages in #{getattr(interaction.channel, 'name', '?')}")
+
+        # on_ready feuert bei jedem Session-Reconnect erneut — tree.sync()
+        # ist aber ein rate-limitierter Global-Call und muss nur einmal laufen.
+        commands_synced = False
+
+        @client.event
+        async def on_ready() -> None:
+            nonlocal commands_synced
+            if not commands_synced:
+                await tree.sync()
+                commands_synced = True
+            _log(f"Discord Plugin: connected as {client.user}, slash commands synced")
+
+        @client.event
+        async def on_message(message: discord.Message) -> None:
+            # Ignore own messages and other bots
+            if message.author == client.user or message.author.bot:
+                return
+
+            # Sender allowlist FIRST — applies to DMs and guild channels alike.
+            # Without it (the previous behaviour) any user who could DM the bot
+            # drove the full pipeline at COMMUNICATE tier. Fail-closed: empty
+            # allowlist = nobody; explicit ids only (no "*" wildcard, TD8).
+            if not _is_discord_user_allowed(message.author.id):
+                _log(f"Discord Plugin: blocked message from user {message.author.id} (not in allowlist)")
+                return
+
+            # Filter by configured channels (empty = all)
+            # Always allow DMs (no guild = direct message)
+            is_dm = message.guild is None
+            if not is_dm and allowed_channels and message.channel.id not in allowed_channels:
+                return
+
+            sender = f"{message.author.display_name} ({message.author.name})"
+            # discord.py 2.x liefert created_at bereits als aware UTC-datetime
+            timestamp = message.created_at
+
+            from ....lib.envelope import InboundMessage
+
+            inbound = InboundMessage(
+                channel="discord",
+                channel_id=str(message.channel.id),
+                sender=sender,
+                text=message.content,
+                timestamp=timestamp,
+                metadata={
+                    "guild_id": str(message.guild.id) if message.guild else "",
+                    "guild_name": message.guild.name if message.guild else "DM",
+                    "channel_name": getattr(message.channel, "name", "DM"),
+                    "author_id": str(message.author.id),
+                    "message_id": str(message.id),
+                },
+            )
+
+            _log(
+                f"Discord Plugin: message from {sender} "
+                f"in #{inbound.metadata.get('channel_name', '?')}"
+            )
+            from ....lib.message_processor import dispatch_inbound
+            await dispatch_inbound(inbound, "Discord Plugin")
+
+        try:
+            await client.start(bot_token)
+        except asyncio.CancelledError:
+            _log("Discord Plugin: shutting down")
+            await client.close()
+            _discord_client = None
+        except discord.LoginFailure:
+            # Config error — retrying won't help, so exit normally (no restart).
+            _log("Discord Plugin: invalid bot token", "error")
+            _discord_client = None
+        except Exception as exc:
+            # Any other error: clean up and RE-RAISE so the message hub's
+            # auto-restart (exponential backoff, capped) brings the bot back.
+            # Swallowing it here would look like a normal exit → worker stays dead.
+            _log(f"Discord Plugin: error — {exc}, will be restarted by hub", "error")
+            try:
+                await client.close()
+            except Exception:
+                pass
+            _discord_client = None
+            raise
+
+    # ── Reply ─────────────────────────────────────────────────
+
+    async def send_reply(self, outbound: "OutboundMessage", original: "InboundMessage") -> None:
+        """Send a reply message to the Discord channel."""
+        if not _discord_client:
+            self.channel_log("Discord Plugin: no client connected, cannot send reply", "error")
+            return
+
+        channel_id = int(outbound.channel_id)
+        channel = _discord_client.get_channel(channel_id)
+        if not channel:
+            # DM channels may not be in cache — fetch from API
+            try:
+                channel = await _discord_client.fetch_channel(channel_id)
+            except Exception as exc:
+                self.channel_log(f"Discord Plugin: channel {channel_id} not found — {exc}", "error")
+                return
+
+        # Discord renders Markdown natively (bold/italic/code/links) —
+        # the default format_outbound() passthrough is exactly right.
+        text = self.format_outbound(outbound.text)["text"]
+        # Discord attacht via discord.File und braucht einen LOKALEN Pfad
+        # (kann keine Remote-URL fetchen wie Telegrams send_photo).
+        from ....lib.vision_utils import local_media_path
+        await self._deliver(channel, text, local_media_path(outbound.media))
+
+        from ....lib.debug_bus import debug
+        channel_name = getattr(channel, 'name', channel_id)
+        debug(f"📤 Reply sent to {outbound.recipient} (#{channel_name})")
+
+    async def _deliver(self, channel, text: str, media: "str | None") -> None:
+        """SSOT for the actual Discord send: text in 2000-char chunks plus an
+        optional file attachment on the first message. Used by both the reply
+        path and the discord_send tool. Discord renders any file type as an
+        attachment, so no photo/document distinction is needed."""
+        from ....lib.text_chunking import split_message
+
+        file = discord.File(media) if media else None
+        # lib-Chunker: bricht an Zeilengrenzen (kein Wort-/Codeblock-Riss)
+        # und liefert nie leere Chunks — send("") wirft in der Discord-API.
+        chunks = split_message(text, _MAX_MESSAGE_LENGTH)
+        if not chunks and not file:
+            self.channel_log("Discord Plugin: empty reply — nothing to send", "warning")
+            return
+        if not chunks:
+            await channel.send(None, file=file)  # type: ignore[union-attr]
+            return
+        for i, chunk in enumerate(chunks):
+            kwargs = {"file": file} if (i == 0 and file) else {}
+            await channel.send(chunk, **kwargs)  # type: ignore[union-attr]
+
+    # ── Context ───────────────────────────────────────────────
+
+    def build_context(self, message: "InboundMessage") -> str:
+        """Prepare Discord message for LLM."""
+        from ....lib.prompt_loader import load_prompt
+
+        return load_prompt(
+            "shared/channel_discord",
+            sender=message.sender,
+            guild_name=message.metadata.get("guild_name", "?"),
+            channel_name=message.metadata.get("channel_name", "?"),
+            text=message.text,
+        )
+
+
+    # ── Tools ─────────────────────────────────────────────────
+
+    def get_tools(self, ctx: "PluginContext") -> list["Tool"]:
+        """Provide discord_send tool for LLM function calling."""
+        from ....lib.function_calling import Tool
+        from ....lib.security import TIER_COMMUNICATE, sanitize_outbound
+        from ....lib.credential_broker import broker
+        import json
+
+        async def _execute_discord_send(message: str, channel_id: str = "", attachment: str = "") -> str:
+            """Send a message to a Discord channel."""
+            # Lokale Bindung: friert Client+Loop für diesen Call ein und
+            # gibt mypy das Narrowing über die Closure-Grenze hinweg.
+            client = _discord_client
+            loop = _discord_loop
+            if client is None or loop is None:
+                return json.dumps({"error": "Discord not connected"})
+
+            # Default to first configured channel
+            target_id = channel_id
+            if not target_id:
+                ids = _parse_channel_ids(broker.get("discord", "channel_ids"))
+                if ids:
+                    target_id = str(next(iter(ids)))
+                else:
+                    return json.dumps({"error": "No Discord channel configured"})
+
+            # Redact secrets / block image-exfil URLs on the tool path.
+            message = sanitize_outbound(message)
+
+            # Optional attachment. Resolved via the cross-channel SSOT
+            # (session-isolated, path-traversal safe, size-capped); the
+            # allowlist gate below is the exfiltration guard.
+            media: str | None = None
+            if attachment:
+                from ....lib.vision_utils import resolve_outbound_attachment
+                path, err = resolve_outbound_attachment(attachment, ctx.session_id, ctx.source)
+                if err:
+                    return json.dumps({"error": err})
+                media = str(path)
+
+            try:
+                # Recipient allowlist gate: only the browser (user present) may
+                # target a channel that is not on the configured allowlist. From
+                # an external channel an injected prompt could otherwise exfiltrate
+                # the conversation to an arbitrary channel the bot can reach.
+                if ctx.source != "browser":
+                    allowed = _parse_channel_ids(broker.get("discord", "channel_ids"))
+                    if not allowed or int(target_id) not in allowed:
+                        return json.dumps({
+                            "error": (
+                                "refused: target channel is not on the allowlist "
+                                "(external-channel exfiltration guard). Do this from the web UI."
+                            )
+                        })
+
+                async def _send() -> str:
+                    ch = client.get_channel(int(target_id))
+                    if not ch:
+                        ch = await client.fetch_channel(int(target_id))
+
+                    await self._deliver(ch, message, media)
+
+                    channel_name = getattr(ch, 'name', target_id)
+                    log_message(f"Discord Plugin: message sent to #{channel_name}")
+                    return json.dumps({"success": True, "channel": channel_name, "attachment_sent": bool(media)})
+
+                # Discord-API-Zugriff MUSS im Loop des Gateway-Clients laufen
+                # (siehe _discord_loop-Kommentar) — Coroutine dort einreichen
+                # und das Ergebnis im aufrufenden Loop awaiten. Exceptions
+                # propagieren durch wrap_future in den except unten.
+                future = asyncio.run_coroutine_threadsafe(_send(), loop)
+                return await asyncio.wrap_future(future)
+            except Exception as exc:
+                return json.dumps({"error": str(exc)})
+
+        return [
+            Tool(
+                name="discord_send",
+                tier=TIER_COMMUNICATE,
+                description=load_tool_description(__file__, "discord_send"),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "description": "The message text to send",
+                        },
+                        "channel_id": {
+                            "type": "string",
+                            "description": "Discord channel ID (optional, uses default channel if empty)",
+                        },
+                        "attachment": {
+                            "type": "string",
+                            "description": (
+                                "Optional: URL of a file from THIS conversation to attach "
+                                "(an uploaded image, or generated sandbox output like a PDF — "
+                                "its /_upload/... URL)."
+                            ),
+                        },
+                    },
+                    "required": ["message"],
+                },
+                executor=_execute_discord_send,
+            ),
+        ]
+
+
+# Module-level instance — discovered by registry
+DiscordChannel_instance = DiscordChannel()

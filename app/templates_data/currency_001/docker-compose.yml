@@ -1,0 +1,64 @@
+version: '3'
+services:
+  db:
+    image: postgres:10.11
+    hostname: db
+    restart: always
+    volumes:
+      - postgresql_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:6.0.5
+    hostname: redis
+    restart: always
+    volumes:
+      - redis_data:/data
+
+  service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    stdin_open: true
+    tty: true
+    restart: always
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      APP_MIGRATE: "on"
+      START_APP: "on"
+    depends_on:
+      - db
+      - redis
+
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    command: ["celery", "-A", "app.celery", "worker", "-l", "info", "-c", "2"]
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["celery", "-A", "app.celery", "beat", "-l", "info", "-s", "/tmp/celerybeat-schedule.db", "--pidfile", "/tmp/celeryd.pid"]
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+volumes:
+  postgresql_data:
+  redis_data:

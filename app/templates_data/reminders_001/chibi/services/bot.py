@@ -1,0 +1,352 @@
+import time
+
+from loguru import logger
+from telegram import (
+    CallbackQuery,
+)
+
+from chibi.config import application_settings, gpt_settings
+from chibi.schemas.app import ChatResponseSchema, ModelChangeSchema, VisionResultSchema
+from chibi.services.interface import UserInterface
+from chibi.services.providers import RegisteredProviders
+from chibi.services.providers.tools import ToolResponseSchema
+from chibi.services.providers.utils import get_usage_msg
+from chibi.services.task_manager import task_manager
+from chibi.services.user import (
+    check_history_and_summarize,
+    clone_thread_messages,
+    delete_thread_from_map,
+    describe_image,
+    generate_image,
+    get_chibi_user,
+    get_llm_chat_completion_answer,
+    get_models_available,
+    reset_chat_history,
+    save_thread_name,
+    set_active_model,
+    set_api_key,
+    user_has_reached_images_generation_limit,
+)
+from chibi.storage.files import FileStorage
+from chibi.utils.app import handle_gpt_exceptions
+from chibi.utils.bot import indicator
+
+
+@handle_gpt_exceptions
+async def handle_model_selection(
+    interface: UserInterface,
+    model: ModelChangeSchema,
+    query: CallbackQuery,
+) -> None:
+    await set_active_model(interface=interface, model=model)
+    logger.info(f"{interface.user_data} switched to model '{model.name} ({model.provider})'")
+    await query.edit_message_text(text=f"Selected model: '{model.name} ({model.provider})'")
+
+
+@handle_gpt_exceptions
+async def handle_tool_response(tool_response: ToolResponseSchema, interface: UserInterface) -> None:
+    chat_response: ChatResponseSchema = await get_llm_chat_completion_answer(
+        storage_id=interface.storage_id, tool_message=tool_response, interface=interface
+    )
+    usage_message = get_usage_msg(chat_response.usage)
+
+    if "<chibi>ack</chibi>" in chat_response.answer.lower() and len(chat_response.answer) <= 27:
+        logger.info(
+            f"[{interface.user_data}-{interface.chat_data}] LLM silently received tool result "
+            f"(answer: {chat_response.answer}). No user notification required. {usage_message}"
+        )
+        return None
+
+    if application_settings.log_prompt_data:
+        answer_to_log = chat_response.answer.replace("\r", " ").replace("\n", " ")
+        logged_answer = f"Answer: {answer_to_log}"
+    else:
+        logged_answer = ""
+
+    logger.info(
+        f"{interface.user_data} got {chat_response.provider} ({chat_response.model}) answer in "
+        f"the {interface.chat_data}. {logged_answer} {usage_message}"
+    )
+    await interface.send_tool_answer(
+        content=chat_response.answer, model=chat_response.model, provider=chat_response.provider
+    )
+
+
+# async def handle_scheduled_event(
+#     message: str,
+#     event_id: UUID,
+#     interface: UserInterface,
+# ) -> None:
+#     chat_response: ChatResponseSchema = await send_scheduled_message_to_llm(
+#         user_id=interface.user_id, event_id=event_id, message=message, interface=interface
+#     )
+#     usage_message = get_usage_msg(chat_response.usage)
+#
+#     if "<chibi>ack</chibi>" in chat_response.answer.lower():
+#         logger.info(
+#             f"[{interface.user_data}-{interface.chat_data}] LLM silently received scheduled message "
+#             f"(answer: {chat_response.answer}). No user notification required. {usage_message}"
+#         )
+#         return None
+#
+#     if application_settings.log_prompt_data:
+#         answer_to_log = chat_response.answer.replace("\r", " ").replace("\n", " ")
+#         logged_answer = f"Answer: {answer_to_log}"
+#     else:
+#         logged_answer = ""
+#
+#     logger.info(
+#         f"{interface.user_data} got {chat_response.provider} ({chat_response.model}) answer in "
+#         f"the {interface.chat_data}. {logged_answer} {usage_message}"
+#     )
+#     await interface.send_message(message=chat_response.answer)
+#     return None
+
+
+@handle_gpt_exceptions
+async def handle_user_prompt(interface: UserInterface) -> None:
+    time_start = time.time()
+    text_prompt = await interface.get_text_prompt()
+    voice_prompt = await interface.get_voice_prompt()
+    caption_prompt = await interface.get_caption()
+
+    if text_prompt and text_prompt.startswith("/ask"):
+        text_prompt = text_prompt.replace("/ask", "", 1).strip()
+
+    if text_prompt:
+        prompt_to_log = text_prompt.replace("\r", " ").replace("\n", " ")
+    elif caption_prompt:
+        prompt_to_log = caption_prompt.replace("\r", " ").replace("\n", " ")
+    else:
+        prompt_to_log = "voice message"
+
+    logger.info(
+        f"{interface.user_data} sent a new message in the {interface.chat_data}"
+        f"{': ' + prompt_to_log if application_settings.log_prompt_data else ''}"
+    )
+
+    async with indicator(coro_func=interface.send_action_typing):
+        chat_response: ChatResponseSchema = await get_llm_chat_completion_answer(
+            storage_id=interface.storage_id,
+            user_text_message=text_prompt,
+            user_voice_message=voice_prompt,
+            user_caption=caption_prompt,
+            interface=interface,
+        )
+
+    setattr(interface, "response_model", chat_response.model)
+    setattr(interface, "response_provider", chat_response.provider)
+    usage = chat_response.usage
+    usage_message = get_usage_msg(usage)
+
+    if application_settings.log_prompt_data:
+        answer_to_log = chat_response.answer.replace("\r", " ").replace("\n", " ")
+        logged_answer = f"Answer: {answer_to_log}"
+    else:
+        logged_answer = ""
+
+    if "<chibi>ack</chibi>" in chat_response.answer.lower() and len(chat_response.answer) <= 27:
+        logger.info(
+            f"[{interface.user_data}-{interface.chat_data}] LLM silently received user request "
+            f"(answer: {chat_response.answer}). No user notification required. {usage_message}"
+        )
+        try:
+            await interface.send_reaction(reaction="👌")
+        except Exception as e:
+            logger.error(f"{interface.user_data}: Couldn't set message reaction due to exception: {e}")
+        return None
+    time_end = time.time()
+    completion_time = time_end - time_start
+    logger.info(
+        f"{interface.user_data} got {chat_response.provider} ({chat_response.model}) answer in "
+        f"the {interface.chat_data}. {logged_answer} {usage_message} [{'%.2f' % completion_time}s]"
+    )
+    await interface.send_message(message=chat_response.answer)
+    history_is_summarized = await check_history_and_summarize(
+        storage_id=interface.storage_id, thread_id=interface.thread_id
+    )
+    if history_is_summarized:
+        logger.info(f"{interface.user_data}: history successfully summarized.")
+    return None
+
+
+async def handle_reset(interface: UserInterface) -> None:
+    logger.info(f"{interface.user_data}: conversation history reset.")
+
+    await reset_chat_history(storage_id=interface.storage_id, thread_id=interface.thread_id)
+    task_manager.kill_all_user_tasks(user_id=interface.storage_id, thread_id=interface.thread_id)
+    await interface.send_message(message="Done!", reply=False)
+
+
+async def handle_stop(interface: UserInterface) -> None:
+    logger.info(f"{interface.user_data}: stopping everything...")
+
+    task_manager.kill_all_user_tasks(user_id=interface.storage_id, thread_id=interface.thread_id)
+    await interface.send_message(message="Everything stopped.", reply=False)
+
+
+@handle_gpt_exceptions
+async def handle_image_generation(prompt: str, interface: UserInterface) -> None:
+    if await user_has_reached_images_generation_limit(user_id=interface.user_id):
+        await interface.send_message(
+            message=(
+                f"Sorry, you have reached your monthly images generation limit "
+                f"({gpt_settings.image_generations_monthly_limit}). Please, try again later."
+            )
+        )
+        return None
+
+    logger.info(
+        f"{interface.user_data} sent image generation request in the {interface.chat_data}"
+        f"{': ' + prompt if application_settings.log_prompt_data else ''}"
+    )
+
+    # The user finds it psychologically easier to wait for a response from the chatbot when they see its activity
+    # during the entire waiting time.
+    async with indicator(coro_func=interface.send_action_uploading_photo):
+        image_data = await generate_image(interface=interface, prompt=prompt)
+        await interface.send_images(images=image_data)
+
+    log_message = f"{interface.user_data} got a successfully generated image(s)"
+    if application_settings.log_prompt_data and isinstance(image_data[0], str):
+        log_message += f": {image_data}"
+    logger.info(log_message)
+    return None
+
+
+async def handle_provider_api_key_set(provider_name: str, interface: UserInterface) -> None:
+    logger.info(f"{interface.user_data} provides API Key for provider '{provider_name}'.")
+
+    api_key = await interface.get_text_prompt()
+    if not api_key:
+        return None
+
+    api_key = api_key.strip()
+
+    provider = RegisteredProviders.get_class(provider_name)
+    if not provider:
+        return None
+
+    if not await provider(token=api_key).api_key_is_valid():
+        await interface.send_message(message="Sorry, but API key you have provided does not seem correct.")
+        logger.warning(f"{interface.user_data} provided invalid key.")
+        return None
+
+    await set_api_key(user_id=interface.user_id, api_key=api_key, provider_name=provider_name)
+    RegisteredProviders.register_as_available(provider=provider)
+
+    await interface.send_message(
+        message=(
+            f"Your {provider_name} API Key successfully set! 🦾\n\nNow you may check available models in /llm_models."
+        )
+    )
+    await interface.delete_last_user_message()
+    logger.info(f"{interface.user_data} successfully set up {provider_name} Key.")
+
+
+@handle_gpt_exceptions
+async def handle_available_model_options(
+    user_id: int,
+    interface: UserInterface,
+    image_generation: bool = False,
+) -> list[ModelChangeSchema]:
+    return await get_models_available(user_id=user_id, image_generation=image_generation, thread_id=interface.thread_id)
+
+
+async def handle_image_understanding(
+    interface: UserInterface,
+    storage: FileStorage,
+    file_id: str,
+    mime_type: str,
+) -> VisionResultSchema:
+    file_bytes = await storage.get_bytes(file_id=file_id)
+    return await describe_image(user_id=interface.user_id, image=file_bytes, mime_type=mime_type)
+
+
+async def handle_new_thread(interface: UserInterface, args: list[str] | None = None) -> None:
+    """Handle /new_thread command: create a Telegram forum thread and register it for the user.
+
+    Args:
+        interface: The user interface instance.
+        args: Optional list of arguments for the thread name.
+
+    Raises:
+        Exception: If an error occurs during thread creation.
+    """
+
+    try:
+        name = " ".join(args).strip() if args else ""
+        new_thread_id = await interface.create_thread(name=name)
+        if new_thread_id == -1:
+            await interface.send_message(
+                message="❌ Failed to create thread. Make sure the bot has the required permissions."
+            )
+            return None
+
+        await save_thread_name(storage_id=interface.storage_id, thread_id=new_thread_id, name=name)
+        await interface.send_message(message=f"✅ Thread created: {name} (ID: {new_thread_id})")
+    except Exception as e:
+        logger.error(f"{interface.user_data}: Error in /new_thread: {e}")
+        await interface.send_message(message="❌ An error occurred while creating the thread. Please try again later.")
+
+
+async def handle_clone_thread(interface: UserInterface, args: list[str] | None = None) -> None:
+    """Handle /clone_thread command: clone current thread messages and preferences to a new thread.
+
+    Args:
+        interface: The user interface instance.
+        args: Optional list of arguments for the cloned thread name.
+    """
+    user = await get_chibi_user(user_id=interface.storage_id)
+    name = " ".join(args).strip() if args else None
+
+    if not name:
+        n = len(user.thread_messages_map) + 1
+        name = f"Thread {n}"
+
+    new_thread_id = await interface.create_thread(name=name)
+    if new_thread_id == -1:
+        await interface.send_message(
+            message="❌ Failed to create thread. Make sure the bot has the required permissions."
+        )
+        return None
+
+    cloned_messages = await clone_thread_messages(
+        storage_id=interface.storage_id, old_thread_id=interface.thread_id, new_thread_id=new_thread_id
+    )
+    message = f"✅ Thread cloned: {name} (ID: {new_thread_id}). {cloned_messages} messages copied."
+
+    await interface.send_message(message=message)
+    await interface.send_message(message=message, thread_id=new_thread_id)
+    return None
+
+
+async def handle_drop_thread(interface: UserInterface, args: list[str] | None = None) -> None:
+    """Handle /drop_thread command: permanently delete the current thread and all its messages.
+
+    Args:
+        interface: The user interface instance.
+        args: Optional list of arguments (e.g. for confirmation).
+    """
+
+    if interface.thread_id == 0:
+        await interface.send_message(message="❌ Cannot delete the default thread.")
+        return None
+
+    if not args or "confirm" not in args:
+        await interface.send_message(
+            message="⚠️ This will permanently delete this thread and all its messages. "
+            "Type `/drop_thread confirm` to proceed."
+        )
+        return None
+
+    success = await interface.delete_thread()
+    if not success:
+        await interface.send_message(
+            message="❌ Failed to delete thread. Make sure the bot has the required permissions."
+        )
+        return None
+
+    await reset_chat_history(storage_id=interface.storage_id, thread_id=interface.thread_id)
+    await delete_thread_from_map(storage_id=interface.storage_id, thread_id=interface.thread_id)
+    return None

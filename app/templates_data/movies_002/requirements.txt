@@ -1,0 +1,4 @@
+requests
+python-telegram-bot[job-queue]
+
+# auto-added by TikZoom curator

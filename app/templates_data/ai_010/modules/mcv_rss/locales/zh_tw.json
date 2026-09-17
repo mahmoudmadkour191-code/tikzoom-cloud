@@ -1,0 +1,8 @@
+{
+    "mcv_rss.help.mcbv-rss.desc": "啟用後商店更新 Minecraft 基岩版時會自動推播訊息。",
+    "mcv_rss.help.mcv-jira-rss.desc": "啟用後 Mojira 更新 Java 版時會自動推播訊息。",
+    "mcv_rss.help.mcv-rss.desc": "啟用後 Minecraft 啟動器更新 Java 版時會自動推播訊息。",
+    "mcv_rss.message.mcbv-rss": "Google Play 商店已更新基岩版 ${version} 正式版。",
+    "mcv_rss.message.mcv-rss.release": "啟動器已更新 ${version} 正式版。\n更新時間：${record_time}\n推播時間：${posted_time}",
+    "mcv_rss.message.mcv-rss.snapshot": "啟動器已更新 ${version} 快照。\n更新時間：${record_time}\n推播時間：${posted_time}"
+}

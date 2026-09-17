@@ -1,0 +1,58 @@
+services:
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api:latest
+    env_file:
+      - data/docker.env
+    environment:
+      TELEGRAM_LOCAL: "1"
+    volumes:
+      - telegram_bot_api_data:/var/lib/telegram-bot-api
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: korone
+      POSTGRES_USER: korone
+      POSTGRES_PASSWORD: korone
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    restart: unless-stopped
+
+  redis:
+    image: redis:8
+    restart: unless-stopped
+
+  korone-bot:
+    build: .
+    user: "101:101"
+    env_file:
+      - data/config.env
+    environment:
+      DB_URL: postgresql+asyncpg://korone:korone@postgres:5432/korone
+      KORONE_PROJECT_ROOT: /app
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      BOTAPI_SERVER: http://telegram-bot-api:8081
+      WEB_SERVER_PORT: 9669
+    depends_on:
+      - telegram-bot-api
+      - postgres
+      - redis
+    volumes:
+      - telegram_bot_api_data:/var/lib/telegram-bot-api:ro
+    restart: unless-stopped
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    env_file:
+      - data/docker.env
+    command: tunnel run
+    depends_on:
+      - korone-bot
+
+volumes:
+  postgres_data:
+  telegram_bot_api_data:

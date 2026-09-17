@@ -1,0 +1,1269 @@
+import asyncio
+import re
+import urllib.parse
+from copy import deepcopy
+from datetime import datetime, UTC
+
+import orjson
+from attrs import define, field
+from bs4 import BeautifulSoup
+
+import core.utils.html2text as html2text
+from core.builtins.message.internal import I18NContext, Url
+from core.builtins.session.internal import MessageSession
+from core.config.base import BaseConfig, CoreConfig
+from core.constants.exceptions import AbuseWarning, NoReportException
+from core.utils.dirty_check import check
+from core.i18n import Locale
+from core.logger import Logger
+from core.utils.http import get_url
+from core.utils.url_audit import evaluate_url_policy
+from core.utils.web_render import web_render, SourceOptions
+from modules.wiki.database.models import WikiSiteInfo
+from modules.wiki.utils.bot import BotAccount
+from modules.wiki.utils.disambiguation import DisambiguationBlock, is_disambiguation_page, parse_disambiguation_html
+from modules.wiki.utils.summarize import extract_summary, truncate_summary
+from .mapping import *
+
+default_locale = BaseConfig.default_locale
+enable_tos = CoreConfig.enable_tos
+MAX_RESEARCH_SUGGESTIONS = 5
+
+
+def _has_manual_anchor(html: str, section: str) -> bool:
+    """检查渲染正文中是否存在与 URL 片段匹配的手动锚点。"""
+    normalized = urllib.parse.unquote(section).replace(" ", "_")
+    soup = BeautifulSoup(html, "html.parser")
+    for anchor in soup.find_all("span", id=True):
+        if "anchor" in anchor.get("class", []) and anchor["id"].replace(" ", "_") == normalized:
+            return True
+    return False
+
+
+def _merge_research_suggestions(search_results, limit: int = MAX_RESEARCH_SUGGESTIONS) -> list[str]:
+    """Merge ordered search-mode results into a unique, bounded suggestion list."""
+    suggestions = []
+    for titles, _invalid_namespace in search_results:
+        for title in titles:
+            if title not in suggestions:
+                suggestions.append(title)
+            if len(suggestions) >= limit:
+                return suggestions
+    return suggestions
+
+
+class InvalidWikiError(Exception):
+    pass
+
+
+class BlockedWikiError(InvalidWikiError):
+    def __init__(self, url: str):
+        super().__init__(url)
+        self.url = url
+
+
+@define
+class QueryInfo:
+    api: str
+    headers: dict[str, str] = field(
+        factory=lambda: {"accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"}
+    )
+    prefix: str = ""
+    locale: Locale = field(factory=lambda: Locale(default_locale))
+
+    @classmethod
+    def assign(
+        cls,
+        api: str,
+        headers: dict[str, str],
+        prefix: str = "",
+        locale: str = default_locale,
+    ):
+        return deepcopy(cls(api=api, headers=headers, prefix=prefix, locale=Locale(locale)))
+
+
+@define
+class WikiInfo:
+    api: str = ""
+    articlepath: str = ""
+    extensions: list[str] = field(factory=list)
+    interwiki: dict[str, str] = field(factory=dict)
+    realurl: str = ""
+    name: str = ""
+    namespaces: dict[str, int] = field(factory=dict)
+    namespaces_local: dict[str, str] = field(factory=dict)
+    namespacealiases: dict[str, str] = field(factory=dict)
+    is_allowed: bool = False
+    is_blocked: bool = False
+    script: str = ""
+    logo_url: str = ""
+    lang: str = None
+    wikiid: str = None
+
+
+@define
+class WikiStatus:
+    available: bool
+    value: WikiInfo | bool
+    message: str
+
+
+@define
+class PageInfo:
+    info: WikiInfo
+    title: str | None
+    id: int = -1
+    before_title: str | None = None
+    link: str | None = None
+    edit_link: str | None = None
+    file: str | None = None
+    desc: str | None = None
+    args: str | None = None
+    selected_section: str | None = None
+    sections: list[str] = None
+    interwiki_prefix: str | None = ""
+    status: bool = True
+    templates: list[str] = None
+    is_disambiguation: bool = False
+    disambiguation_blocks: list[DisambiguationBlock] = field(factory=list)
+    before_page_property: str = "page"
+    page_property: str = "page"
+    has_template_doc: bool = False
+    invalid_namespace: str | bool = False
+    possible_research_title: list[str] = None
+    body_class: list[str] = None
+    invalid_section: bool = False
+    is_manual_anchor: bool = False
+    is_talk_page: bool = False
+    is_forum: bool = False
+    is_forum_topic: bool = False
+    forum_data: dict = field(factory=dict)
+
+
+class WikiLib:
+    def __init__(self, url: str, headers=None, locale="zh_cn"):
+        self.url = url
+        self.wiki_info = WikiInfo()
+        self.locale = Locale(locale)
+
+        if not headers:
+            headers = {}
+        self.headers = headers
+
+    @staticmethod
+    def should_check_content(session: MessageSession | None = None) -> bool:
+        """当前会话是否要求检查 Wiki 返回内容。"""
+        if session is None:
+            return False
+        session_info = getattr(session, "session_info", None)
+        if session_info is None:
+            return False
+        return bool(getattr(session_info, "require_check_dirty_words", False))
+
+    async def get_json_from_api(self, api, _no_login=False, **kwargs) -> dict:
+        cookies = None
+        Logger.debug(BotAccount.cookies)
+        if api in BotAccount.cookies and not _no_login:
+            cookies = BotAccount.cookies[api]
+        if api in redirect_list:
+            api = redirect_list[api]
+        if kwargs:
+            api = f"{api}?{urllib.parse.urlencode(kwargs)}&format=json"
+            Logger.debug(api)
+        else:
+            raise ValueError("kwargs is None")
+        request_by_webrender = False
+        for x in request_by_web_render_list:
+            if x.match(api):
+                request_by_webrender = True
+
+        try:
+            if not request_by_webrender:
+                return await get_url(
+                    api,
+                    status_code=200,
+                    headers=self.headers,
+                    fmt="json",
+                    request_private_ip=False,
+                    cookies=cookies,
+                )
+            req = await web_render.source(SourceOptions(url=api, raw_text=True))
+            return orjson.loads(req)
+
+        except Exception as e:
+            # Exception handling for moegirl.org.cn
+            if api.find("moegirl.org.cn") != -1:
+                raise InvalidWikiError(str(I18NContext("wiki.message.utils.wikilib.get_failed.moegirl")))
+            raise NoReportException(str(e))
+
+    async def rearrange_siteinfo(self, info: dict | str | bytes, wiki_api_link) -> WikiInfo:
+        if isinstance(info, (str, bytes)):
+            info = orjson.loads(info)
+        if not isinstance(info, dict) or not isinstance(info.get("query"), dict):
+            error = info.get("error") if isinstance(info, dict) else None
+            if isinstance(error, dict):
+                code = error.get("code", "")
+                detail = error.get("info", "")
+                message = ": ".join(x for x in (code, detail) if x)
+            else:
+                message = ""
+            if not message:
+                message = orjson.dumps(info).decode()
+            raise InvalidWikiError(message)
+        extensions = info["query"]["extensions"]
+        ext_list = []
+        for ext in extensions:
+            ext_list.append(ext["name"])
+        real_url = info["query"]["general"]["server"]
+        if real_url.startswith("//"):
+            real_url = self.url.split("//")[0] + real_url
+        namespaces = {}
+        namespaces_local = {}
+        namespacealiases = {}
+        for x in info["query"]["namespaces"]:
+            try:
+                ns = info["query"]["namespaces"][x]
+                if "*" in ns:
+                    namespaces[ns["*"]] = ns["id"]
+                if "canonical" in ns:
+                    namespaces[ns["canonical"]] = ns["id"]
+                if "*" in ns and "canonical" in ns:
+                    namespaces_local.update({ns["*"]: ns["canonical"]})
+            except Exception:
+                Logger.exception()
+        for x in info["query"]["namespacealiases"]:
+            if "*" in x:
+                namespaces[x["*"]] = x["id"]
+                namespacealiases[x["*"].lower()] = x["*"]
+        interwiki_map = info["query"]["interwikimap"]
+        interwiki_dict = {}
+        for interwiki in interwiki_map:
+            interwiki_dict[interwiki["prefix"]] = interwiki["url"]
+        policy = evaluate_url_policy(wiki_api_link)
+        return WikiInfo(
+            articlepath=real_url + info["query"]["general"]["articlepath"],
+            extensions=ext_list,
+            name=info["query"]["general"]["sitename"],
+            lang=info["query"]["general"].get("lang"),
+            wikiid=info["query"]["general"].get("wikiid"),
+            realurl=real_url,
+            api=wiki_api_link,
+            namespaces=namespaces,
+            namespaces_local=namespaces_local,
+            namespacealiases=namespacealiases,
+            interwiki=interwiki_dict,
+            is_allowed=policy.allowed,
+            is_blocked=policy.blocked,
+            script=real_url + info["query"]["general"]["script"],
+            logo_url=info["query"]["general"].get("logo"),
+        )
+
+    async def check_wiki_available(self, ignore_url_policy: bool = False):
+        if not ignore_url_policy and evaluate_url_policy(self.url).blocked:
+            raise BlockedWikiError(self.url)
+        try:
+            self.url = re.sub(
+                r"https://zh\.moegirl\.org\.cn/",
+                "https://mzh.moegirl.org.cn/",
+                self.url,
+            )
+            # 萌娘百科强制使用移动版 API
+            api_match = re.match(r"(https?://.*?/api.php$)", self.url)
+            wiki_api_link = api_match.group(1)
+        except Exception:
+            try:
+                get_page = await get_url(self.url, status_code=None, fmt="text", headers=self.headers)
+                if get_page.find("https://w.wiki/4wJS") != -1:
+                    return WikiStatus(
+                        available=False,
+                        value=False,
+                        message=str(I18NContext("wiki.message.utils.wikilib.get_failed.wikimedia")),
+                    )
+                if get_page.find("<title>Attention Required! | Cloudflare</title>") != -1:
+                    return WikiStatus(
+                        available=False,
+                        value=False,
+                        message=str(I18NContext("wiki.message.utils.wikilib.get_failed.cloudflare")),
+                    )
+                try:
+                    m = re.findall(
+                        r"(?im)<\s*link\s*rel=\"EditURI\"\s*type=\"application/rsd\+xml\"\s*href=\"([^>]+?)\?action=rsd\"\s*/?\s*>",
+                        get_page,
+                    )
+                    api_match = m[0]
+                    if api_match.startswith("//"):
+                        api_match = self.url.split("//")[0] + api_match
+                    # Logger.info(api_match)
+                    wiki_api_link = api_match
+                except IndexError:
+                    Logger.trace(get_page)
+                    return WikiStatus(
+                        available=False,
+                        value=False,
+                        message=str(I18NContext("wiki.message.utils.wikilib.get_failed.not_mediawiki")),
+                    )
+            except TimeoutError:
+                return WikiStatus(
+                    available=False,
+                    value=False,
+                    message=str(I18NContext("wiki.message.utils.wikilib.get_failed.timeout")),
+                )
+            except Exception as e:
+                Logger.exception()
+                if str(e).startswith("403"):
+                    message = str(I18NContext("wiki.message.utils.wikilib.get_failed.forbidden"))
+                elif not re.match(r"^(https?://).*", self.url):
+                    message = str(I18NContext("wiki.message.utils.wikilib.get_failed.no_http_or_https_headers"))
+                else:
+                    message = str(I18NContext("wiki.message.utils.wikilib.get_failed.may_not_mediawiki")) + str(e)
+                if self.url.find("moegirl.org.cn") != -1:
+                    message += "\n" + str(I18NContext("wiki.message.utils.wikilib.get_failed.moegirl"))
+                return WikiStatus(available=False, value=False, message=message)
+        if wiki_api_link in redirect_list:
+            wiki_api_link = redirect_list[wiki_api_link]
+        if not ignore_url_policy and evaluate_url_policy(wiki_api_link).blocked:
+            raise BlockedWikiError(wiki_api_link)
+        get_cache_info = await WikiSiteInfo.get_or_none(api_link=wiki_api_link)
+        if get_cache_info:
+            if (
+                get_cache_info.site_info
+                and datetime.now(UTC).timestamp() - get_cache_info.timestamp.timestamp() < 43200
+            ):
+                try:
+                    cached_info = await self.rearrange_siteinfo(get_cache_info.site_info, wiki_api_link)
+                except (InvalidWikiError, KeyError, TypeError, orjson.JSONDecodeError):
+                    get_cache_info.site_info = {}
+                    await get_cache_info.save()
+                else:
+                    return WikiStatus(
+                        available=True,
+                        value=cached_info,
+                        message="",
+                    )
+        else:
+            get_cache_info = await WikiSiteInfo.create(api_link=wiki_api_link)
+        try:
+            get_json = await self.get_json_from_api(
+                wiki_api_link,
+                action="query",
+                meta="siteinfo",
+                siprop="general|namespaces|namespacealiases|interwikimap|extensions",
+            )
+            info = await self.rearrange_siteinfo(get_json, wiki_api_link)
+        except Exception as e:
+            if CoreConfig.debug:
+                Logger.exception()
+            message = str(I18NContext("wiki.message.utils.wikilib.get_failed.api")) + str(e)
+            if self.url.find("moegirl.org.cn") != -1:
+                message += "\n" + str(I18NContext("wiki.message.utils.wikilib.get_failed.moegirl"))
+            return WikiStatus(available=False, value=False, message=message)
+        get_cache_info.site_info = get_json
+        # 须带时区：不带时区的时间会被 Tortoise 当作 UTC 存入，缓存时间凭空提前一个时区差，
+        # 上面的 43200 秒过期判断会因此多留缓存整整一个时区差的时长
+        get_cache_info.timestamp = datetime.now(UTC)
+        await get_cache_info.save()
+        return WikiStatus(
+            available=True,
+            value=info,
+            message=(
+                str(I18NContext("wiki.message.utils.wikilib.no_textextracts"))
+                if "TextExtracts" not in info.extensions
+                else ""
+            ),
+        )
+
+    async def check_wiki_info_from_database_cache(self):
+        """
+        check wiki_info from database cache, the result maybe incorrect since some wiki that distinguish languages by url path
+        """
+        parse_url = urllib.parse.urlparse(self.url)
+        get = await WikiSiteInfo.get_like_this(parse_url.scheme + "://" + parse_url.netloc)
+        if get:
+            api_link = get.api_link
+            if api_link in redirect_list:
+                api_link = redirect_list[api_link]
+            return WikiStatus(
+                available=True,
+                value=await self.rearrange_siteinfo(get.site_info, api_link),
+                message="",
+            )
+        return WikiStatus(available=False, value=False, message="")
+
+    async def fixup_wiki_info(self):
+        """
+        autofill missing required information for wiki_info
+        """
+        if not self.wiki_info.api:
+            wiki_info = await self.check_wiki_available()
+            if wiki_info.available:
+                self.wiki_info = wiki_info.value
+            else:
+                raise InvalidWikiError(wiki_info.message if wiki_info.message != "" else "")
+
+    @staticmethod
+    def _title_from_article_url(article_url: str, articlepath: str) -> str | None:
+        """按目标 Wiki 的 articlepath 从完整页面 URL 中还原标题。"""
+
+        def extract(template: str, value: str) -> str | None:
+            if "$1" not in template:
+                return None
+            pattern = re.escape(template).replace(re.escape("$1"), "(.*)")
+            if match := re.fullmatch(pattern, value):
+                return match.group(1)
+            return None
+
+        parsed_url = urllib.parse.urlsplit(article_url)
+        parsed_articlepath = urllib.parse.urlsplit(articlepath)
+        if path_title := extract(parsed_articlepath.path, parsed_url.path):
+            return urllib.parse.unquote(path_title)
+
+        article_query = urllib.parse.parse_qsl(parsed_articlepath.query, keep_blank_values=True)
+        url_query = urllib.parse.parse_qs(parsed_url.query, keep_blank_values=True)
+        for key, template_value in article_query:
+            if "$1" not in template_value:
+                continue
+            for value in url_query.get(key, []):
+                if query_title := extract(template_value, value):
+                    return query_title
+        return None
+
+    async def _resolve_interwiki_target_title(self, fallback_title: str) -> str:
+        """发现 Interwiki 目标 API，并从其 articlepath 还原实际页面标题。"""
+        await self.fixup_wiki_info()
+        return self._title_from_article_url(self.url, self.wiki_info.articlepath) or fallback_title
+
+    async def get_json(self, _no_login=False, **kwargs) -> dict:
+        await self.fixup_wiki_info()
+        if evaluate_url_policy(self.wiki_info.api).blocked:
+            raise BlockedWikiError(self.wiki_info.api)
+        return await self.get_json_from_api(self.wiki_info.api, _no_login=_no_login, **kwargs)
+
+    async def return_api(self, _no_login=False, _no_format=False, **kwargs) -> str:
+        """
+        return formatted api links with kwargs
+        """
+        await self.fixup_wiki_info()
+        api = self.wiki_info.api
+        if api in redirect_list:
+            api = redirect_list[api]
+        if kwargs:
+            api = api + "?" + urllib.parse.urlencode(kwargs) + ("&format=json" if not _no_format else "")
+            Logger.debug(api)
+        else:
+            raise ValueError("kwargs is None")
+        return api
+
+    @staticmethod
+    def parse_text(text):
+        """
+        parse text to get a short description
+        """
+        return truncate_summary(text)
+
+    async def get_html_to_text(self, page_name, section=None):
+        """
+        get html and convert to text
+        """
+        await self.fixup_wiki_info()
+        get_parse = await self.get_json(action="parse", page=page_name, prop="text")
+        h = html2text.HTML2Text()
+        h.ignore_links = True
+        h.ignore_images = True
+        h.ignore_tables = True
+        h.single_line_break = True
+        parse_text = get_parse["parse"]["text"]["*"]
+        t = h.handle(parse_text)
+        if len(t) > 65535:
+            return str(I18NContext("wiki.message.utils.wikilib.error.text_too_long"))
+        if section:
+            for i in range(1, 7):  # H1 to H6
+                s = re.split(r"(.*" + "#" * i + r"[^#].*\[.*?])", t, re.M | re.S)  # e.g. ### Section [..]
+                ls = len(s)
+                if ls > 1:  # found section
+                    ii = 0
+                    for x in s:
+                        ii += 1
+                        if re.match(r"" + "#" * i + "[^#]" + section + r"\[.*?]", x):
+                            break
+                    if ii != ls:
+                        t = "".join(s[ii:])
+                        break
+        return t
+
+    async def get_wikitext(self, page_name):
+        await self.fixup_wiki_info()
+        try:
+            load_desc = await self.get_json(action="parse", page=page_name, prop="wikitext")
+            desc = load_desc["parse"]["wikitext"]["*"]
+        except Exception:
+            Logger.exception()
+            desc = ""
+        return desc
+
+    @staticmethod
+    def _get_revision_content(page_raw: dict) -> str:
+        """
+        从查询结果中取出页面的 Wikitext。
+
+        MediaWiki 1.32 起内容置于 slots 结构下，更低版本直接置于 revision 上，
+        两种结构都要认。
+
+        :param page_raw: 查询结果中单个页面的原始数据。
+        :returns: 页面的 Wikitext；无修订内容时返回空字符串。
+        """
+        revisions = page_raw.get("revisions")
+        if not revisions:
+            return ""
+        revision = revisions[0]
+        slots = revision.get("slots")
+        if slots:
+            return slots.get("main", {}).get("*", "")
+        return revision.get("*", "")
+
+    async def search_page(self, search_text, namespace="*", limit=10, srwhat="text"):
+        await self.fixup_wiki_info()
+        title_split = search_text.split(":")
+        if len(title_split) > 1 and title_split[0] in self.wiki_info.interwiki:
+            search_text = ":".join(title_split[1:])
+            q_site = WikiLib(self.wiki_info.interwiki[title_split[0]], self.headers)
+            result = await q_site.search_page(search_text, namespace, limit)
+            result_ = []
+            for r in result:
+                result_.append(title_split[0] + ":" + r)
+            return result_
+        get_page = await self.get_json(
+            action="query",
+            list="search",
+            srsearch=search_text,
+            srnamespace=namespace,
+            srwhat=srwhat,
+            srlimit=limit,
+            srenablerewrites=True,
+        )
+        pagenames = []
+        for x in get_page["query"]["search"]:
+            pagenames.append(x["title"])
+        return pagenames
+
+    async def research_page(self, page_name: str, namespace="*", srwhat="text"):
+        get_titles, invalid_namespace = await self.research_pages(
+            page_name,
+            namespace=namespace,
+            limit=1,
+            srwhat=srwhat,
+        )
+        new_page_name = get_titles[0] if get_titles else None
+        return new_page_name, invalid_namespace
+
+    async def research_pages(
+        self,
+        page_name: str,
+        namespace="*",
+        limit: int = MAX_RESEARCH_SUGGESTIONS,
+        srwhat="text",
+    ):
+        await self.fixup_wiki_info()
+        get_titles = await self.search_page(page_name, namespace=namespace, limit=limit, srwhat=srwhat)
+        title_split = page_name.split(":")
+        invalid_namespace = False
+        if (
+            len(title_split) > 1
+            and title_split[0] not in self.wiki_info.namespaces
+            and title_split[0].lower() not in self.wiki_info.namespacealiases
+        ):
+            invalid_namespace = title_split[0]
+        return get_titles[:limit], invalid_namespace
+
+    async def get_page_body_class(self, page_name):
+        await self.fixup_wiki_info()
+        get_parse = await self.get_json(action="parse", page=page_name, prop="headhtml")
+        parse_head_html = BeautifulSoup(get_parse["parse"]["headhtml"]["*"], "html.parser")
+        return parse_head_html.body["class"]
+
+    async def get_forums_data(self, page_name):
+        parse = BeautifulSoup(
+            (await self.get_json(action="parse", page=page_name, prop="text"))["parse"]["text"]["*"],
+            "html.parser",
+        )
+        parse_table = parse.find_all("table", class_="wikitable")[0]
+        parsed_data = {}
+        label_ = 0
+        for tr in parse_table.find_all("tr"):
+            if label_ == 0:
+                label = "#"
+            else:
+                label = str(label_)
+            parsed_data[label] = {"data": []}
+            tdi = 0
+
+            if label_ == 0:
+                for th in tr.find_all("th"):
+                    parsed_data[label]["data"].append(th.text)
+            else:
+                for td in tr.find_all("td"):
+                    if tdi == 0:
+                        if td.find("a"):
+                            parsed_data[label]["data"].append(td.find("a").text)
+                            parsed_data[label]["text"] = td.find("a").attrs["title"]
+                        else:
+                            parsed_data[label]["data"].append(td.text)
+                    else:
+                        parsed_data[label]["data"].append(td.text)
+                    tdi += 1
+            label_ += 1
+
+        return parsed_data
+
+    async def parse_page_info(
+        self,
+        title: str | None = None,
+        pageid: int | None = None,
+        inline=False,
+        lang=None,
+        _doc=False,
+        _tried=0,
+        _prefix="",
+        _iw=False,
+        _search=False,
+        session: MessageSession | None = None,
+    ) -> PageInfo:
+        """
+        :param title: 页面标题，如果为None，则使用pageid。
+        :param pageid: 页面id。
+        :param inline: 是否为inline模式。
+        :param lang: 所需的对应语言版本。
+        :param _doc: 是否为文档模式，仅用作内部递归调用判断。
+        :param _tried: 尝试iw跳转的次数，仅用作内部递归调用判断。
+        :param _prefix: iw前缀，仅用作内部递归调用判断。
+        :param _iw: 是否为iw模式，仅用作内部递归调用判断。
+        :param _search: 是否为搜索模式，仅用作内部递归调用判断。
+        :param session: 消息会话，用作检查结果时使用。
+        """
+        if title:
+            if m := re.match(r"w:c:.*?:(.*)", title) and self.wiki_info.api.find("fandom.com") != -1:
+                nq = WikiLib("https://community.fandom.com/wiki/" + title, self.headers)
+                return await nq.parse_page_info(m.group(1))
+        try:
+            await self.fixup_wiki_info()
+        except BlockedWikiError:
+            raise
+        except InvalidWikiError as e:
+            link = None
+            if self.url.find("$1") != -1:
+                link = self.url.replace("$1", title)
+            return PageInfo(
+                title=title if title else pageid,
+                id=pageid,
+                link=link,
+                desc=str(I18NContext("message.error")) + str(e),
+                info=self.wiki_info,
+                templates=[],
+            )
+        ban = False
+
+        # if redirected too many times, raise AbuseWarning
+        if _tried > 5 and enable_tos:
+            raise AbuseWarning("{I18N:tos.message.reason.too_many_redirects}")
+        selected_section = None
+        query_props = ["info", "imageinfo", "langlinks", "templates"]
+
+        # special handling for moegirl.org.cn
+        if self.wiki_info.api.find("moegirl.org.cn") != -1:
+            query_props.remove("imageinfo")
+
+        if title:  # parse title, generate args
+            if inline:
+                split_name = re.split(r"(#)", title)
+            else:
+                split_name = re.split(r"([#?])", title)
+            title = re.sub("_", " ", split_name[0])
+            arg_list = []
+            _arg_list = []
+            section_list = []
+            has_section = False
+            section_code = False
+
+            # handling section and query args in title
+            for a in split_name[1:]:
+                if len(a) > 0:
+                    if a[0] == "#":
+                        section_code = True
+                        has_section = True
+                    if a[0] == "?":
+                        section_code = False
+                    if section_code:
+                        arg_list.append(urllib.parse.quote(a))
+                        section_list.append(a)
+                    else:
+                        _arg_list.append(a)
+            _arg = "".join(_arg_list)
+            if _arg.find("=") != -1:
+                arg_list.append(_arg)
+            else:
+                if len(arg_list) > 0:
+                    arg_list[-1] += _arg
+                else:
+                    title += _arg
+            if len(section_list) > 1:
+                selected_section = "".join(section_list)[1:].replace(" ", "_")
+
+            # generate base PageInfo
+            page_info = PageInfo(
+                info=self.wiki_info,
+                title=title,
+                args="".join(arg_list),
+                interwiki_prefix=_prefix,
+            )
+            # if selected section is None, but used # in title, mark invalid_section
+            page_info.selected_section = selected_section
+            if not selected_section and has_section:
+                page_info.invalid_section = True
+
+            # generate final query string
+            query_string = {
+                "action": "query",
+                "prop": "|".join(query_props),
+                "llprop": "url",
+                "inprop": "url",
+                "iiprop": "url",
+                "iwurl": "true",
+                "redirects": "true",
+                "converttitles": "true",
+                "titles": title,
+            }
+
+        elif pageid:  # parse pageid
+            # generate base PageInfo
+            page_info = PageInfo(info=self.wiki_info, title=title, args="", interwiki_prefix=_prefix)
+            # generate final query string
+            query_string = {
+                "action": "query",
+                "prop": "|".join(query_props),
+                "llprop": "url",
+                "inprop": "url",
+                "iiprop": "url",
+                "redirects": "true",
+                "converttitles": "true",
+                "pageids": pageid,
+            }
+        else:
+            # neither title nor pageid is given, return empty PageInfo with base article link for wiki
+            return PageInfo(
+                title="",
+                link=self.wiki_info.articlepath.replace("$1", ""),
+                info=self.wiki_info,
+                interwiki_prefix=_prefix,
+                templates=[],
+            )
+
+        # if TextExtracts extension is available and no selected section, add extracts to query
+        use_textextracts = "TextExtracts" in self.wiki_info.extensions
+        # 模板文档页不走 TextExtracts：该扩展为条目而设，会把 documentation header、
+        # shortcut 与 TemplateData 一概视作非正文滤去，只剩「参见」一类的章节残留，
+        # 而文档页的说明往往正写在 TemplateData 里，须由本地解析取出
+        is_template_doc = _doc or title.endswith("/doc")
+        use_extracts = use_textextracts and not selected_section and not is_template_doc
+        if use_extracts:
+            query_props += ["extracts", "pageprops"]
+            query_string.update(
+                {
+                    "prop": "|".join(query_props),
+                    "ppprop": "description|displaytitle|disambiguation|infoboxes",
+                    "explaintext": "true",
+                    "exsectionformat": "plain",
+                    "exchars": "300",
+                }
+            )
+        else:
+            # 摘要须由本地解析 Wikitext 得出。此处随主查询一并取回，无须额外请求。
+            # rvslots 自 MediaWiki 1.32 起提供，更低版本会忽略该参数并返回旧式结构，
+            # 故读取时两种结构都要认。
+            query_props += ["revisions", "pageprops"]
+            query_string.update(
+                {
+                    "prop": "|".join(query_props),
+                    "ppprop": "description|displaytitle|disambiguation|infoboxes",
+                    "rvprop": "content",
+                    "rvslots": "main",
+                }
+            )
+
+        # get page info from api
+        get_page = await self.get_json(**query_string)
+
+        # parse the result
+        query = get_page.get("query")
+
+        # if no query returned, return error PageInfo
+        if not query:
+            return PageInfo(
+                title=title,
+                desc=str(I18NContext("wiki.message.utils.wikilib.error.empty")),
+                info=self.wiki_info,
+            )
+
+        # handle redirects, normalized titles, converted titles
+        normalized_: list[dict[str, str]] = query.get("normalized")
+        if normalized_:
+            for n in normalized_:
+                if n["from"] == title:
+                    page_info.before_title = n["from"]
+                    page_info.title = n["to"]
+        converted_: list[dict[str, str]] = query.get("converted")
+        if converted_:
+            for c in converted_:
+                if c["from"] == title:
+                    page_info.before_title = c["from"]
+                    page_info.title = c["to"]
+        redirects_: list[dict[str, str]] = query.get("redirects")
+        if redirects_:
+            for r in redirects_:
+                if r["from"] == title:
+                    page_info.before_title = r["from"]
+                    page_info.title = r["to"]
+
+        # get page data
+        pages: dict[str, dict] = query.get("pages")
+        if pages:
+            for page_id in pages:
+                # set default values
+                page_info.status = False
+                page_info.id = int(page_id)
+                page_raw = pages[page_id]
+                if "title" in page_raw:
+                    page_info.title = page_raw["title"]
+                if "editurl" in page_raw:
+                    page_info.edit_link = page_raw["editurl"]
+
+                if "invalid" in page_raw:
+                    match = re.search(r"\"(.)\"", page_raw["invalidreason"])
+                    if match:
+                        rs = str(
+                            I18NContext(
+                                "wiki.message.utils.wikilib.invalid.invalid_character",
+                                char=match.group(1),
+                            )
+                        )
+                    else:
+                        rs = str(I18NContext("wiki.message.utils.wikilib.invalid.empty_title"))
+                    page_info.desc = rs
+                elif "missing" in page_raw:
+                    # if page is missing... try to research
+                    if "title" in page_raw:
+                        if "known" in page_raw:
+                            # if page is known to be missing... return link without desc
+                            full_url = (
+                                re.sub(
+                                    r"\$1",
+                                    urllib.parse.quote(page_info.title.encode("UTF-8")),
+                                    self.wiki_info.articlepath,
+                                )
+                                + page_info.args
+                            )
+                            page_info.link = full_url
+                            file = None
+                            if "imageinfo" in page_raw:
+                                file = page_raw["imageinfo"][0]["url"]
+                            page_info.file = file
+                            page_info.status = True
+                        else:
+                            # try to reparse the title
+                            split_title = title.split(":")
+                            reparse = False
+                            if (
+                                len(split_title) > 1
+                                and split_title[0] in self.wiki_info.namespaces_local
+                                and self.wiki_info.namespaces_local[split_title[0]] == "Template"
+                            ):
+                                # if Template namespace, reparse title without Template namespace
+                                rstitle = ":".join(split_title[1:]) + page_info.args
+                                reparse = await self.parse_page_info(rstitle)
+                                page_info.before_page_property = "template"
+                            elif (
+                                len(split_title) > 1
+                                and split_title[0].lower() in self.wiki_info.namespacealiases
+                                and not _search
+                            ):
+                                # reparse title with canonical namespace... e.g. "MCW" -> "Minecraft Wiki"
+                                rstitle = (
+                                    f"{self.wiki_info.namespacealiases[split_title[0].lower()]}:"
+                                    + ":".join(split_title[1:])
+                                    + page_info.args
+                                )
+                                reparse = await self.parse_page_info(rstitle, _search=True)
+                            if reparse:  # if reparsed successfully, use the reparsed result
+                                page_info.before_title = page_info.title
+                                page_info.title = reparse.title
+                                page_info.link = reparse.link
+                                page_info.desc = reparse.desc
+                                page_info.file = reparse.file
+                                page_info.status = reparse.status
+                                page_info.templates = reparse.templates
+                                page_info.is_disambiguation = reparse.is_disambiguation
+                                page_info.disambiguation_blocks = reparse.disambiguation_blocks
+                                page_info.is_manual_anchor = reparse.is_manual_anchor
+                                page_info.invalid_namespace = reparse.invalid_namespace
+                                page_info.possible_research_title = reparse.possible_research_title
+                            else:
+                                # otherwise, try to research the page
+                                namespace = "*"
+                                if len(split_title) > 1 and split_title[0] in self.wiki_info.namespaces:
+                                    # if namespace exists, use it
+                                    namespace = self.wiki_info.namespaces[split_title[0]]
+                                # search by text, title, nearmatch
+                                srwhats = ["text", "title", "nearmatch"]
+                                preferred = None
+                                invalid_namespace = False
+
+                                async def search_something(srwhat):
+                                    try:
+                                        research = await self.research_pages(
+                                            page_info.title,
+                                            namespace,
+                                            limit=MAX_RESEARCH_SUGGESTIONS,
+                                            srwhat=srwhat,
+                                        )
+                                        if srwhat == "text":
+                                            nonlocal preferred
+                                            nonlocal invalid_namespace
+                                            if research[0]:
+                                                preferred = research[0][0]
+                                            invalid_namespace = research[1]
+                                        return research
+                                    except Exception:
+                                        if CoreConfig.debug:
+                                            Logger.exception()
+                                        return [], False
+
+                                searches = []
+                                searched_result = []
+                                for srwhat in srwhats:
+                                    searches.append(search_something(srwhat))
+                                # request concurrently
+                                gather_search = await asyncio.gather(*searches)
+                                searched_result = _merge_research_suggestions(gather_search)
+
+                                if not preferred and searched_result:
+                                    preferred = searched_result[0]
+
+                                # if found possible research result, set possible_research_title
+
+                                page_info.before_title = page_info.title
+                                page_info.title = preferred
+                                page_info.invalid_namespace = invalid_namespace
+                                page_info.possible_research_title = searched_result
+                else:
+                    # otherwise, assume page exists
+                    page_info.status = True
+
+                    # handling special talk pages and forums
+                    try:
+                        page_info.body_class = await self.get_page_body_class(page_info.title)
+                        if "ns-talk" in page_info.body_class:
+                            page_info.is_talk_page = True
+                        stp = special_talk_page_class.get(page_info.info.api, [])
+                        for sc in stp:
+                            if sc in page_info.body_class:
+                                page_info.is_talk_page = True
+                                break
+                        sfp = forum_class.get(page_info.info.api, [])
+                        for fc in sfp:
+                            if fc in page_info.body_class:
+                                page_info.is_forum = True
+                                page_info.forum_data = await self.get_forums_data(page_info.title)
+                                break
+                        if not page_info.is_forum:
+                            for bc in page_info.body_class:
+                                for fc in sfp:
+                                    if bc.startswith(fc):
+                                        page_info.is_forum_topic = True
+                                        break
+                    except Exception:
+                        Logger.exception()
+
+                    # handling templates
+
+                    templates = page_info.templates = [t["title"] for t in page_raw.get("templates", [])]
+                    page_info.is_disambiguation = is_disambiguation_page(page_raw.get("pageprops"), templates)
+
+                    # handling special talk page
+                    if selected_section or page_info.invalid_section or page_info.is_talk_page:
+                        parse_section_string = {
+                            "action": "parse",
+                            "page": page_info.title,
+                            "prop": "sections",
+                        }
+                        parse_section = await self.get_json(**parse_section_string)
+                        section_list = []
+                        if "parse" in parse_section:
+                            sections = parse_section["parse"]["sections"]
+                            for s in sections:
+                                section_list.append(s["anchor"])
+                            page_info.sections = section_list
+                        if selected_section:
+                            if urllib.parse.unquote(selected_section) not in section_list:
+                                page_info.invalid_section = True
+                                try:
+                                    parsed_page = await self.get_json(
+                                        action="parse",
+                                        page=page_info.title,
+                                        prop="text",
+                                    )
+                                    parsed_text = parsed_page.get("parse", {}).get("text", "")
+                                    if isinstance(parsed_text, dict):
+                                        parsed_text = parsed_text.get("*", "")
+                                    if parsed_text and _has_manual_anchor(parsed_text, selected_section):
+                                        page_info.invalid_section = False
+                                        page_info.is_manual_anchor = True
+                                except Exception:
+                                    Logger.exception("Failed to check Wiki manual section anchor: ")
+
+                    # handling special pages
+                    if "special" in page_raw:
+                        full_url = (
+                            re.sub(
+                                r"\$1",
+                                urllib.parse.quote(title.encode("UTF-8")),
+                                self.wiki_info.articlepath,
+                            )
+                            + page_info.args
+                        )
+                        page_info.link = full_url
+                        page_info.status = True
+                    else:
+                        # handling normal pages
+                        query_langlinks = False
+                        if lang:  # e.g. get page with another language version parameter given
+                            langlinks_ = {}
+                            for x in page_raw.get("langlinks", []):
+                                langlinks_[x["lang"]] = x["url"]
+                            if lang in langlinks_:
+                                query_wiki = WikiLib(
+                                    url=self.wiki_info.interwiki[lang],
+                                    headers=self.headers,
+                                )
+                                await query_wiki.fixup_wiki_info()
+                                query_wiki_info = query_wiki.wiki_info
+                                q_articlepath = query_wiki_info.articlepath.replace("$1", "(.*)")
+                                get_title = re.sub(r"" + q_articlepath, "\\1", langlinks_[lang])
+                                query_langlinks = await query_wiki.parse_page_info(urllib.parse.unquote(get_title))
+                            if "WikibaseClient" in self.wiki_info.extensions and not query_langlinks:
+                                title = (await self.parse_page_info(title)).title
+                                qc_string = {
+                                    "action": "query",
+                                    "meta": "wikibase",
+                                    "wbprop": "url|siteid",
+                                }
+                                query_client_info = await self.get_json(**qc_string)
+                                repo_url = query_client_info["query"]["wikibase"]["repo"]["url"]["base"]
+                                siteid = query_client_info["query"]["wikibase"]["siteid"]
+                                query_target_site = WikiLib(self.wiki_info.interwiki[lang], headers=self.headers)
+                                target_siteid = (await query_target_site.get_json(**qc_string))["query"]["wikibase"][
+                                    "siteid"
+                                ]
+                                qr_wiki_info = WikiLib(repo_url)
+                                qr_string = {
+                                    "action": "wbgetentities",
+                                    "sites": siteid,
+                                    "titles": title,
+                                    "props": "sitelinks/urls",
+                                    "redirects": "yes",
+                                }
+                                qr = await qr_wiki_info.get_json(**qr_string)
+                                if "entities" in qr:
+                                    qr_result = qr["entities"]
+                                    for x in qr_result:
+                                        if "missing" not in qr_result[x]:
+                                            target_site_page_title = qr_result[x]["sitelinks"][target_siteid]["title"]
+                                            q_target = await query_target_site.parse_page_info(target_site_page_title)
+                                            if q_target.status:
+                                                query_langlinks = q_target
+                                                break
+
+                            if lang in self.wiki_info.interwiki and not query_langlinks:
+                                query_wiki = WikiLib(
+                                    url=self.wiki_info.interwiki[lang],
+                                    headers=self.headers,
+                                )
+                                await query_wiki.fixup_wiki_info()
+                                query_wiki_info = query_wiki.wiki_info
+                                q_articlepath = query_wiki_info.articlepath
+                                get_title_schema = re.sub(
+                                    r"" + q_articlepath.replace("$1", "(.*)"),
+                                    "\\1",
+                                    self.wiki_info.interwiki[lang],
+                                )
+                                query_langlinks_ = await query_wiki.parse_page_info(
+                                    get_title_schema.replace("$1", title)
+                                )
+                                if query_langlinks_.status:
+                                    query_langlinks = query_langlinks_
+
+                        if not query_langlinks:  # normal handling
+                            title = page_raw["title"]
+                            page_desc = ""
+                            split_title = title.split(":")
+                            get_desc = True
+                            # handling documentation subpage for templates
+                            if (
+                                not _doc
+                                and len(split_title) > 1
+                                and split_title[0] in self.wiki_info.namespaces_local
+                                and self.wiki_info.namespaces_local[split_title[0]] == "Template"
+                                and "Template:Documentation" in templates
+                            ):
+                                get_all_text = await self.get_wikitext(title)
+                                match_doc = re.match(
+                                    r".*{{documentation\|?(.*?)}}.*",
+                                    get_all_text,
+                                    re.I | re.S,
+                                )
+                                if match_doc:
+                                    match_link = re.match(r"link=(.*)", match_doc.group(1), re.I | re.S)
+                                    if match_link:
+                                        get_doc = match_link.group(1)
+                                    else:
+                                        get_doc = title + "/doc"
+                                    get_desc = False
+                                    get_doc_desc = await self.parse_page_info(get_doc, _doc=True)
+                                    page_desc = get_doc_desc.desc
+                                    if page_desc:
+                                        page_info.has_template_doc = True
+                                    page_info.before_page_property = page_info.page_property = "template"
+                            # get description
+                            if get_desc and not page_info.is_manual_anchor:
+                                if use_extracts:
+                                    raw_desc = page_raw.get("extract")
+                                    if raw_desc:
+                                        page_desc = self.parse_text(raw_desc)
+                                else:
+                                    # 解析不出正文时不再回退至渲染 HTML：那条路径取回的是信息框、
+                                    # 导航栏一类的原始文本，充作摘要没有意义，宁可只给出链接
+                                    page_desc = self.parse_text(
+                                        extract_summary(self._get_revision_content(page_raw), selected_section)
+                                    )
+                            if page_info.is_disambiguation and not selected_section:
+                                try:
+                                    parsed_page = await self.get_json(action="parse", page=title, prop="text")
+                                    page_info.disambiguation_blocks = parse_disambiguation_html(
+                                        parsed_page["parse"]["text"]["*"],
+                                        self.wiki_info.realurl or self.wiki_info.api,
+                                    )
+                                except Exception:
+                                    Logger.exception("Failed to parse Wiki disambiguation page: ")
+                            full_url = page_raw["fullurl"] + page_info.args
+                            file = None
+                            if "imageinfo" in page_raw:
+                                file = page_raw["imageinfo"][0]["url"]
+                            page_info.title = title
+                            page_info.link = full_url
+                            page_info.file = file
+                            page_info.desc = page_desc
+                            if not _iw and not page_info.args and page_info.id != -1 and page_info.id:
+                                page_info.link = self.wiki_info.script + f"?curid={page_info.id}"
+                        else:
+                            # handling langlinks query result, skip normal processing
+                            page_info.title = query_langlinks.title
+                            page_info.before_title = query_langlinks.title
+                            page_info.link = query_langlinks.link
+                            page_info.edit_link = query_langlinks.edit_link
+                            page_info.file = query_langlinks.file
+                            page_info.desc = query_langlinks.desc
+                            page_info.templates = query_langlinks.templates
+                            page_info.is_disambiguation = query_langlinks.is_disambiguation
+                            page_info.disambiguation_blocks = query_langlinks.disambiguation_blocks
+        interwiki_: list[dict[str, str]] = query.get("interwiki")
+        if interwiki_:
+            # handling interwiki pages
+            for i in interwiki_:
+                if i["title"] == page_info.title:
+                    iw_title = re.match(r"^" + i["iw"] + ":(.*)", i["title"])
+                    iw_title = iw_title.group(1)
+                    _iw = True
+
+                    # MediaWiki 的 iwurl 会返回已经解析过全域、本地及转发规则的完整 URL。
+                    # siteinfo.interwikimap 不一定包含扩展提供的全域前缀，因此只把缓存映射作为兼容回退。
+                    if not (get_iw := i.get("url") or self.wiki_info.interwiki.get(i["iw"])):
+                        raise InvalidWikiError(
+                            str(I18NContext("wiki.message.utils.wikilib.get_failed.invalid_interwiki"))
+                        )
+
+                    target_wiki = WikiLib(url=get_iw, headers=self.headers)
+                    if i.get("url"):
+                        try:
+                            iw_title = await target_wiki._resolve_interwiki_target_title(iw_title)
+                        except InvalidWikiError:
+                            pass
+
+                    normalized_iw_title = iw_title.replace("_", " ")
+                    if normalized_iw_title and i["title"].endswith(normalized_iw_title):
+                        _prefix += i["title"][: -len(normalized_iw_title)]
+                    else:
+                        _prefix += i["iw"] + ":"
+                    # try to query interwiki page
+                    iw_query = await target_wiki.parse_page_info(
+                        iw_title, lang=lang, _tried=_tried + 1, _prefix=_prefix, _iw=_iw
+                    )
+                    before_page_info = page_info
+                    page_info = iw_query
+                    if not iw_query.title:
+                        page_info.title = ""
+                    else:
+                        # redirect to new result
+                        page_info.before_title = before_page_info.title
+                        t = page_info.title
+                        if t:
+                            if before_page_info.args or page_info.id == -1 or not page_info.id:  # preserve args if any
+                                page_info.before_title += urllib.parse.unquote(before_page_info.args)
+                                t += urllib.parse.unquote(before_page_info.args)
+                                if page_info.link:
+                                    page_info.link += before_page_info.args
+                            else:
+                                # else rebuild link by curid
+                                page_info.link = page_info.info.script + f"?curid={page_info.id}"
+                            if _tried == 0:  # handle when first level iw redirect, for final title setting
+                                if (
+                                    lang and page_info.status
+                                ):  # if lang specified and page exists, set before_title directly
+                                    page_info.before_title = page_info.title
+                                else:
+                                    page_info.title = page_info.interwiki_prefix + t
+                                    # set possible research titles with interwiki prefix
+                                    if page_info.possible_research_title:
+                                        page_info.possible_research_title = [
+                                            page_info.interwiki_prefix + possible_title
+                                            for possible_title in page_info.possible_research_title
+                                        ]
+
+                                if before_page_info.selected_section:
+                                    page_info.selected_section = before_page_info.selected_section
+        if not self.wiki_info.is_allowed and self.should_check_content(session):
+            checklist = []
+            if page_info.title:
+                checklist.append(page_info.title)
+            if page_info.before_title:
+                checklist.append(page_info.before_title)
+            if page_info.desc:
+                checklist.append(page_info.desc)
+            chk = await check(checklist, session=session)
+            for x in chk:
+                if not x["status"]:
+                    ban = True
+        if ban:  # if content check failed, mark as banned
+            page_info.title = page_info.before_title = ""
+            page_info.id = -1
+            page_info.desc = ""
+            page_info.link = str(Url(page_info.link, trusted=False))
+        if page_info.desc:
+            page_info.desc = page_info.desc.strip()
+        return page_info
+
+    async def random_page(self) -> PageInfo:
+        """
+        获取随机页面
+        :return: 页面信息
+        """
+        await self.fixup_wiki_info()
+        random_url = await self.get_json(action="query", list="random", rnnamespace="0")
+        page_title = random_url["query"]["random"][0]["title"]
+        return await self.parse_page_info(page_title)

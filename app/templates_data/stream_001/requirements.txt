@@ -1,0 +1,14 @@
+llm-api-open~=2.2
+revChatGPT==6.8.6
+python-telegram-bot>=20.3
+openai>=0.26.4
+tiktoken>=0.2.0
+OpenAIAuth>=0.3.2
+requests>=2.28.1
+psutil>=5.9.4
+BingImageCreator>=0.5.0
+langdetect>=1.0.9
+google-generativeai >= 0.3.1
+packaging>=23.2
+requests>=2,<3
+groq>=0,<1

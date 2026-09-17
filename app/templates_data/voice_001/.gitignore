@@ -1,0 +1,50 @@
+# ==============================================================================
+# Git Ignore Rules
+# ==============================================================================
+# Prevent sensitive, generated, and local-only files from being committed.
+# ==============================================================================
+
+# Environment / Secrets
+.env
+*.session
+*.session-journal
+HasiiMusic/cookies/*.txt
+
+# Virtual Environments
+venv/
+.venv/
+env/
+
+# Python Cache / Build Artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.cache
+
+# Runtime Data / Generated Files
+cache/
+downloads/
+log.txt
+
+# Editor / IDE
+.vscode/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Private / Local Documentation
+IMPLEMENTATION_COMPLETE.md
+COMPARISON.md
+CHECKLIST.md
+
+# Project-Specific Ignored Files
+HasiiMusic/plugins/playback/radio.py
+ffmpeg
+
+# Study Materials
+study_roadmap.md
+
+.agents
+HasiiMusicStudy/

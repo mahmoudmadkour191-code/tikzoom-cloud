@@ -1,0 +1,971 @@
+"""
+Abstract Base Class for LLM Backends
+
+Supports: Ollama, vLLM, llama.cpp, OpenAI, etc.
+"""
+
+from abc import ABC, abstractmethod
+from typing import Dict, List, Optional, AsyncIterator, Union, Any
+from dataclasses import dataclass
+
+from aifred.lib.config import DEFAULT_OLLAMA_URL
+
+
+@dataclass
+class LLMMessage:
+    """
+    Standard message format (OpenAI-style)
+
+    Supports both text-only and multimodal (text + images) content.
+
+    Examples:
+        # Text-only message
+        LLMMessage(role="user", content="Hello")
+
+        # Multimodal message with images
+        LLMMessage(role="user", content=[
+            {"type": "text", "text": "What's in this image?"},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
+        ])
+    """
+    role: str  # "system", "user", "assistant"
+    content: Union[str, List[Dict[str, Any]]]  # String for text-only, list for multimodal
+
+
+@dataclass
+class LLMOptions:
+    """LLM generation options"""
+    temperature: float = 0.2
+    num_ctx: Optional[int] = None  # Context window
+    num_predict: Optional[int] = None  # Max tokens to generate
+    repeat_penalty: float = 1.1
+    top_p: float = 0.9
+    top_k: int = 40
+    min_p: float = 0.0  # Min-P sampling (0 = disabled, typical: 0.05)
+    seed: Optional[int] = None
+    enable_thinking: Optional[bool] = None  # User preference: enable thinking if model supports it
+    supports_thinking: Optional[bool] = None  # Model capability: None=unknown, True=supports, False=not supported
+    # Steerable reasoning-effort level (chat_template_kwargs), e.g. "max"
+    # for DeepSeek-V4. None = no effort kwarg sent (template default).
+    # Only meaningful with enable_thinking=True on templates that
+    # support levels (model_vram_cache.reasoning_levels).
+    reasoning_effort: Optional[str] = None
+
+
+@dataclass
+class LLMResponse:
+    """Unified response format"""
+    text: str
+    tokens_prompt: int = 0
+    tokens_generated: int = 0
+    tokens_per_second: float = 0.0
+    inference_time: float = 0.0
+    model: str = ""
+
+
+class LLMBackend(ABC):
+    """
+    Abstract base class for all LLM backends
+
+    Implementations: OllamaBackend, vLLMBackend, LlamaCppBackend, OpenAIBackend
+    """
+
+    def __init__(self, base_url: str = DEFAULT_OLLAMA_URL, api_key: Optional[str] = None):
+        self.base_url = base_url
+        self.api_key = api_key
+        self._available_models: List[str] = []
+
+    @abstractmethod
+    async def list_models(self) -> List[str]:
+        """Get list of available models"""
+
+    @abstractmethod
+    async def chat(
+        self,
+        model: str,
+        messages: List[LLMMessage],
+        options: Optional[LLMOptions] = None,
+        stream: bool = False
+    ) -> LLMResponse:
+        """
+        Non-streaming chat completion
+
+        Args:
+            model: Model name/ID
+            messages: List of messages (OpenAI format)
+            options: Generation options
+            stream: Whether to stream (for this method, always False)
+
+        Returns:
+            LLMResponse with full text
+        """
+
+    @abstractmethod
+    def chat_stream(
+        self,
+        model: str,
+        messages: List[LLMMessage],
+        options: Optional[LLMOptions] = None
+    ) -> AsyncIterator[Dict]:
+        """
+        Streaming chat completion (async generator)
+
+        Args:
+            model: Model name/ID
+            messages: List of messages
+            options: Generation options
+
+        Yields:
+            Dict with either:
+            - {"type": "content", "text": str} for content chunks
+            - {"type": "done", "metrics": {...}} for final metrics
+
+        Note:
+            This returns an AsyncIterator, so implementations should use
+            'async def' with 'yield' (async generator function).
+            The abstract method signature does NOT use 'async def' because
+            it declares the return type AsyncIterator directly.
+        """
+
+    @abstractmethod
+    async def health_check(self) -> bool:
+        """Check if backend is reachable and healthy"""
+
+    @abstractmethod
+    async def get_model_context_limit(self, model: str) -> tuple[int, int]:
+        """
+        Get the context window size and model size for a specific model.
+
+        This method queries the backend for model metadata and extracts
+        the maximum context length and VRAM size. Implementation is backend-specific:
+        - Ollama: Use /api/show + /api/ps endpoints
+        - vLLM: Use /v1/models endpoint (size estimation)
+
+        Args:
+            model: Model name/ID
+
+        Returns:
+            tuple[int, int]: (context_limit, model_size_bytes)
+                - context_limit: Context limit in tokens (e.g., 4096, 8192, 40960)
+                - model_size_bytes: Model size in VRAM (0 if unavailable)
+
+        Raises:
+            RuntimeError: If model not found or context limit cannot be determined
+        """
+
+    @abstractmethod
+    async def is_model_loaded(self, model: str) -> bool:
+        """
+        Check if a model is currently loaded in VRAM.
+
+        Used for VRAM-based context calculation to determine if model size
+        should be subtracted from free VRAM or not.
+
+        Implementation is backend-specific:
+        - Ollama: Query /api/ps endpoint for loaded models
+        - vLLM: Model is always loaded (server started with specific model)
+
+        Args:
+            model: Model name/ID
+
+        Returns:
+            bool: True if model is currently loaded in VRAM, False otherwise
+        """
+
+    @abstractmethod
+    async def preload_model(self, model: str, num_ctx: Optional[int] = None) -> tuple[bool, float]:
+        """
+        Preload a model into VRAM by sending a minimal request.
+        This warms up the model so future requests are faster.
+
+        IMPORTANT for Ollama Multi-GPU:
+        num_ctx MUST be passed during preload so Ollama loads the model
+        with the correct KV-Cache and distributes across multiple GPUs if needed.
+
+        Correct order:
+        1. num_ctx of the following inference: get_agent_num_ctx() (browser)
+           or get_stateless_num_ctx() (Message Hub)
+        2. preload_model(model, num_ctx=num_ctx) → Load model with KV-Cache
+
+        Args:
+            model: Model name to preload
+            num_ctx: Optional context size for KV-cache allocation (Ollama-specific)
+
+        Returns:
+            Tuple of (success: bool, load_time: float in seconds)
+        """
+
+    @abstractmethod
+    def get_capabilities(self) -> Dict[str, bool]:
+        """
+        Return backend capabilities and behavior flags.
+
+        This method defines backend-specific behavior to eliminate
+        scattered 'if backend_type ==' conditionals throughout the codebase.
+
+        Returns:
+            Dict with capability flags:
+                - "dynamic_models": Can load/unload models at runtime
+                - "dynamic_context": Context can be recalculated at runtime
+                - "supports_streaming": Supports streaming responses
+                - "requires_preload": Needs model preloading before use
+
+        Examples:
+            Ollama:   {"dynamic_models": True, "dynamic_context": True, ...}
+            vLLM:     {"dynamic_models": False, "dynamic_context": False, ...}
+        """
+
+    async def _pre_request_check(self, model: str) -> None:
+        """Hook for pre-request validation (e.g. RPC connectivity). Override in subclasses."""
+
+    async def close(self) -> None:
+        """
+        Close any open connections or resources.
+
+        Called when switching backends or shutting down.
+        Default implementation does nothing.
+        """
+        # Default: no-op
+
+
+class BackendError(Exception):
+    """Base exception for backend errors"""
+
+
+class BackendConnectionError(BackendError):
+    """Backend not reachable"""
+
+
+class BackendModelNotFoundError(BackendError):
+    """Requested model not available"""
+
+
+class BackendInferenceError(BackendError):
+    """Error during inference"""
+
+
+class OpenAICompatibleBackend(LLMBackend):
+    """Shared implementation for OpenAI SDK-compatible backends (vLLM, CloudAPI, llamacpp).
+
+    Subclasses override hooks to customize behavior:
+    - _build_extra_body(): sampling params in extra_body
+    - _process_response_text(): extract text from non-streaming response
+    - _process_stream_delta(): handle streaming chunks
+    - _finalize_stream(): cleanup after stream ends
+    - _classify_error(): map exceptions to BackendError types
+    """
+
+    BACKEND_NAME: str = "OpenAI-Compatible"
+    # 300s deckt einen Cold-Modell-Load auf langsamer SSD/USB 3 ab
+    # (235B ~165s reines Read + Pre-Init); zu knappe Timeouts brechen
+    # den ersten Request nach Modell-Eviction unnötig ab.
+    DEFAULT_TIMEOUT: float = 300.0
+    # Turn-internes Reasoning in den Runden-Messages des Tool-Loops
+    # zurückreichen (Feld ``reasoning_content``). Default aus: Cloud-APIs
+    # lehnen das Feld teils hart ab (DeepSeek: 400) und vLLM verwirft es
+    # still (Issue #38488, nutzt ``reasoning``). llama.cpp akzeptiert es
+    # und rendert es trainingsgemäß ins Template — das llamacpp-Backend
+    # schaltet frei. Bewusst ein Backend-Gate, kein Modell-Gate: Templates
+    # ohne Reasoning-Support ignorieren das Feld einfach.
+    SEND_TURN_REASONING: bool = False
+    # Name des Felds, in dem der Server den Denkteil GETRENNT vom Antworttext
+    # liefert: llama.cpp (``--reasoning-format``) nennt es
+    # ``reasoning_content``, vLLM (``--reasoning-parser``) ``reasoning``.
+    # None = der Server trennt nicht; Denken steht dann, falls ueberhaupt,
+    # als <think>-Text im Inhalt. Ein Backend, das ein Feld nennt, das sein
+    # Server nicht sendet, verliert den Denkblock kommentarlos — vLLM las
+    # hier bis 2026-09-11 nichts, der Flash-Next-Denkblock fehlte seit 07.09.
+    REASONING_FIELD: Optional[str] = None
+
+    def __init__(self, base_url: str, api_key: str = "dummy"):
+        super().__init__(base_url=base_url, api_key=api_key)
+        from openai import AsyncOpenAI
+        self.client = AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            timeout=self.DEFAULT_TIMEOUT,
+        )
+
+    # === Common implementations (override in subclasses only if needed) ===
+
+    async def list_models(self) -> List[str]:
+        """Get list of available models via OpenAI-compatible API."""
+        import openai
+        try:
+            models_response = await self.client.models.list()
+            self._available_models = [model.id for model in models_response.data]
+            return self._available_models
+        except openai.OpenAIError as e:
+            raise BackendConnectionError(f"Failed to list {self.BACKEND_NAME} models: {e}")
+
+    async def health_check(self) -> bool:
+        """Check if backend is reachable via models.list()."""
+        import openai
+        try:
+            await self.client.models.list()
+            return True
+        except openai.OpenAIError:
+            return False
+
+    async def preload_model(self, model: str, num_ctx: Optional[int] = None) -> tuple[bool, float]:
+        """No-op preload — models are already loaded. Override for Ollama/llamacpp."""
+        return (True, 0.0)
+
+    # === Hooks (override in subclasses as needed) ===
+
+    def _build_extra_body(self, options: LLMOptions) -> Dict[str, Any]:
+        """Build extra_body for API call. Default: conditional sampling params + thinking."""
+        extra_body: Dict[str, Any] = {}
+        if options.repeat_penalty and options.repeat_penalty != 1.0:
+            extra_body["repetition_penalty"] = options.repeat_penalty
+        if options.top_k and options.top_k != 40:
+            extra_body["top_k"] = options.top_k
+        if options.min_p > 0:
+            extra_body["min_p"] = options.min_p
+        if options.enable_thinking is not None:
+            extra_body["chat_template_kwargs"] = {"enable_thinking": options.enable_thinking}
+        if options.reasoning_effort:
+            extra_body.setdefault("chat_template_kwargs", {})[
+                "reasoning_effort"
+            ] = options.reasoning_effort
+        # Sichtbar machen, WAS auf der Leitung landet. Die Denkstufe ist kein
+        # Modell-Schalter, sondern eine Jinja-Variable: Die Chat-Vorlage baut
+        # daraus einen Anweisungssatz. Fehlt der Wert, setzt die Vorlage ihren
+        # eigenen Standard ein — bei Qwen3.8 ist das xhigh, also die
+        # ausfuehrlichste Stufe. Ein stillschweigend leerer Wert sieht damit
+        # aus wie "maximal nachdenken" (Peuqui, 2026-09-01).
+        if options.enable_thinking is not False:
+            from ..lib.logging_utils import log_message
+            level = options.reasoning_effort or "NOT SENT (template falls back to its own default)"
+            log_message(f"🧠 reasoning_effort on the wire: {level}")
+        return extra_body
+
+    def _process_response_text(self, choice: Any) -> str:
+        """Text of a non-streaming choice; a separate reasoning field is
+        wrapped in <think> tags for unified handling."""
+        content = choice.message.content or ""
+        if not self.REASONING_FIELD:
+            return content
+        msg_dict = choice.message.model_dump() if hasattr(choice.message, "model_dump") else {}
+        reasoning = msg_dict.get(self.REASONING_FIELD) or ""
+        if reasoning:
+            return f"<think>{reasoning}</think>\n\n{content}"
+        return content
+
+    def _process_stream_delta(self, delta: Any, delta_dict: Dict, stream_state: Dict) -> List[Dict]:
+        """Stream the reasoning field as <think> tags (state machine).
+
+        Nebenbei werden Reasoning und sichtbarer Text getrennt akkumuliert
+        (``_reasoning_acc``/``_visible_acc``): Der Tool-Loop reicht beide in
+        der Runden-History zurück, damit das Modell im laufenden Turn sein
+        eigenes Denken und seine Zwischenmeldungen wiedersieht (Qwen3.8-
+        Template rendert turn-internes Reasoning immer; ältere Templates
+        ignorieren das Feld einfach).
+        """
+        chunks: List[Dict] = []
+        reasoning = (delta_dict.get(self.REASONING_FIELD) or "") if self.REASONING_FIELD else ""
+
+        if reasoning:
+            if not stream_state.get("thinking_started"):
+                chunks.append({"type": "content", "text": "<think>"})
+                stream_state["thinking_started"] = True
+            chunks.append({"type": "content", "text": reasoning})
+            stream_state["_reasoning_acc"] = stream_state.get("_reasoning_acc", "") + reasoning
+
+        if delta.content:
+            if stream_state.get("thinking_started"):
+                chunks.append({"type": "content", "text": "</think>\n\n"})
+                stream_state["thinking_started"] = False
+            chunks.append({"type": "content", "text": delta.content})
+            stream_state["_visible_acc"] = stream_state.get("_visible_acc", "") + delta.content
+
+        return chunks
+
+    def _before_stream_request(self) -> None:
+        """Hook right before each streamed server request, tool rounds included.
+
+        vLLM reads its own counters here, so the done metrics cover exactly
+        the LAST request — the scope llama-server's per-request timings have.
+        """
+
+    def _finalize_stream(self, stream_state: Dict) -> List[Dict]:
+        """Close open <think> tag if stream ends during thinking (edge case)."""
+        if stream_state.get("thinking_started"):
+            return [{"type": "content", "text": "</think>\n\n"}]
+        return []
+
+    def _classify_error(self, error: Exception, model: str) -> BackendError:
+        """Map exception to a specific BackendError subtype."""
+        error_str = str(error)
+        if "model" in error_str.lower() and "not found" in error_str.lower():
+            return BackendModelNotFoundError(f"Model '{model}' not found in {self.BACKEND_NAME}")
+        return BackendInferenceError(f"{self.BACKEND_NAME} inference failed: {error}")
+
+    def _extract_server_timings(self, response_or_chunk: Any) -> Dict[str, Any]:
+        """Extract server-side timings from response (e.g. llama-server's timings field).
+
+        Override in subclasses that have access to server-side timing data.
+        """
+        return {}
+
+    def _build_stream_metrics(
+        self,
+        prompt_tokens: int,
+        total_tokens: int,
+        inference_time: float,
+        model: str,
+        server_timings: Dict[str, Any],
+        first_token_s: Optional[float],
+    ) -> Dict[str, Any]:
+        """Build metrics dict for the streaming done chunk.
+
+        Override in subclasses to use server-side timings instead of wall-clock.
+        ``first_token_s`` (request start to the first streamed token) lets
+        the fallback divide by the decode time only, like the server-side
+        rates do — see ``perf_metrics.decode_tokens_per_second``.
+        """
+        from ..lib.perf_metrics import decode_tokens_per_second
+
+        tokens_per_second = decode_tokens_per_second(
+            tokens_generated=total_tokens,
+            inference_time=inference_time,
+            first_token_s=first_token_s,
+        )
+        return {
+            "tokens_prompt": prompt_tokens,
+            "tokens_generated": total_tokens,
+            "tokens_per_second": tokens_per_second,
+            "inference_time": inference_time,
+            "model": model,
+        }
+
+    def _build_chat_response(
+        self,
+        text: str,
+        tokens_prompt: int,
+        tokens_generated: int,
+        inference_time: float,
+        model: str,
+        server_timings: Dict[str, Any],
+    ) -> LLMResponse:
+        """Build LLMResponse for non-streaming chat.
+
+        Override in subclasses to use server-side timings instead of wall-clock.
+        """
+        tokens_per_second = (tokens_generated / inference_time) if inference_time > 0 else 0
+        return LLMResponse(
+            text=text,
+            tokens_prompt=tokens_prompt,
+            tokens_generated=tokens_generated,
+            tokens_per_second=tokens_per_second,
+            inference_time=inference_time,
+            model=model,
+        )
+
+    # === Concrete implementations ===
+
+    async def chat(
+        self,
+        model: str,
+        messages: List[LLMMessage],
+        options: Optional[LLMOptions] = None,
+        stream: bool = False,
+    ) -> LLMResponse:
+        if options is None:
+            options = LLMOptions()
+
+        await self._pre_request_check(model)
+
+        openai_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
+
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "messages": openai_messages,
+            "temperature": options.temperature,
+            "top_p": options.top_p,
+            "stream": False,
+        }
+        if options.num_predict:
+            kwargs["max_tokens"] = options.num_predict
+
+        extra_body = self._build_extra_body(options)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+
+        try:
+            from ..lib.timer import Timer
+            timer = Timer()
+            response = await self.client.chat.completions.create(**kwargs)
+            inference_time = timer.elapsed()
+
+            choice = response.choices[0]
+            text = self._process_response_text(choice)
+
+            usage = response.usage
+            tokens_prompt = usage.prompt_tokens if usage else 0
+            tokens_generated = usage.completion_tokens if usage else 0
+
+            # Extract server-side timings if backend provides them
+            server_timings = self._extract_server_timings(response)
+
+            return self._build_chat_response(
+                text, tokens_prompt, tokens_generated,
+                inference_time, model, server_timings,
+            )
+
+        except Exception as e:
+            raise self._classify_error(e, model)
+
+    @staticmethod
+    def _truncation_debug(finish_reason: Optional[str]) -> List[Dict[str, str]]:
+        """Debug item when the model stopped at the token/context limit.
+
+        ``finish_reason="length"`` means the answer is cut off: with
+        ``--no-context-shift`` the context window ran full, otherwise a
+        max_tokens cap was hit. Both leave the response incomplete —
+        often mid-plan, before a tool call the model still intended to
+        make — so it must be visible instead of looking like a clean
+        finish. Empty list when the model stopped on its own.
+        """
+        if finish_reason != "length":
+            return []
+        message = (
+            "⚠️ Response truncated (finish_reason=length) — token or "
+            "context limit reached, answer is incomplete"
+        )
+        from ..lib.logging_utils import log_message
+        log_message(message)
+        return [{"type": "debug", "message": message}]
+
+    async def _consume_stream(
+        self,
+        stream: Any,
+        stream_state: Dict[str, Any],
+        counters: Dict[str, Any],
+        tool_calls: Optional[List[Dict[str, Any]]],
+    ) -> AsyncIterator[Dict]:
+        """Consume one completion stream and yield UI items.
+
+        Updates counters in place (prompt_tokens, total_tokens,
+        server_timings, last_finish_reason). Accumulates streamed
+        tool-call deltas into tool_calls when a list is given
+        (pass None for tool-free rounds).
+        """
+        async for chunk in stream:
+            if chunk.choices:
+                delta = chunk.choices[0].delta
+                delta_dict = delta.model_dump() if hasattr(delta, "model_dump") else {}
+                # OpenAI SDK doesn't define the servers' reasoning field in
+                # ChoiceDelta — it lands in model_extra instead of model_dump()
+                if self.REASONING_FIELD and hasattr(delta, "model_extra") and delta.model_extra:
+                    if self.REASONING_FIELD in delta.model_extra:
+                        delta_dict[self.REASONING_FIELD] = delta.model_extra[self.REASONING_FIELD]
+
+                # Accumulate tool calls from streaming deltas
+                if tool_calls is not None and hasattr(delta, "tool_calls") and delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        while idx >= len(tool_calls):
+                            tool_calls.append({"id": "", "name": "", "arguments": ""})
+                        if tc_delta.id:
+                            tool_calls[idx]["id"] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                tool_calls[idx]["name"] = tc_delta.function.name
+                                # Notify UI immediately when tool name is known
+                                yield {"type": "tool_call_start", "name": tc_delta.function.name}
+                            if tc_delta.function.arguments:
+                                tool_calls[idx]["arguments"] += tc_delta.function.arguments
+
+                # Normal content/thinking chunks
+                for item in self._process_stream_delta(delta, delta_dict, stream_state):
+                    yield item
+                    if item.get("type") == "content":
+                        counters["total_tokens"] += 1
+                        stream_state.setdefault("_content_acc", "")
+                        stream_state["_content_acc"] += item.get("text", "")
+
+                # Track finish_reason — set on the chunk that
+                # closes the stream. Used to detect a
+                # truncated tool-call (finish_reason="length"
+                # = hit max_tokens before the args were complete).
+                if chunk.choices[0].finish_reason:
+                    counters["last_finish_reason"] = chunk.choices[0].finish_reason
+
+            if hasattr(chunk, "usage") and chunk.usage:
+                counters["prompt_tokens"] = chunk.usage.prompt_tokens
+                counters["total_tokens"] = chunk.usage.completion_tokens
+                counters["server_timings"] = self._extract_server_timings(chunk)
+
+        for item in self._finalize_stream(stream_state):
+            yield item
+
+    async def chat_stream(
+        self,
+        model: str,
+        messages: List[LLMMessage],
+        options: Optional[LLMOptions] = None,
+        toolkit: Optional[Any] = None,
+    ) -> AsyncIterator[Dict]:
+        if options is None:
+            options = LLMOptions()
+
+        await self._pre_request_check(model)
+
+        # Store current model for subclass overrides (e.g. thinking detection)
+        self._current_model = model  # type: ignore[attr-defined]
+
+        openai_messages: List[Dict[str, Any]] = [
+            {"role": msg.role, "content": msg.content} for msg in messages
+        ]
+
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "messages": openai_messages,
+            "temperature": options.temperature,
+            "top_p": options.top_p,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if options.num_predict:
+            kwargs["max_tokens"] = options.num_predict
+        if toolkit and toolkit.definitions:
+            kwargs["tools"] = toolkit.definitions
+
+        extra_body = self._build_extra_body(options)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+
+        import asyncio
+        import time
+        import logging
+
+        # Gesamtfenster fuer Retries — muss >= DEFAULT_TIMEOUT sein, damit nach
+        # einem ersten Timeout-Fehler ueberhaupt noch ein Retry passieren kann.
+        # llama-swap kann bei oversized Models > 2 Min zum Laden brauchen, plus
+        # lange Tool-Loops und Thinking-Models — daher 900s (15 Min).
+        retry_timeout = 900.0
+        retry_delay = 5.0
+        from ..lib.config import MAX_TOOL_ROUNDS, TOOL_LOOP_CONTEXT_GUARD
+        max_tool_rounds = MAX_TOOL_ROUNDS
+        start_time = time.monotonic()
+        last_error: Optional[Exception] = None
+
+        # Once we have yielded anything to the caller, retries are no longer
+        # safe: the caller has already received partial output (content chunks,
+        # tool_call/tool_result with side effects). Restarting the stream
+        # would duplicate content and re-execute non-idempotent tools.
+        yielded_any = False
+
+        while time.monotonic() - start_time < retry_timeout:
+            try:
+                from ..lib.timer import Timer
+                timer = Timer()
+
+                total_tokens = 0
+                prompt_tokens = 0
+                server_timings: Dict[str, Any] = {}
+                last_round_had_tool_calls = False
+                # True once any round hit finish_reason="length" — surfaces in
+                # the done metrics so the pipeline can mark the result as
+                # truncated (⚠️ in the done line instead of a clean ✅).
+                truncated_any = False
+                # True once the context guard stopped further tool rounds —
+                # gates the text-extraction fallback below so a model that
+                # emits tool-call syntax as text can't sneak in another round.
+                context_guard_tripped = False
+                # Seconds from request start to the first streamed token —
+                # the decode fallback divides by the time after it.
+                first_token_s: Optional[float] = None
+
+                for _tool_round in range(max_tool_rounds):
+                    self._before_stream_request()
+                    stream = await self.client.chat.completions.create(**kwargs)
+
+                    stream_state: Dict[str, Any] = {}
+                    tool_calls: List[Dict[str, Any]] = []
+                    counters: Dict[str, Any] = {
+                        "prompt_tokens": prompt_tokens,
+                        "total_tokens": total_tokens,
+                        "server_timings": server_timings,
+                        "last_finish_reason": None,
+                    }
+                    async for item in self._consume_stream(
+                        stream, stream_state, counters, tool_calls
+                    ):
+                        if first_token_s is None and item.get("type") == "content":
+                            first_token_s = timer.elapsed()
+                        yield item
+                        yielded_any = True
+                    prompt_tokens = counters["prompt_tokens"]
+                    total_tokens = counters["total_tokens"]
+                    server_timings = counters["server_timings"]
+                    last_finish_reason: Optional[str] = counters["last_finish_reason"]
+
+                    # Surface a hit token/context limit. Without this a
+                    # truncated answer is indistinguishable from a finished
+                    # one — the loop would just break out below and report
+                    # success while the model was cut off mid-work.
+                    trunc_items = self._truncation_debug(last_finish_reason)
+                    if trunc_items:
+                        truncated_any = True
+                    for item in trunc_items:
+                        yield item
+
+                    # Discard tool calls if generation was truncated mid-args.
+                    # Executing partial JSON would just emit a noisy error to
+                    # the model and likely trigger the same broken call again.
+                    if tool_calls and last_finish_reason == "length":
+                        from ..lib.logging_utils import log_message
+                        log_message(
+                            "⚠️ Discarding partial tool calls — "
+                            "model will produce a normal answer"
+                        )
+                        yield {"type": "debug", "message": "⚠️ Partial tool calls discarded"}
+                        tool_calls = []
+
+                    # Fallback: extract tool calls from text content for models
+                    # that emit them as text instead of using the structured
+                    # tool_calls API (Hermes-tunes, model merges, llama.cpp
+                    # chat templates without OpenAI tools translation).
+                    # Loud by design: every detected pattern emits a debug
+                    # message — successful extractions, halluzinations and
+                    # unparsable patterns alike. No silent recoveries.
+                    if not tool_calls and toolkit and toolkit.definitions and not context_guard_tripped:
+                        from ..lib.function_calling import extract_text_tool_calls
+                        content_text = stream_state.get("_content_acc", "")
+                        extracted, cleaned, debug_msgs = extract_text_tool_calls(
+                            content_text, toolkit
+                        )
+                        for msg in debug_msgs:
+                            yield {"type": "debug", "message": msg}
+                        if extracted:
+                            tool_calls = extracted
+                            # Replace accumulated content with the cleaned
+                            # version so the next round's assistant_msg doesn't
+                            # echo the tool-call tag back to the model (which
+                            # would either confuse it or trigger a re-call).
+                            stream_state["_content_acc"] = cleaned
+                            # Same reason for the visible-text accumulator that
+                            # feeds assistant_msg["content"] below.
+                            if "_visible_acc" in stream_state:
+                                stream_state["_visible_acc"] = cleaned
+
+                    # The server announced tool calls, but none arrived: its
+                    # tool-call parser does not match the call format the
+                    # model's chat template prescribes. vLLM's hermes parser
+                    # swallowed Qwen3.8's XML calls exactly like this, without
+                    # a single log line, for two weeks (2026-09-11) — the
+                    # turn just ended or went into the forced final round.
+                    if not tool_calls and last_finish_reason == "tool_calls":
+                        from ..lib.logging_utils import log_message
+                        parser_msg = (
+                            "⚠️ Server reported finish_reason=tool_calls but "
+                            "delivered no tool call — its tool-call parser does "
+                            "not match the model's chat template"
+                        )
+                        log_message(parser_msg)
+                        yield {"type": "debug", "message": parser_msg}
+
+                    # No tool calls → done
+                    if not tool_calls or not toolkit:
+                        last_round_had_tool_calls = False
+                        break
+
+                    last_round_had_tool_calls = True
+
+                    # Execute tool calls and append results to messages.
+                    # Sichtbaren Text und (gated) das Runden-Reasoning
+                    # mitgeben statt content=None: Das Modell sieht im
+                    # laufenden Turn seine eigenen Zwischenmeldungen und
+                    # Gedanken wieder — vorher gingen BEIDE zwischen den
+                    # Tool-Runden verloren und es musste seinen Stand jede
+                    # Runde aus Tool-Args/Results rekonstruieren. Zwischen
+                    # den Turns strippt die llm_history weiterhin (bewusst).
+                    assistant_msg: Dict[str, Any] = {
+                        "role": "assistant",
+                        "content": stream_state.get("_visible_acc") or None,
+                        "tool_calls": [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                            }
+                            for tc in tool_calls
+                        ],
+                    }
+                    if self.SEND_TURN_REASONING and stream_state.get("_reasoning_acc"):
+                        assistant_msg["reasoning_content"] = stream_state["_reasoning_acc"]
+                    kwargs["messages"].append(assistant_msg)
+
+                    round_result_tokens = 0
+                    for tc in tool_calls:
+                        yield {"type": "tool_call", "name": tc["name"], "arguments": tc["arguments"][:200]}
+                        yielded_any = True
+                        # Use execute_streaming so streaming tools (web_search,
+                        # search_documents, …) can emit tool_progress events
+                        # while they run. Non-streaming tools just yield a
+                        # single tool_result — same end behaviour as before.
+                        result = ""
+                        async for item in toolkit.execute_streaming(tc["name"], tc["arguments"]):
+                            if item.get("type") == "tool_progress":
+                                yield {
+                                    "type": "tool_progress",
+                                    "name": tc["name"],
+                                    "message": item.get("message", ""),
+                                }
+                            elif item.get("type") == "tool_result":
+                                result = item.get("result", "") or ""
+                        # Cap the tool result against the active model's
+                        # context budget — large results would otherwise
+                        # crowd out the model's answer space.
+                        from ..lib.tool_output_cap import budget_var, cap_tool_output
+                        budget = budget_var.get()
+                        if budget > 0:
+                            result = cap_tool_output(result, budget)
+                        # Sandbox screenshots/plots are invisible to a
+                        # text-only model — append a VLM text description
+                        # (SSOT describe_sandbox_screenshots; runs after the
+                        # cap so the description can't be truncated away).
+                        # Debug events use the local yield idiom and get
+                        # mirrored into the debug bus by the consumers —
+                        # forwarded live so they appear BEFORE the VLM runs,
+                        # not as a batch after it finished.
+                        from ..lib.sandbox import (
+                            SANDBOX_IMAGE_URL_MARKER,
+                            describe_sandbox_screenshots,
+                        )
+                        if SANDBOX_IMAGE_URL_MARKER in result:
+                            async for ev in describe_sandbox_screenshots(
+                                result, toolkit.session_id, model
+                            ):
+                                if ev["type"] == "debug":
+                                    yield {"type": "debug", "message": ev["message"]}
+                                else:
+                                    result = ev["text"]
+                        yield {"type": "tool_result", "name": tc["name"], "result": result}
+                        kwargs["messages"].append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result,
+                        })
+                        from ..lib.context_manager import estimate_tokens
+                        round_result_tokens += estimate_tokens([{"content": result}])
+
+                    # Context guard: history compression only runs between
+                    # user turns — inside this loop nothing bounds context
+                    # growth, and with --no-context-shift the final answer
+                    # gets hard-truncated when the window runs full. Compare
+                    # the server-reported usage of this round (prompt +
+                    # completion, the honest live value) plus the estimated
+                    # size of the just-appended tool results against the
+                    # guard ratio. When crossed: the model still sees the
+                    # results it already requested, but gets no further tool
+                    # rounds — only an explicit note to finalize now. Nothing
+                    # is rewritten or dropped; the reserve stays free for
+                    # thinking + answer. Guard is inactive when num_ctx is
+                    # unknown (no usable limit to measure against).
+                    used_tokens = prompt_tokens + total_tokens + round_result_tokens
+                    if options.num_ctx and used_tokens >= TOOL_LOOP_CONTEXT_GUARD * options.num_ctx:
+                        context_guard_tripped = True
+                        kwargs.pop("tools", None)
+                        from ..lib.prompt_loader import load_prompt
+                        kwargs["messages"].append({
+                            "role": "user",
+                            "content": load_prompt("utility/context_guard"),
+                        })
+                        from ..lib.formatting import format_number
+                        from ..lib.logging_utils import log_message
+                        pct = used_tokens / options.num_ctx * 100
+                        guard_msg = (
+                            f"⚠️ Context guard: ~{format_number(used_tokens)}/"
+                            f"{format_number(options.num_ctx)} tok "
+                            f"({format_number(pct, 1)}%) — tool rounds stopped, "
+                            f"forcing final answer"
+                        )
+                        log_message(guard_msg)
+                        yield {"type": "debug", "message": guard_msg}
+
+                    # Next round: LLM sees tool results and generates final response
+
+                # If the for-loop ended with tool_calls in the last round
+                # OR with no content at all, force one final round WITHOUT
+                # tools so the model has to verbalize an answer. Without
+                # this, two failure modes leak through:
+                #   1. Round N had tool_calls → results were appended to
+                #      messages but the model never sees them (loop exit).
+                #   2. Round N had no tool_calls but also no content
+                #      (model emitted only thinking) → no final answer.
+                content_so_far = stream_state.get("_content_acc", "").strip()
+                needs_force_final = toolkit and (
+                    last_round_had_tool_calls or not content_so_far
+                )
+                if needs_force_final:
+                    from ..lib.logging_utils import log_message
+                    reason = (
+                        "tool_calls in last round (results unprocessed)"
+                        if last_round_had_tool_calls
+                        else "no content produced"
+                    )
+                    log_message(
+                        f"⚠️ Tool rounds exhausted, {reason} — "
+                        f"forcing final response (no tools)"
+                    )
+                    kwargs_final = {**kwargs, "tools": None, "tool_choice": None}
+                    self._before_stream_request()
+                    stream = await self.client.chat.completions.create(**kwargs_final)
+                    stream_state = {}
+                    counters = {
+                        "prompt_tokens": prompt_tokens,
+                        "total_tokens": total_tokens,
+                        "server_timings": server_timings,
+                        "last_finish_reason": None,
+                    }
+                    async for item in self._consume_stream(
+                        stream, stream_state, counters, None
+                    ):
+                        if first_token_s is None and item.get("type") == "content":
+                            first_token_s = timer.elapsed()
+                        yield item
+                        yielded_any = True
+                    prompt_tokens = counters["prompt_tokens"]
+                    total_tokens = counters["total_tokens"]
+                    server_timings = counters["server_timings"]
+                    trunc_items = self._truncation_debug(counters["last_finish_reason"])
+                    if trunc_items:
+                        truncated_any = True
+                    for item in trunc_items:
+                        yield item
+
+                inference_time = timer.elapsed()
+
+                metrics = self._build_stream_metrics(
+                    prompt_tokens, total_tokens,
+                    inference_time, model, server_timings, first_token_s,
+                )
+                # Carry the truncation flag into the done metrics so the
+                # pipeline result (and the "done" debug line built from it)
+                # can mark the answer as incomplete instead of reporting a
+                # clean finish.
+                if truncated_any:
+                    metrics["truncated"] = True
+                yield {"type": "done", "metrics": metrics}
+                return  # success
+
+            except Exception as e:
+                last_error = e
+                # Stream already emitted output → retrying would duplicate it
+                # (and re-execute tool side effects). Surface immediately.
+                if yielded_any:
+                    raise self._classify_error(e, model)
+                elapsed = time.monotonic() - start_time
+                remaining = retry_timeout - elapsed
+                if remaining > retry_delay:
+                    logging.getLogger("aifred").warning(
+                        f"Request failed ({type(e).__name__}), retry in {retry_delay}s ({remaining:.0f}s remaining)..."
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+                raise self._classify_error(e, model)
+
+        raise self._classify_error(last_error, model)  # type: ignore[arg-type]

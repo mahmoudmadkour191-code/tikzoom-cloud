@@ -1,0 +1,10 @@
+.idea
+venv
+config.yaml
+config.yaml.*
+__pycache__
+*.log
+conversationbot
+.DS_Store
+test.*.py
+data

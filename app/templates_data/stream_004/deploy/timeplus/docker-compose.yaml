@@ -1,0 +1,34 @@
+services:
+  # Proton - Open Source Streaming Database
+  # For enterprise Timeplus, replace with: timeplus/timeplusd:latest
+  timeplus:
+    image: timeplus/pulsebot-timeplus:0.7.2
+    platform: linux/amd64
+    ports:
+      - 8000:8000 # Timeplus Console
+      - 8001:8001 # PulseBot WebUI
+      - 8463:8463
+      - 8123:8123
+      - 3218:3218
+      - 3001:3001
+    environment:
+      - ENABLE_DATA_PREALLOCATE=false
+      - PULSEBOT_PROVIDER=ollama
+      - PULSEBOT_MODEL=kimi-k2.5:cloud
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    volumes:
+      - timeplus_data:/timeplus/data/
+      - ./workspaces:/app/workspaces:rw
+    
+    healthcheck:
+      test: ["CMD-SHELL", "timeplusd client --user proton --password timeplus@t+ --query 'select 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  timeplus_data:

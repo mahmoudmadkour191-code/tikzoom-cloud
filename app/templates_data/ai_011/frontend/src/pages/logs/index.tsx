@@ -1,0 +1,958 @@
+import { useState, useEffect, useRef, useMemo, memo, useCallback } from 'react'
+import {
+  Box,
+  Paper,
+  FormControlLabel,
+  Switch,
+  TextField,
+  Chip,
+  Autocomplete,
+  MenuItem,
+  Alert,
+  Tooltip,
+  useMediaQuery,
+  useTheme,
+  Stack,
+  Typography,
+  Drawer,
+  Fab,
+  Divider,
+} from '@mui/material'
+import { useQuery } from '@tanstack/react-query'
+import { LogEntry, logsApi } from '../../services/api/logs'
+import DownloadIcon from '@mui/icons-material/Download'
+import FilterAltIcon from '@mui/icons-material/FilterAlt'
+import CloseIcon from '@mui/icons-material/Close'
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'
+import {
+  LOG_TABLE_STYLES,
+  CHIP_VARIANTS,
+  UNIFIED_TABLE_STYLES,
+  getAlphaColor,
+} from '../../theme/themeApi'
+import { FixedSizeList as List } from 'react-window'
+import AutoSizer from 'react-virtualized-auto-sizer'
+import NekroDialog from '../../components/common/NekroDialog'
+import { useTranslation } from 'react-i18next'
+import { useNotification } from '../../hooks/useNotification'
+import { copyText } from '../../utils/clipboard'
+import CopyableTextDialog from '../../components/common/CopyableTextDialog'
+import ActionButton from '../../components/common/ActionButton'
+import IconActionButton from '../../components/common/IconActionButton'
+
+const MAX_REALTIME_LOGS = 1000
+const MOBILE_MAX_REALTIME_LOGS = 400
+const INITIAL_LOGS_COUNT = 500
+const MOBILE_INITIAL_LOGS_COUNT = 250
+const ROW_HEIGHT = 36 // 固定行高
+const LOG_UPDATE_INTERVAL = 250 // 实时日志更新间隔 (ms)
+const MOBILE_LOG_UPDATE_INTERVAL = 500
+
+// 拆分并优化的 TableHeader 组件
+const TableHeader = memo(
+  ({
+    isMobile,
+    isSmall,
+    isAdvanced,
+    t,
+  }: {
+    isMobile: boolean
+    isSmall: boolean
+    isAdvanced: boolean
+    t: (key: string) => string
+  }) => {
+    const theme = useTheme()
+    return (
+      <Box
+        sx={{
+          display: 'flex',
+          borderBottom: `1px solid ${theme.palette.divider}`,
+          py: 1,
+          px: 2,
+          ...UNIFIED_TABLE_STYLES.header,
+        }}
+      >
+        <Box
+          sx={{
+            flex: isMobile ? '0 0 90px' : '0 0 120px',
+            fontSize: isSmall ? '0.75rem' : '0.8rem',
+          }}
+        >
+          {t('header.time')}
+        </Box>
+        <Box
+          sx={{
+            flex: '0 0 100px',
+            fontSize: isSmall ? '0.75rem' : '0.8rem',
+            textAlign: 'center',
+          }}
+        >
+          {t('header.level')}
+        </Box>
+        <Box
+          sx={{
+            flex: '1 1 auto',
+            fontSize: isSmall ? '0.75rem' : '0.8rem',
+            ml: 1,
+          }}
+        >
+          {t('header.message')}
+        </Box>
+        {isAdvanced && !isMobile && (
+          <Box
+            sx={{
+              flex: '0 0 100px',
+              fontSize: isSmall ? '0.75rem' : '0.8rem',
+              ml: 1,
+              textAlign: 'right',
+              pr: 2,
+            }}
+          >
+            {t('header.source')}
+          </Box>
+        )}
+      </Box>
+    )
+  }
+)
+TableHeader.displayName = 'TableHeader'
+
+// 拆分并优化的 LogRow 组件
+const LogRow = memo(
+  ({
+    style,
+    log,
+    isMobile,
+    isSmall,
+    isAdvanced,
+    onLogClick,
+  }: {
+    style: React.CSSProperties
+    log: LogEntry
+    isMobile: boolean
+    isSmall: boolean
+    isAdvanced: boolean
+    onLogClick: (log: LogEntry) => void
+  }) => {
+    const theme = useTheme()
+    const severityColor =
+      (LOG_TABLE_STYLES.SEVERITY as Record<string, { backgroundColor: string }>)[log.level]
+        ?.backgroundColor || 'transparent'
+
+    return (
+      <Box
+        style={{ ...style, width: '100%' }}
+        onClick={() => onLogClick(log)}
+        sx={{
+          cursor: 'pointer',
+          '&:hover': {
+            backgroundColor: LOG_TABLE_STYLES.ROW.HOVER,
+          },
+          borderBottom: `1px solid ${theme.palette.divider}`,
+          display: 'flex',
+          alignItems: 'center',
+          pl: 1,
+          width: '100%',
+          ...UNIFIED_TABLE_STYLES.row,
+        }}
+      >
+        <Box
+          sx={{
+            width: 4,
+            height: ROW_HEIGHT - 2,
+            backgroundColor: severityColor,
+            borderRadius: '2px',
+            mr: 1,
+          }}
+        />
+        <Box
+          sx={{
+            flex: isMobile ? '0 0 90px' : '0 0 120px',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            fontSize: isSmall ? '0.7rem' : '0.75rem',
+            color: theme.palette.text.secondary,
+          }}
+        >
+          {isMobile ? log.timestamp.split(' ')[1] : log.timestamp}
+        </Box>
+        <Box
+          sx={{ flex: '0 0 100px', textAlign: 'center', display: 'flex', justifyContent: 'center' }}
+        >
+          <Chip
+            label={log.level}
+            size="small"
+            sx={{
+              ...CHIP_VARIANTS.getLogLevelChip(log.level, isSmall),
+              height: isSmall ? 18 : 20,
+              minWidth: '40px',
+              '.MuiChip-label': {
+                px: 1,
+                fontSize: isSmall ? '0.6rem' : '0.65rem',
+                lineHeight: 1,
+                textAlign: 'center',
+              },
+            }}
+          />
+        </Box>
+        <Box
+          sx={{
+            flex: '1 1 auto',
+            overflow: 'hidden',
+            whiteSpace: 'nowrap',
+            textOverflow: 'ellipsis',
+            fontSize: isSmall ? '0.75rem' : '0.8rem',
+            ml: 1,
+          }}
+        >
+          {log.message}
+        </Box>
+        {isAdvanced && !isMobile && (
+          <Box
+            sx={{
+              flex: '0 0 100px',
+              overflow: 'hidden',
+              whiteSpace: 'nowrap',
+              textOverflow: 'ellipsis',
+              fontSize: isSmall ? '0.7rem' : '0.75rem',
+              color: theme.palette.text.secondary,
+              ml: 1,
+              textAlign: 'right',
+              pr: 2,
+            }}
+          >
+            {log.source}
+          </Box>
+        )}
+      </Box>
+    )
+  }
+)
+LogRow.displayName = 'LogRow'
+
+export default function LogsPage() {
+  const [autoScroll, setAutoScroll] = useState(true)
+  const [isAdvanced, setIsAdvanced] = useState(false)
+  const [realtimeLogs, setRealtimeLogs] = useState<LogEntry[]>([])
+  const [isDisconnected, setIsDisconnected] = useState(false)
+  const [downloadLines, setDownloadLines] = useState<string>('1000')
+  const [filterDrawerOpen, setFilterDrawerOpen] = useState(false)
+  const listRef = useRef<List>(null)
+  const [filters, setFilters] = useState({
+    level: '',
+    source: '',
+    message: '',
+  })
+  const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [downloadConfirmOpen, setDownloadConfirmOpen] = useState(false)
+  const [copyDialogOpen, setCopyDialogOpen] = useState(false)
+  const [copyDialogText, setCopyDialogText] = useState('')
+  const logQueue = useRef<LogEntry[]>([])
+  const lastParseErrorAt = useRef(0)
+
+  const theme = useTheme()
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'))
+  const isSmall = useMediaQuery(theme.breakpoints.down('sm'))
+  const { t } = useTranslation('logs')
+  const notification = useNotification()
+  const realtimeLogLimit = isMobile ? MOBILE_MAX_REALTIME_LOGS : MAX_REALTIME_LOGS
+  const initialLogsCount = isMobile ? MOBILE_INITIAL_LOGS_COUNT : INITIAL_LOGS_COUNT
+  const logUpdateInterval = isMobile ? MOBILE_LOG_UPDATE_INTERVAL : LOG_UPDATE_INTERVAL
+
+  const { data: sources = [] } = useQuery({
+    queryKey: ['log-sources'],
+    queryFn: () => logsApi.getSources(),
+    refetchInterval: 5000,
+  })
+
+  const { data: initialLogs = [] } = useQuery({
+    queryKey: ['initial-logs', filters.source, initialLogsCount],
+    queryFn: async () => {
+      const response = await logsApi.getLogs({
+        page: 1,
+        pageSize: initialLogsCount,
+        source: filters.source || undefined,
+      })
+      return response.logs
+    },
+  })
+
+  useEffect(() => {
+    if (initialLogs.length > 0) {
+      setRealtimeLogs(initialLogs)
+    }
+  }, [initialLogs])
+
+  const filteredLogs = useMemo(() => {
+    const lowerCaseMessage = filters.message.toLowerCase()
+    return realtimeLogs.filter(
+      log =>
+        (!filters.level || log.level === filters.level) &&
+        (!lowerCaseMessage || log.message.toLowerCase().includes(lowerCaseMessage))
+    )
+  }, [realtimeLogs, filters])
+
+  useEffect(() => {
+    if (autoScroll && listRef.current && filteredLogs.length > 0) {
+      const frameId = window.requestAnimationFrame(() => {
+        listRef.current?.scrollToItem(filteredLogs.length - 1, 'end')
+      })
+      return () => window.cancelAnimationFrame(frameId)
+    }
+  }, [filteredLogs, autoScroll])
+
+  useEffect(() => {
+    let cleanup: (() => void) | undefined
+    const intervalId = setInterval(() => {
+      if (!document.hidden && logQueue.current.length > 0) {
+        const newLogs = [...logQueue.current]
+        logQueue.current = []
+        setRealtimeLogs(prev => [...prev, ...newLogs].slice(-realtimeLogLimit))
+      }
+    }, logUpdateInterval)
+
+    const connect = () => {
+      try {
+        cleanup = logsApi.streamLogs(
+          data => {
+            if (!data) return
+            const trimmedData = data.trim()
+            // 忽略 SSE 心跳和其他非 JSON 帧，避免误报解析失败
+            if (!trimmedData || !trimmedData.startsWith('{')) return
+            try {
+              const log = JSON.parse(trimmedData) as LogEntry
+              if (
+                typeof log.timestamp !== 'string' ||
+                typeof log.level !== 'string' ||
+                typeof log.message !== 'string' ||
+                typeof log.source !== 'string'
+              ) {
+                return
+              }
+              const sourceMatch = !filters.source || log.source === filters.source
+              if (sourceMatch) {
+                logQueue.current.push(log)
+                if (logQueue.current.length > realtimeLogLimit) {
+                  logQueue.current = logQueue.current.slice(-realtimeLogLimit)
+                }
+              }
+            } catch (_error) {
+              const now = Date.now()
+              if (now - lastParseErrorAt.current > 5000) {
+                lastParseErrorAt.current = now
+                notification.warning(t('errors.parseLog'))
+              }
+            }
+          },
+          _error => {
+            notification.error(t('errors.stream'))
+            setIsDisconnected(true)
+          }
+        )
+        setIsDisconnected(false)
+      } catch (_error) {
+        notification.error(t('errors.connect'))
+        setIsDisconnected(true)
+      }
+    }
+
+    connect()
+
+    return () => {
+      cleanup?.()
+      clearInterval(intervalId)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.source, logUpdateInterval, realtimeLogLimit])
+
+  const handleDownloadLogs = () => {
+    setDownloadConfirmOpen(true)
+  }
+
+  const confirmDownloadLogs = async () => {
+    const lines = parseInt(downloadLines) || 1000
+    try {
+      await logsApi.downloadLogs({
+        lines,
+        source: filters.source || undefined,
+      })
+    } catch (_error) {
+      notification.error(t('download.failed'))
+    }
+    setDownloadConfirmOpen(false)
+  }
+
+  const handleLogClick = useCallback((log: LogEntry) => {
+    setSelectedLog(log)
+    setDialogOpen(true)
+  }, [])
+
+  const copyLogContent = async (log: LogEntry) => {
+    const logText = [
+      `${log.timestamp} [${log.level}] [${log.source}] ${log.message}`,
+      log.exception_type ? `${t('dialog.exceptionType')} ${log.exception_type}` : '',
+      log.exception_message ? `${t('dialog.exceptionMessage')} ${log.exception_message}` : '',
+      log.traceback ? `${t('dialog.traceback')}\n${log.traceback}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n')
+    const success = await copyText(logText)
+    if (success) {
+      notification.success(t('dialog.copyLog'))
+    } else {
+      // 复制失败，显示可复制的文本对话框
+      setCopyDialogText(logText)
+      setCopyDialogOpen(true)
+    }
+  }
+
+  // 拆分并优化的 FilterContent 组件
+  const FilterContent = () => (
+    <Stack spacing={2} sx={{ p: 2, width: isMobile ? '100%' : 'auto' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Typography variant="subtitle1">{t('filters.title')}</Typography>
+        {isMobile && (
+          <IconActionButton
+            edge="end"
+            onClick={() => setFilterDrawerOpen(false)}
+            aria-label={t('filters.close')}
+            title={t('filters.close')}
+          >
+            <CloseIcon />
+          </IconActionButton>
+        )}
+      </Box>
+
+      <TextField
+        select
+        label={t('filters.level')}
+        value={filters.level}
+        onChange={e => setFilters(prev => ({ ...prev, level: e.target.value }))}
+        size="small"
+        fullWidth
+      >
+        <MenuItem value="">{t('filters.all')}</MenuItem>
+        {Object.keys(LOG_TABLE_STYLES.SEVERITY).map(level => (
+          <MenuItem key={level} value={level}>
+            {level}
+          </MenuItem>
+        ))}
+      </TextField>
+
+      <Autocomplete
+        options={sources}
+        value={filters.source}
+        onChange={(_, newValue: string | null) => {
+          setRealtimeLogs([]) // 切换源时清空日志
+          logQueue.current = [] // 并清空队列
+          setFilters(prev => ({
+            ...prev,
+            source: newValue || '',
+          }))
+        }}
+        fullWidth
+        renderInput={params => <TextField {...params} label={t('filters.source')} size="small" />}
+      />
+
+      <TextField
+        label={t('filters.messageContent')}
+        value={filters.message}
+        onChange={e => setFilters(prev => ({ ...prev, message: e.target.value }))}
+        size="small"
+        fullWidth
+      />
+
+      <FormControlLabel
+        control={
+          <Switch
+            checked={isAdvanced}
+            onChange={e => setIsAdvanced(e.target.checked)}
+            color="primary"
+          />
+        }
+        label={t('filters.advancedMode')}
+      />
+
+      <FormControlLabel
+        control={
+          <Switch
+            checked={autoScroll}
+            onChange={e => setAutoScroll(e.target.checked)}
+            color="primary"
+          />
+        }
+        label={t('filters.autoScroll')}
+      />
+
+      <Typography variant="subtitle2" sx={{ mt: 1 }}>
+        {t('download.title')}
+      </Typography>
+      <Stack direction="row" spacing={1}>
+        <TextField
+          label={t('download.lines')}
+          type="number"
+          value={downloadLines}
+          onChange={e => setDownloadLines(e.target.value)}
+          size="small"
+          fullWidth
+          InputProps={{
+            inputProps: { min: 100, max: 10000 },
+          }}
+        />
+        <ActionButton
+          tone="primary"
+          onClick={handleDownloadLogs}
+          startIcon={<DownloadIcon />}
+          size="small"
+          sx={{
+            width: '100px',
+          }}
+        >
+          {t('download.button')}
+        </ActionButton>
+      </Stack>
+
+      {isMobile && (
+        <ActionButton
+          tone="primary"
+          fullWidth
+          onClick={() => setFilterDrawerOpen(false)}
+          sx={{ mt: 2 }}
+        >
+          {t('filters.apply')}
+        </ActionButton>
+      )}
+    </Stack>
+  )
+
+  const renderRow = useCallback(
+    ({ index, style }: { index: number; style: React.CSSProperties }) => {
+      const log = filteredLogs[index]
+      if (!log) return null
+      return (
+        <LogRow
+          style={style}
+          log={log}
+          isMobile={isMobile}
+          isSmall={isSmall}
+          isAdvanced={isAdvanced}
+          onLogClick={handleLogClick}
+        />
+      )
+    },
+    [filteredLogs, isMobile, isSmall, isAdvanced, handleLogClick]
+  )
+
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        minHeight: 0,
+        p: { xs: 1, sm: 2 },
+      }}
+    >
+      {isDisconnected && (
+        <Alert severity="warning" sx={{ mb: 1 }}>
+          {t('status.disconnected')}
+        </Alert>
+      )}
+
+      {!isMobile && (
+        <Box
+          sx={{
+            display: 'flex',
+            gap: 2,
+            my: 1,
+            pl: 1,
+            flexShrink: 0,
+            flexWrap: 'wrap',
+          }}
+        >
+          <FormControlLabel
+            control={
+              <Switch
+                checked={isAdvanced}
+                onChange={e => setIsAdvanced(e.target.checked)}
+                color="primary"
+              />
+            }
+            label={t('filters.advancedMode')}
+          />
+          <FormControlLabel
+            control={
+              <Switch
+                checked={autoScroll}
+                onChange={e => setAutoScroll(e.target.checked)}
+                color="primary"
+              />
+            }
+            label={t('filters.autoScroll')}
+          />
+          <TextField
+            select
+            label={t('filters.level')}
+            value={filters.level}
+            onChange={e => setFilters(prev => ({ ...prev, level: e.target.value }))}
+            size="small"
+            sx={{ width: 120 }}
+          >
+            <MenuItem value="">{t('filters.all')}</MenuItem>
+            {Object.keys(LOG_TABLE_STYLES.SEVERITY).map(level => (
+              <MenuItem key={level} value={level}>
+                {level}
+              </MenuItem>
+            ))}
+          </TextField>
+          <Autocomplete
+            options={sources}
+            value={filters.source}
+            onChange={(_, newValue: string | null) => {
+              setRealtimeLogs([]) // 切换源时清空日志
+              logQueue.current = [] // 并清空队列
+              setFilters(prev => ({
+                ...prev,
+                source: newValue || '',
+              }))
+            }}
+            sx={{ width: 200 }}
+            renderInput={params => (
+              <TextField {...params} label={t('filters.source')} size="small" />
+            )}
+          />
+          <TextField
+            label={t('filters.messageContent')}
+            value={filters.message}
+            onChange={e => setFilters(prev => ({ ...prev, message: e.target.value }))}
+            size="small"
+            sx={{ flexGrow: 1 }}
+          />
+
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Tooltip title={t('download.linesTooltip')}>
+              <TextField
+                label={t('download.lines')}
+                type="number"
+                value={downloadLines}
+                onChange={e => setDownloadLines(e.target.value)}
+                size="small"
+                sx={{ width: 120 }}
+                InputProps={{
+                  inputProps: { min: 100, max: 10000 },
+                }}
+              />
+            </Tooltip>
+            <Tooltip title={t('download.tooltip')}>
+              <ActionButton
+                tone="primary"
+                onClick={handleDownloadLogs}
+                startIcon={<DownloadIcon />}
+                size="small"
+              >
+                {t('download.buttonFull')}
+              </ActionButton>
+            </Tooltip>
+          </Box>
+        </Box>
+      )}
+
+      <Paper
+        elevation={3}
+        sx={{
+          flexGrow: 1,
+          minHeight: 0,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          ...UNIFIED_TABLE_STYLES.paper,
+        }}
+      >
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            height: '100%',
+            minHeight: 0,
+            width: '100%',
+          }}
+        >
+          <TableHeader isMobile={isMobile} isSmall={isSmall} isAdvanced={isAdvanced} t={t} />
+          <Box
+            sx={{
+              flexGrow: 1,
+              minHeight: 0,
+              overflow: 'hidden',
+              ...UNIFIED_TABLE_STYLES.tableViewport,
+            }}
+          >
+            <AutoSizer>
+              {({ height, width }) => (
+                <List
+                  ref={listRef}
+                  height={height}
+                  width={width}
+                  itemCount={filteredLogs.length}
+                  itemSize={ROW_HEIGHT}
+                  overscanCount={isMobile ? 8 : 20}
+                  style={{
+                    overflowX: 'hidden',
+                  }}
+                >
+                  {renderRow}
+                </List>
+              )}
+            </AutoSizer>
+          </Box>
+        </Box>
+      </Paper>
+
+      {isMobile && (
+        <>
+          <Drawer
+            anchor="right"
+            open={filterDrawerOpen}
+            onClose={() => setFilterDrawerOpen(false)}
+            sx={{
+              '& .MuiDrawer-paper': {
+                width: isSmall ? '85%' : '70%',
+                maxWidth: 320,
+              },
+            }}
+          >
+            <FilterContent />
+          </Drawer>
+
+          <Fab
+            color="primary"
+            aria-label={t('filters.title')}
+            onClick={() => setFilterDrawerOpen(true)}
+            sx={{
+              position: 'fixed',
+              bottom: 16,
+              right: 16,
+              zIndex: 1099,
+            }}
+            size={isSmall ? 'medium' : 'large'}
+          >
+            <FilterAltIcon />
+          </Fab>
+        </>
+      )}
+
+      <NekroDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+        dividers
+        title={
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Chip
+              label={selectedLog?.level}
+              size="small"
+              sx={selectedLog ? CHIP_VARIANTS.getLogLevelChip(selectedLog.level, false) : {}}
+            />
+            <Typography variant="h6">{t('dialog.details')}</Typography>
+          </Box>
+        }
+        titleActions={
+          selectedLog && (
+            <IconActionButton
+              onClick={() => copyLogContent(selectedLog)}
+              size="small"
+              title={t('dialog.copyLog')}
+              sx={{ mr: 1 }}
+            >
+              <ContentCopyIcon fontSize="small" />
+            </IconActionButton>
+          )
+        }
+        actions={
+          <ActionButton
+            tone="primary"
+            onClick={() => setDialogOpen(false)}
+            size="small"
+          >
+            {t('dialog.close')}
+          </ActionButton>
+        }
+      >
+        {selectedLog && (
+          <Stack spacing={2}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="body2" sx={{ fontWeight: 'bold', width: 80 }}>
+                {t('dialog.time')}
+              </Typography>
+              <Typography variant="body2">{selectedLog.timestamp}</Typography>
+            </Box>
+
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Typography variant="body2" sx={{ fontWeight: 'bold', width: 80 }}>
+                {t('dialog.source')}
+              </Typography>
+              <Typography variant="body2" sx={{ flex: 1 }}>
+                {selectedLog.source}
+              </Typography>
+            </Box>
+
+            {isAdvanced && (
+              <>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 'bold', width: 80 }}>
+                    {t('dialog.module')}
+                  </Typography>
+                  <Typography variant="body2" sx={{ flex: 1 }}>
+                    {selectedLog.function}
+                  </Typography>
+                </Box>
+
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 'bold', width: 80 }}>
+                    {t('dialog.line')}
+                  </Typography>
+                  <Typography variant="body2" sx={{ flex: 1 }}>
+                    {t('dialog.lineNumber', { line: selectedLog.line })}
+                  </Typography>
+                </Box>
+              </>
+            )}
+
+            <Divider />
+
+            <Box>
+              <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>
+                {t('dialog.messageContent')}
+              </Typography>
+              <Paper
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  backgroundColor: getAlphaColor(
+                    theme.palette.mode === 'dark'
+                      ? theme.palette.background.paper
+                      : theme.palette.background.default,
+                    0.05
+                  ),
+                  maxHeight: '50vh',
+                  overflow: 'auto',
+                  fontFamily: 'monospace',
+                  fontSize: '0.85rem',
+                  borderRadius: 1,
+                  borderColor: 'divider',
+                }}
+              >
+                {selectedLog.message}
+              </Paper>
+            </Box>
+
+            {selectedLog.exception_type && (
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                <Typography variant="body2" sx={{ fontWeight: 'bold', width: 80 }}>
+                  {t('dialog.exceptionType')}
+                </Typography>
+                <Typography variant="body2" sx={{ flex: 1, fontFamily: 'monospace' }}>
+                  {selectedLog.exception_type}
+                </Typography>
+              </Box>
+            )}
+
+            {selectedLog.exception_message && (
+              <Box>
+                <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>
+                  {t('dialog.exceptionMessage')}
+                </Typography>
+                <Paper
+                  variant="outlined"
+                  sx={{
+                    p: 2,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    backgroundColor: getAlphaColor(
+                      theme.palette.mode === 'dark'
+                        ? theme.palette.background.paper
+                        : theme.palette.background.default,
+                      0.05
+                    ),
+                    fontFamily: 'monospace',
+                    fontSize: '0.85rem',
+                    borderRadius: 1,
+                    borderColor: 'divider',
+                  }}
+                >
+                  {selectedLog.exception_message}
+                </Paper>
+              </Box>
+            )}
+
+            {selectedLog.traceback && (
+              <Box>
+                <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>
+                  {t('dialog.traceback')}
+                </Typography>
+                <Paper
+                  variant="outlined"
+                  sx={{
+                    p: 2,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    backgroundColor: getAlphaColor(
+                      theme.palette.mode === 'dark'
+                        ? theme.palette.background.paper
+                        : theme.palette.background.default,
+                      0.05
+                    ),
+                    maxHeight: '50vh',
+                    overflow: 'auto',
+                    fontFamily: 'monospace',
+                    fontSize: '0.8rem',
+                    borderRadius: 1,
+                    borderColor: 'divider',
+                  }}
+                >
+                  {selectedLog.traceback}
+                </Paper>
+              </Box>
+            )}
+          </Stack>
+        )}
+      </NekroDialog>
+
+      <NekroDialog
+        open={downloadConfirmOpen}
+        onClose={() => setDownloadConfirmOpen(false)}
+        title={t('download.confirmTitle')}
+        maxWidth="sm"
+        dividers
+        actions={
+          <>
+            <ActionButton tone="secondary" onClick={() => setDownloadConfirmOpen(false)}>{t('download.cancel')}</ActionButton>
+            <ActionButton tone="danger" onClick={confirmDownloadLogs}>
+              {t('download.confirm')}
+            </ActionButton>
+          </>
+        }
+      >
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          <strong>{t('download.securityWarning')}</strong>
+        </Alert>
+        <Typography variant="body1" gutterBottom>
+          {t('download.securityInfo1')}
+        </Typography>
+        <Typography variant="body1">{t('download.securityInfo2')}</Typography>
+      </NekroDialog>
+
+      {/* 复制失败时的降级对话框 */}
+      <CopyableTextDialog
+        open={copyDialogOpen}
+        onClose={() => setCopyDialogOpen(false)}
+        text={copyDialogText}
+        title={t('dialog.copyLog')}
+      />
+    </Box>
+  )
+}

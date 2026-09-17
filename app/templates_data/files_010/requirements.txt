@@ -1,0 +1,6 @@
+python-dotenv
+pymongo
+pyroaddon
+
+# auto-added by TikZoom curator
+pyrogram

@@ -1,0 +1,151 @@
+import re
+from urllib.parse import quote, urlsplit, urlunsplit
+
+import matplotlib.pyplot as plt
+import orjson
+
+from core.builtins.bot import Bot
+from core.utils.cache import random_cache_path
+from core.utils.http import post_url
+from core.utils.image_table import ImageTable, image_table_render
+
+
+def parse_markdown(md: str) -> list[dict[str, str]]:
+    code_block_pattern = r"```(\w*)\n([\s\S]*?)\n```"  # 代码块
+    latex_pattern = r"\$\$([\s\S]*?)\$\$"  # 块级 LaTeX
+    table_pattern = r"(?:\|.*\|\n)+\|(?:[-:| ]+)\|\n(?:\|.*\|\n)+"  # Markdown 表格
+    # 先分块
+    text_split_pattern = r"(```[\s\S]*?```|\$\$[\s\S]*?\$\$|(?:\|.*\|\n)+\|(?:[-:| ]+)\|\n(?:\|.*\|\n)+)"
+
+    blocks = []
+    last_end = 0
+
+    for match in re.finditer(text_split_pattern, md):
+        start, end = match.span()
+        content = match.group(0)
+
+        if start > last_end:
+            blocks.append({"type": "text", "content": md[last_end:start]})
+
+        if content.startswith("```"):
+            code_match = re.match(code_block_pattern, content)
+            if code_match:
+                language = code_match.group(1)
+                code = code_match.group(2).strip()
+
+                if language:
+                    blocks.append({"type": "code", "content": {"language": language, "code": code}})
+                else:
+                    blocks.append({"type": "text", "content": f"```\n{code}\n```"})
+
+        elif content.startswith("$$"):
+            latex_match = re.match(latex_pattern, content)
+            if latex_match:
+                blocks.append({"type": "latex", "content": latex_match.group(1).strip()})
+
+        elif re.match(table_pattern, content):
+            blocks.append({"type": "table", "content": content.strip()})
+
+        last_end = end
+
+    if last_end < len(md):
+        blocks.append({"type": "text", "content": md[last_end:]})
+
+    return blocks
+
+
+def format_refs(session: Bot.MessageSession, text: str) -> str:
+    ref_pattern = re.compile(r"\[ref:([^>]+?)\]")
+    urls: list[str] = []
+
+    def safe_quote_url(url: str) -> str:
+        parts = urlsplit(url)
+        quoted_path = quote(parts.path, safe="/:")
+        quoted_query = quote(parts.query, safe="&=%+~@$-_.")
+        quoted_fragment = quote(parts.fragment, safe="")
+        return urlunsplit((parts.scheme, parts.netloc, quoted_path, quoted_query, quoted_fragment))
+
+    def _replace(match: re.Match) -> str:
+        raw_url = match.group(1).strip()
+        url = safe_quote_url(raw_url)
+        if url not in urls:
+            urls.append(url)
+        return f"[{urls.index(url) + 1}]"
+
+    text = ref_pattern.sub(_replace, text)
+
+    if urls:
+        text += "\n\n"
+        text += f"## {session.session_info.locale.t('ai.message.references.title')}\n"
+        text += f"```{session.session_info.locale.t('ai.message.references.title')}\n"
+        text += "\n".join(f"{urls.index(url) + 1}. {url}" for url in urls)
+        text += "\n```"
+
+    return text
+
+
+def process_redacted(text: str) -> str:
+    return re.sub(r"\{I18N:check\.redacted,reason=(.*?)\}", r"[REDACTED:\1]", text)
+
+
+def generate_latex(formula: str):
+    fig, ax = plt.subplots()
+    text = ax.text(0.5, 0.5, f"${formula}$", fontsize=20, ha="center", va="center")
+    ax.set_axis_off()
+
+    fig.canvas.draw()
+    bbox = text.get_window_extent(renderer=fig.canvas.get_renderer())
+
+    width, height = bbox.width / fig.dpi, bbox.height / fig.dpi
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(width, height))
+    ax.text(0.5, 0.5, f"${formula}$", fontsize=20, ha="center", va="center")
+    ax.set_axis_off()
+
+    path = f"{random_cache_path()}.png"
+    plt.savefig(path, dpi=300, bbox_inches="tight", transparent=True, pad_inches=0.1)
+    plt.close()
+
+    return path
+
+
+async def generate_code_snippet(code: str, language: str):
+    return await post_url(
+        url="https://carbonara.solopov.dev/api/cook",
+        data=orjson.dumps(
+            {
+                "code": process_redacted(code),
+                "backgroundColor": "rgba(255, 255, 255, 0)",
+                "language": language,
+                "theme": "night-owl",
+            }
+        ),
+        headers={"content-type": "application/json"},
+        fmt="content",
+    )
+
+
+async def generate_md_table(table: str):
+    lines = table.strip().split("\n")
+    if len(lines) < 2:
+        raise ValueError("Invalid Markdown table format.")
+
+    headers = [process_redacted(h.strip()) for h in lines[0].split("|") if h.strip()]
+
+    data = []
+    for line in lines[2:]:
+        row = [process_redacted(cell.strip()) for cell in line.split("|") if cell.strip()]
+        if row:
+            data.append(row)
+
+    if not data:
+        raise ValueError("No data found in Markdown table.")
+
+    image_table = ImageTable(data=data, headers=headers)
+    imgs = await image_table_render(image_table)
+
+    if imgs:
+        return list(imgs)
+
+    raise RuntimeError("Generation failed.")

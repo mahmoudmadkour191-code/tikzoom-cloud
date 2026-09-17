@@ -1,0 +1,249 @@
+"""
+Context utilities for the research pipeline: native model context and the
+per-agent num_ctx (VRAM-aware, TTS reserve).
+"""
+
+
+from ..config import LLAMASWAP_BACKENDS
+from typing import Tuple, TYPE_CHECKING
+
+from ..config import (
+    MAIN_LLM_FALLBACK_CONTEXT,
+    XTTS_VRAM_MB,
+    MOSS_TTS_VRAM_MB,
+    VRAM_CONTEXT_RATIO_DENSE,
+    VRAM_CONTEXT_RATIO_MOE
+)
+from ..formatting import format_number
+from ..logging_utils import log_message
+from ..model_vram_cache import get_ollama_calibrated_max_context, get_rope_factor_for_model
+from ..gpu_utils import is_moe_model
+
+if TYPE_CHECKING:
+    from ...state import AIState
+
+
+_current_native_context: int = 0
+_current_native_model: str = ""
+
+
+def set_model_native_context(model_id: str, num_ctx: int) -> None:
+    """Set the current model's context length. Called on model/backend switch."""
+    global _current_native_context, _current_native_model
+    _current_native_context = num_ctx
+    _current_native_model = model_id
+
+
+def get_model_native_context(model_id: str, backend_type: str) -> int:
+    """Get native context length for the current model. No file I/O.
+
+    Returns the value from set_model_native_context().
+    Fallback: reads llama-swap YAML once if not yet set.
+    """
+    global _current_native_context, _current_native_model
+
+    if _current_native_model == model_id and _current_native_context > 0:
+        return _current_native_context
+
+    # Fallback: read from config (only if variable not set yet).
+    # vLLM-Eintraege stehen im selben llama-swap-Katalog (current_context
+    # aus --max-model-len).
+    if backend_type in LLAMASWAP_BACKENDS:
+        from ..calibration import parse_llamaswap_config
+        from ..config import LLAMASWAP_CONFIG_PATH
+
+        config = parse_llamaswap_config(LLAMASWAP_CONFIG_PATH)
+        if model_id in config:
+            ctx = int(config[model_id].get("current_context", 0) or 0)
+            if ctx > 0:
+                _current_native_context = ctx
+                _current_native_model = model_id
+                return ctx
+        return 0
+
+    else:
+        from ..model_vram_cache import get_model_native_context_from_cache
+        cached = get_model_native_context_from_cache(model_id)
+        if cached:
+            _current_native_context = cached
+            _current_native_model = model_id
+        return cached or 0
+
+
+def get_stateless_num_ctx(model_id: str, backend_type: str) -> Tuple[int, str]:
+    """num_ctx for paths without Reflex State (Message Hub, hub web search).
+
+    ``model_id`` is the effective, variant-resolved id (base + suffix from
+    get_effective_model_from_settings), so the context read matches the
+    profile that actually loads. Returns ``(num_ctx, label)``; the label
+    names the loaded variant (e.g. ``tts-xtts``) instead of blindly
+    "native", or "fallback" when no calibrated context is known.
+    """
+    num_ctx = get_model_native_context(model_id, backend_type)
+    if num_ctx <= 0:
+        return MAIN_LLM_FALLBACK_CONTEXT, "fallback"
+    marker_idx = [i for i in (model_id.find(m) for m in ("-tts-", "-vlm-", "-speed")) if i > 0]
+    label = model_id[min(marker_idx):].lstrip("-") if marker_idx else "native"
+    return num_ctx, label
+
+
+def get_agent_num_ctx(
+    agent: str,
+    state: "AIState",
+    model_id: str,
+    fallback: int = MAIN_LLM_FALLBACK_CONTEXT  # Use config constant (32K) as default
+) -> Tuple[int, str]:
+    """
+    Determine num_ctx for a specific agent.
+
+    This is the SINGLE SOURCE OF TRUTH for num_ctx determination.
+    All code that needs to determine num_ctx for an agent should use this function.
+
+    IMPORTANT: This function applies XTTS VRAM reservation when TTS is enabled on GPU.
+    The returned num_ctx is already reduced by ~14K tokens when XTTS uses GPU VRAM.
+
+    Args:
+        agent: Agent identifier — any registered agent (canonical or custom;
+            each owns its tuning bucket, model-bound toggles resolve via
+            the model owner)
+        state: AIState instance containing per-agent settings
+        model_id: **BASE** model ID without variant suffix (e.g., "qwen3:14b" or
+            "Qwen3.5-...-IQ3_XXS"). MUST NOT be a resolved variant id like
+            ``<base>-speed`` or ``<base>-tts-<engine>`` — this function runs
+            resolve_variant_suffix() itself and a doubly-resolved id would
+            never match a YAML entry and fall back to the default context.
+        fallback: Default value if no calibration available (default: MAIN_LLM_FALLBACK_CONTEXT = 32K)
+
+    Returns:
+        Tuple of (num_ctx, source) where source is one of:
+        - "manual" - User explicitly set a manual value
+        - "VRAM cache" - Value from VRAM calibration cache
+        - "VRAM cache (XTTS: -X tok)" - With XTTS reservation applied
+        - "fallback" - No calibration available, using fallback
+
+    Examples:
+        >>> num_ctx, source = get_agent_num_ctx("aifred", state, "qwen3:14b")
+        >>> print(f"Using {num_ctx} tokens ({source})")
+        Using 111360 tokens (VRAM cache)
+
+        >>> num_ctx, source = get_agent_num_ctx("sokrates", state, "qwen3:8b")
+        >>> print(f"Using {num_ctx} tokens ({source})")
+        Using 4096 tokens (manual)
+    """
+    # Agent addressing lives in the agent_settings SSOT. Speed toggles are
+    # read from the MODEL OWNER (an agent sharing AIfred's LLM shares
+    # AIfred's speed toggle — otherwise this lookup and the actual load
+    # resolve different llama-swap variants).
+    from ..agent_settings import get_agent_setting, model_owner, settings_agent
+    agent = settings_agent(agent)
+    owner = model_owner(state, agent)
+
+    # Check if manual mode is enabled for this agent
+    if get_agent_setting(state, agent, "num_ctx_manual_enabled", False):
+        # Manual mode: use user-configured value (no XTTS adjustment for manual)
+        manual_value = get_agent_setting(state, agent, "num_ctx_manual", fallback)
+        return (manual_value if manual_value else fallback, "manual")
+
+    # Auto mode: try VRAM calibration cache (backend-aware)
+    backend_type = getattr(state, 'backend_type', 'ollama')
+
+    if backend_type in LLAMASWAP_BACKENDS:
+        # llama.cpp: YAML -c value = ground truth (actual server config).
+        # When a GPU TTS engine is selected, llama-swap will actually load
+        # the smaller `<model>-tts-<engine>` profile — so the context we
+        # report has to be read from THAT entry, not the base. Without
+        # this, the bubble's compression trigger uses the base context
+        # (e.g. 194k) while llama-server is actually configured at the
+        # TTS-variant context (e.g. 117k), and a long tool loop runs
+        # past the real limit without ever triggering history compression.
+        # SSOT is the State toggle (enable_tts + tts_engine), not a live
+        # container probe — same rationale as _effective_model_id.
+        from ..calibration import parse_llamaswap_config, resolve_effective_suffix
+        from ..config import LLAMASWAP_CONFIG_PATH
+        config = parse_llamaswap_config(LLAMASWAP_CONFIG_PATH)
+
+        # Resolve the variant via the SSOT — same rules as the model-id
+        # resolver in _agent_config_mixin.
+        suffix = resolve_effective_suffix(
+            LLAMASWAP_CONFIG_PATH,
+            model_id,
+            speed_on=get_agent_setting(state, owner, "speed_mode", False),
+            has_speed_variant=get_agent_setting(state, owner, "has_speed_variant", False),
+            tts_active=bool(getattr(state, "enable_tts", False)),
+            tts_engine=getattr(state, "tts_engine", ""),
+        )
+        effective_id = model_id + suffix
+
+        if effective_id in config and config[effective_id]["current_context"] > 0:
+            num_ctx = config[effective_id]["current_context"]
+            source = "llama-swap YAML"
+            if suffix:
+                source += f" ({suffix.lstrip('-')})"
+        else:
+            log_message(f"⚠️ Model {effective_id} not found in llama-swap YAML → fallback {fallback}")
+            num_ctx = fallback
+            source = "fallback"
+    elif backend_type == "cloud_api":
+        # Cloud APIs: models typically support 128k+ context
+        from ..config import CLOUD_API_FALLBACK_CONTEXT
+        num_ctx = CLOUD_API_FALLBACK_CONTEXT
+        source = "cloud default"
+    else:
+        # Ollama: VRAM calibration cache
+        rope_factor = get_rope_factor_for_model(model_id)
+        cached_ctx = get_ollama_calibrated_max_context(model_id, rope_factor)
+
+        if cached_ctx:
+            num_ctx = cached_ctx
+            source = "VRAM cache"
+        else:
+            num_ctx = fallback
+            source = "fallback"
+
+    # TTS VRAM reservation — only for backends where context is dynamic (Ollama).
+    # For llamacpp: llama-swap YAML has separate TTS-calibrated profiles with
+    # adjusted tensor-split. The -c value IS the ground truth — no reduction needed.
+    # For vLLM/cloud: context is fixed at server startup.
+    enable_tts = getattr(state, 'enable_tts', False)
+    tts_engine = getattr(state, 'tts_engine', '')
+
+    if enable_tts and backend_type == "ollama":
+        tts_streaming = getattr(state, 'tts_streaming', False)
+        tts_autoplay = getattr(state, 'tts_autoplay', False)
+        tts_mode_parts = []
+        if tts_streaming:
+            tts_mode_parts.append("Streaming")
+        if tts_autoplay:
+            tts_mode_parts.append("Auto-Play")
+        tts_mode = ", ".join(tts_mode_parts) if tts_mode_parts else "Manual"
+
+        if 'xtts' in tts_engine.lower():
+            xtts_force_cpu = getattr(state, 'xtts_force_cpu', False)
+            device_mode = "CPU" if xtts_force_cpu else "GPU"
+
+            if not xtts_force_cpu:
+                vram_ratio = VRAM_CONTEXT_RATIO_MOE if is_moe_model(model_id) else VRAM_CONTEXT_RATIO_DENSE
+                xtts_token_reserve = int(XTTS_VRAM_MB / vram_ratio)
+                original_ctx = num_ctx
+                num_ctx = max(2048, num_ctx - xtts_token_reserve)
+                source = f"{source} (XTTS: -{format_number(xtts_token_reserve)} tok)"
+                log_message(f"🔊 TTS: XTTS ({device_mode}), {tts_mode} | VRAM: {format_number(original_ctx)} → {format_number(num_ctx)} tok (-{format_number(xtts_token_reserve)})")
+            else:
+                log_message(f"🔊 TTS: XTTS ({device_mode}), {tts_mode} | No VRAM reservation (CPU mode)")
+        elif 'moss' in tts_engine.lower():
+            moss_device = getattr(state, 'moss_tts_device', '')
+
+            if moss_device == "cuda":
+                vram_ratio = VRAM_CONTEXT_RATIO_MOE if is_moe_model(model_id) else VRAM_CONTEXT_RATIO_DENSE
+                moss_token_reserve = int(MOSS_TTS_VRAM_MB / vram_ratio)
+                original_ctx = num_ctx
+                num_ctx = max(2048, num_ctx - moss_token_reserve)
+                source = f"{source} (MOSS: -{format_number(moss_token_reserve)} tok)"
+                log_message(f"🔊 TTS: MOSS-TTS (GPU), {tts_mode} | VRAM: {format_number(original_ctx)} → {format_number(num_ctx)} tok (-{format_number(moss_token_reserve)})")
+            else:
+                log_message(f"🔊 TTS: MOSS-TTS ({moss_device or 'not loaded'}), {tts_mode} | No VRAM reservation")
+        else:
+            # Other TTS engines (Edge TTS, Google TTS, etc.) - no VRAM impact
+            log_message(f"🔊 TTS: {tts_engine}, {tts_mode} | No VRAM impact (cloud/CPU)")
+
+    return (num_ctx, source)

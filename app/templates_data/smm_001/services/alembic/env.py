@@ -1,0 +1,73 @@
+import os
+import sys
+from logging.config import fileConfig
+
+from alembic import context
+from dotenv import load_dotenv
+from sqlalchemy import engine_from_config, pool
+
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if BASE_DIR not in sys.path:
+    sys.path.append(BASE_DIR)
+
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+from services.storage.db import Base  # noqa: E402
+from services.storage.database_url import resolve_alembic_database_url  # noqa: E402
+
+
+config = context.config
+database_url = resolve_alembic_database_url(
+    config.get_main_option("sqlalchemy.url"),
+    os.getenv("DATABASE_URL"),
+)
+if database_url:
+    config.set_main_option("sqlalchemy.url", database_url)
+target_metadata = Base.metadata
+
+
+def _configure_alembic_logging() -> None:
+    if not config.config_file_name:
+        return
+    if config.attributes.get("skip_logging_config"):
+        return
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
+
+
+_configure_alembic_logging()
+
+
+def run_migrations_offline():
+    context.configure(
+        url=config.get_main_option("sqlalchemy.url"),
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+        render_as_batch=True,
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online():
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            render_as_batch=True,
+        )
+
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()

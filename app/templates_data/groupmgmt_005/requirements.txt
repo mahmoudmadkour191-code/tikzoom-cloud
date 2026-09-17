@@ -1,0 +1,8 @@
+# auto-added by TikZoom curator
+aiocache
+colorlog
+pymongo
+uvloop
+
+# auto-added by TikZoom curator
+pyrogram

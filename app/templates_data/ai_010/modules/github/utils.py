@@ -1,0 +1,59 @@
+from datetime import datetime
+
+from core.builtins.bot import Bot
+from core.utils.dirty_check import check_bool
+
+
+def dark_check(message: str):
+    blacklist = [
+        "china-dictatorship",
+        "cirosantilli",
+        "gfwlist",
+        "v2ray",
+        "shadowsocks",
+        "xi-yu-yan-kai-fa",
+        "xi-winnie-rainbow-fart",
+        "xi-speech-synthesizer",
+        "dnmkrgi",
+        "xi-speech-demo",
+        "zhao",
+        "programthink",
+    ]
+    return any(message.find(i) != -1 for i in blacklist)
+
+
+def time_diff(time: str):
+    datetimed = datetime.strptime(time, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+    now = datetime.now().timestamp()
+    diff = now - datetimed
+    t = diff / 60 / 60 / 24
+    dw = " day(s)"
+    if t < 1:
+        t = diff / 60 / 60
+        dw = " hour(s)"
+        if t < 1:
+            t = diff / 60
+            dw = " minute(s)"
+            if t < 1:
+                t = diff
+                dw = " second(s)"
+    diff = str(int(t)) + dw
+    return diff
+
+
+async def dirty_check(msg: Bot.MessageSession, text: str, *allowlist_check):
+    allowlist = [
+        "Teahouse-Studios",
+        "Dianliang233",
+        "OasisAkari",
+        "Lakejason0",
+        "wyapx",
+        "XxLittleCxX",
+        "lakejason0",
+    ]
+    if allowlist_check in allowlist:
+        return False
+    check = await check_bool(text, msg)
+    if check:
+        return True
+    return False

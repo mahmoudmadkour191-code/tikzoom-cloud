@@ -1,0 +1,927 @@
+import {
+  Home as HomeIcon,
+  Settings as SettingsIcon,
+  Engineering as EngineeringIcon,
+  SmartToy as NapCatIcon,
+  Terminal as LogsIcon,
+  SmartToy as SmartToyIcon,
+  SportsEsports as SportsEsportsIcon,
+  LiveTv as LiveTvIcon,
+  Api as ApiIcon,
+  CheckCircle as CheckCircleIcon,
+  Error as ErrorIcon,
+  Warning as WarningIcon,
+  RadioButtonUnchecked as RadioButtonUncheckedIcon,
+  Style as StyleIcon,
+  QuestionAnswer as QuestionAnswerIcon,
+  Chat as ChatIcon,
+  Send as SendIcon,
+  QrCode2 as QrCodeIcon,
+  Email as EmailIcon,
+  VpnKey as VpnKeyIcon,
+} from '@mui/icons-material'
+import i18next from './i18n'
+import { ReactElement } from 'react'
+import { Theme } from '@mui/material'
+import { Avatar, SxProps } from '@mui/material'
+import { UI_STYLES } from '../theme/themeConfig'
+import minecraftIcon from '../assets/adapters/minecraft.svg'
+import telegramIcon from '../assets/adapters/telegram.svg'
+import bilibiliIcon from '../assets/adapters/bilibili.svg'
+import discordIcon from '../assets/adapters/discord.svg'
+import emailIcon from '../assets/adapters/email.svg'
+import qqIcon from '../assets/adapters/qq.svg'
+import feishuIcon from '../assets/adapters/feishu.svg'
+import wechatIcon from '../assets/adapters/wechat.svg'
+import wecomIcon from '../assets/adapters/wecom.svg'
+import sseIcon from '../assets/adapters/sse.svg'
+import webIcon from '../assets/adapters/web.svg'
+
+import AdapterHomePage from '../pages/adapter/AdapterHomePage'
+import AdapterConfigPage from '../pages/adapter/AdapterConfigPage'
+import AdapterAdvancedPage from '../pages/adapter/AdapterAdvancedPage'
+import AdapterOverrideConfigPage from '../pages/adapter/AdapterOverrideConfigPage'
+import OneBotV11NapCatPage from '../pages/adapter/onebot_v11/napcat'
+import OneBotV11LogsPage from '../pages/adapter/onebot_v11/logs'
+import WechatOpenILinkLoginPage from '../pages/adapter/wechat_openilink/login'
+import EmailsPage from '../pages/adapter/email/emails'
+import EmailAccountsPage from '../pages/adapter/email/accounts'
+import QQBotOpenClawOnboardingPage from '../pages/adapter/qqbot_openclaw/onboarding'
+import WebMcpAuthPage from '../pages/adapter/web/McpAuthPage'
+
+export interface AdapterTabConfig {
+  label: string
+  value: string
+  icon: ReactElement
+  path: string
+  component: ReactElement
+}
+
+// 适配器视觉配置
+export interface AdapterVisualConfig {
+  displayName: string // 显示名称
+  iconText: string // 图标显示文本
+  navIcon: ReactElement // 导航图标
+  description?: string // 描述信息
+  primaryColor?: string // 主色调
+  tags?: string[] // 标签
+}
+
+export interface AdapterConfig {
+  key: string
+  visual: AdapterVisualConfig
+  tabs: AdapterTabConfig[]
+}
+
+// 状态显示配置
+export interface AdapterStatusDisplay {
+  icon: ReactElement
+  text: string
+  color: 'success' | 'error' | 'warning' | 'default'
+  getBgColor: (theme: Theme) => string
+}
+
+const ADAPTER_ICON_ASSETS: Partial<Record<string, string>> = {
+  onebot_v11: qqIcon,
+  qqbot_openclaw: qqIcon,
+  minecraft: minecraftIcon,
+  bilibili_live: bilibiliIcon,
+  discord: discordIcon,
+  sse: sseIcon,
+  wechatpad: wechatIcon,
+  wechat_openilink: wechatIcon,
+  telegram: telegramIcon,
+  email: emailIcon,
+  feishu: feishuIcon,
+  wxwork: wecomIcon,
+  wxwork_corp_app: wecomIcon,
+  web: webIcon,
+}
+// 适配器配置映射
+export const ADAPTER_CONFIGS: Record<string, AdapterConfig> = {
+  // OneBot V11 适配器配置
+  onebot_v11: {
+    key: 'onebot_v11',
+    visual: {
+      displayName: 'names.onebot_v11',
+      iconText: 'QQ',
+      navIcon: <SmartToyIcon />,
+      description: 'OneBot V11 协议适配器，支持 QQ 机器人通信',
+      tags: ['QQ', 'OneBot', '聊天'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.napcat',
+        value: 'napcat',
+        icon: <NapCatIcon fontSize="small" />,
+        path: 'napcat',
+        component: <OneBotV11NapCatPage />,
+      },
+      {
+        label: 'tabs.logs',
+        value: 'logs',
+        icon: <LogsIcon fontSize="small" />,
+        path: 'logs',
+        component: <OneBotV11LogsPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  // QQBot OpenClaw 适配器配置
+  qqbot_openclaw: {
+    key: 'qqbot_openclaw',
+    visual: {
+      displayName: 'names.qqbot_openclaw',
+      iconText: 'QQ',
+      navIcon: <SmartToyIcon />,
+      description: '基于 OpenClaw QQBot 渠道行为实现的 QQ 私聊与群聊适配器',
+      tags: ['QQ', 'OpenClaw', 'QQBot', '聊天'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.onboarding',
+        value: 'onboarding',
+        icon: <QrCodeIcon fontSize="small" />,
+        path: 'onboarding',
+        component: <QQBotOpenClawOnboardingPage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  // Minecraft 适配器配置
+  minecraft: {
+    key: 'minecraft',
+    visual: {
+      displayName: 'names.minecraft',
+      iconText: 'MC',
+      navIcon: <SportsEsportsIcon />,
+      description: 'Minecraft 服务器适配器，支持游戏内聊天',
+      tags: ['Minecraft', '游戏', '服务器'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  // Bilibili Live 适配器配置
+  bilibili_live: {
+    key: 'bilibili_live',
+    visual: {
+      displayName: 'names.bilibili_live',
+      iconText: 'B站',
+      navIcon: <LiveTvIcon />,
+      description: 'Bilibili 直播适配器，接收直播间弹幕和互动',
+      tags: ['Bilibili', '直播', '弹幕'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  // Discord 适配器配置
+  discord: {
+    key: 'discord',
+    visual: {
+      displayName: 'names.discord',
+      iconText: 'DC',
+      navIcon: <QuestionAnswerIcon />,
+      description: '连接到 Discord 平台的适配器，允许通过 Bot 与服务器和用户进行交互。',
+      tags: ['Discord', '聊天', '社区', 'IM'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  // SSE 适配器配置
+  sse: {
+    key: 'sse',
+    visual: {
+      displayName: 'names.sse',
+      iconText: 'SSE',
+      navIcon: <ApiIcon />,
+      description: '基于 Server-Sent Events 的通用 HTTP 适配器',
+      tags: ['SSE', 'HTTP', 'API'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  // WeChatPad 适配器配置
+  wechatpad: {
+    key: 'wechatpad',
+    visual: {
+      displayName: 'names.wechatpad',
+      iconText: '微信',
+      navIcon: <ChatIcon />,
+      description: 'WeChatPad 微信适配器，支持微信消息收发和群聊管理',
+      tags: ['微信', 'WeChat', '聊天', 'IM'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  // WeChat OpenILink 适配器配置
+  wechat_openilink: {
+    key: 'wechat_openilink',
+    visual: {
+      displayName: 'names.wechat_openilink',
+      iconText: '微信',
+      navIcon: <ChatIcon />,
+      description: '基于 OpenILink SDK 的微信适配器（MVP: 文本收发）',
+      tags: ['微信', 'OpenILink', '聊天', 'IM'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.login',
+        value: 'login',
+        icon: <QrCodeIcon fontSize="small" />,
+        path: 'login',
+        component: <WechatOpenILinkLoginPage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  // Telegram 适配器配置
+  telegram: {
+    key: 'telegram',
+    visual: {
+      displayName: 'names.telegram',
+      iconText: 'TG',
+      navIcon: <SendIcon />,
+      description: 'Telegram 适配器，支持 Telegram 机器人通信',
+      tags: ['Telegram', '聊天', 'IM'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  // Email 适配器配置
+  email: {
+    key: 'email',
+    visual: {
+      displayName: 'names.email',
+      iconText: 'Mail',
+      navIcon: <EmailIcon />,
+      description:
+        '邮箱适配器，支持多账户收发、Gmail/Outlook 官方登录、邮件同步、附件流转和收件诊断',
+      tags: ['Email', '邮件', 'IMAP', 'SMTP', 'OAuth', '附件'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.accounts',
+        value: 'accounts',
+        icon: <EmailIcon fontSize="small" />,
+        path: 'accounts',
+        component: <EmailAccountsPage />,
+      },
+      {
+        label: 'tabs.emails',
+        value: 'emails',
+        icon: <EmailIcon fontSize="small" />,
+        path: 'emails',
+        component: <EmailsPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  // 飞书适配器配置
+  feishu: {
+    key: 'feishu',
+    visual: {
+      displayName: 'names.feishu',
+      iconText: '飞书',
+      navIcon: <ChatIcon />,
+      description: '飞书开放平台适配器，通过 WebSocket 连接飞书机器人',
+      tags: ['飞书', 'Feishu', 'Lark', 'IM'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  // 企业微信智能机器人适配器配置
+  wxwork: {
+    key: 'wxwork',
+    visual: {
+      displayName: 'names.wxwork',
+      iconText: '企微AI',
+      navIcon: <ChatIcon />,
+      description: '企业微信 AI Bot 长连接适配器，使用 Bot ID 与 Secret 收发消息',
+      tags: ['企业微信', 'WeWork', 'WeCom', 'AI Bot', 'WebSocket'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  // 企业微信自建应用适配器配置
+  wxwork_corp_app: {
+    key: 'wxwork_corp_app',
+    visual: {
+      displayName: 'names.wxwork_corp_app',
+      iconText: '企微应用',
+      navIcon: <ChatIcon />,
+      description: '企业微信自建应用适配器，使用回调接收消息并通过应用 API 发送',
+      tags: ['企业微信', 'WeWork', 'WeCom', 'Corp App', 'IM'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  web: {
+    key: 'web',
+    visual: {
+      displayName: 'names.web',
+      iconText: 'Web',
+      navIcon: <ChatIcon />,
+      description: 'WebUI 内置网页聊天适配器，支持浏览器会话与 MCP 测试能力',
+      tags: ['Web', 'MCP', '测试'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.mcpAuth',
+        value: 'mcp-auth',
+        icon: <VpnKeyIcon fontSize="small" />,
+        path: 'mcp-auth',
+        component: <WebMcpAuthPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+
+  // 默认适配器配置（用于其他适配器）
+  default: {
+    key: 'default',
+    visual: {
+      displayName: 'names.default',
+      iconText: 'AD',
+      navIcon: <SettingsIcon />,
+      description: '通用适配器配置',
+      tags: ['通用'],
+    },
+    tabs: [
+      {
+        label: 'tabs.home',
+        value: 'home',
+        icon: <HomeIcon fontSize="small" />,
+        path: '',
+        component: <AdapterHomePage />,
+      },
+      {
+        label: 'tabs.config',
+        value: 'config',
+        icon: <SettingsIcon fontSize="small" />,
+        path: 'config',
+        component: <AdapterConfigPage />,
+      },
+      {
+        label: 'tabs.overrides',
+        value: 'overrides',
+        icon: <StyleIcon fontSize="small" />,
+        path: 'overrides',
+        component: <AdapterOverrideConfigPage />,
+      },
+      {
+        label: 'tabs.advanced',
+        value: 'advanced',
+        icon: <EngineeringIcon fontSize="small" />,
+        path: 'advanced',
+        component: <AdapterAdvancedPage />,
+      },
+    ],
+  },
+}
+
+/**
+ * 获取适配器的选项卡配置
+ * @param adapterKey 适配器key
+ * @returns 适配器选项卡配置
+ */
+export const getAdapterConfig = (adapterKey: string): AdapterConfig => {
+  return ADAPTER_CONFIGS[adapterKey] || ADAPTER_CONFIGS.default
+}
+
+/**
+ * 获取适配器的视觉配置
+ * @param adapterKey 适配器key
+ * @returns 适配器视觉配置
+ */
+export const getAdapterVisualConfig = (adapterKey: string): AdapterVisualConfig => {
+  const config = getAdapterConfig(adapterKey)
+  return config.visual
+}
+
+/**
+ * 获取适配器图标文本
+ * @param adapterKey 适配器key
+ * @returns 图标文本
+ */
+export const getAdapterIconText = (adapterKey: string): string => {
+  const visual = getAdapterVisualConfig(adapterKey)
+  return visual.iconText
+}
+
+/**
+ * 获取适配器显示名称
+ * @param adapterKey 适配器key
+ * @returns 显示名称
+ */
+export const getAdapterDisplayName = (adapterKey: string): string => {
+  const visual = getAdapterVisualConfig(adapterKey)
+  return visual.displayName
+}
+
+/**
+ * 获取适配器选项卡的完整路径
+ * @param adapterKey 适配器key
+ * @param tabPath 选项卡路径
+ * @returns 完整路径
+ */
+export const getAdapterTabPath = (adapterKey: string, tabPath: string): string => {
+  const basePath = `/adapters/${adapterKey}`
+  return tabPath ? `${basePath}/${tabPath}` : basePath
+}
+
+/**
+ * 获取所有适配器的导航配置
+ * @returns 导航配置数组
+ */
+export const getAdapterNavigationConfigs = () => {
+  return [
+    {
+      path: '/adapters',
+      text: i18next.t('menu.adaptersHub', { ns: 'navigation' }),
+      icon: <ApiIcon />,
+      parent: 'adapters',
+    },
+    ...Object.values(ADAPTER_CONFIGS)
+    .filter(config => config.key !== 'default')
+    .map(config => ({
+      path: `/adapters/${config.key}`,
+      text: i18next.t(config.visual.displayName, { ns: 'adapter' }),
+      icon: config.visual.navIcon,
+      parent: 'adapters',
+    })),
+  ]
+}
+
+/**
+ * 获取适配器状态显示配置
+ * @param status 状态字符串
+ * @returns 状态显示配置
+ */
+export const getAdapterStatusDisplay = (status: string): AdapterStatusDisplay => {
+  switch (status) {
+    case 'enabled':
+      return {
+        icon: <CheckCircleIcon color="success" fontSize="small" />,
+        text: 'status.enabled',
+        color: 'success',
+        getBgColor: (theme: Theme) => theme.palette.success.main,
+      }
+    case 'failed':
+      return {
+        icon: <ErrorIcon color="error" fontSize="small" />,
+        text: 'status.failed',
+        color: 'error',
+        getBgColor: (theme: Theme) => theme.palette.error.main,
+      }
+    case 'disabled':
+      return {
+        icon: <WarningIcon color="warning" fontSize="small" />,
+        text: 'status.disabled',
+        color: 'warning',
+        getBgColor: (theme: Theme) => theme.palette.warning.main,
+      }
+    default:
+      return {
+        icon: <RadioButtonUncheckedIcon color="disabled" fontSize="small" />,
+        text: 'status.unknown',
+        color: 'default',
+        getBgColor: (theme: Theme) => theme.palette.grey[500],
+      }
+  }
+}
+
+/**
+ * 创建适配器图标组件
+ * @param adapterKey 适配器key
+ * @param theme MUI主题对象
+ * @param size 图标大小，默认48
+ * @returns Avatar组件
+ */
+export const createAdapterIcon = (
+  adapterKey: string,
+  theme: Theme,
+  size: number = 48
+): ReactElement => {
+  const iconText = getAdapterIconText(adapterKey)
+  const iconAsset = ADAPTER_ICON_ASSETS[adapterKey]
+
+  const iconSx: SxProps<Theme> = {
+    width: size,
+    height: size,
+    fontSize: size < 40 ? '0.875rem' : '1.5rem',
+    background: UI_STYLES.getGradient('card'),
+    backdropFilter: 'blur(8px)',
+    border: UI_STYLES.BORDERS.CARD.DEFAULT,
+    color: theme.palette.text.primary,
+  }
+
+  return (
+    <Avatar
+      src={iconAsset}
+      sx={iconSx}
+      imgProps={{ style: { objectFit: 'contain', padding: size < 40 ? 6 : 8 } }}
+    >
+      {iconText}
+    </Avatar>
+  )
+}

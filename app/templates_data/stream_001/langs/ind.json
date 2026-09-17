@@ -1,0 +1,99 @@
+{
+    "language_name": "🇮🇩 Bahasa Indonesia",
+    "language_icon": "🇮🇩",
+    "language_select_error": "❌ Kesalahan dalam memilih bahasa!\n\n{error_text}",
+    "language_select": "Silakan pilih bahasa antarmuka",
+    "language_changed": "🇮🇩 Anda telah memilih Bahasa Indonesia\n\nAnda dapat mengganti bahasa kapan saja dengan mengetik perintah /lang",
+    "start_message": "Halo, 👋 sahabat! 👋\n\n📄 Versi GPT-Telegramus {version}\n\n💜 Penulis GPT-Telegramus: Fern (juga dikenal sebagai F3RNI)\n💻 Kontributor:\n🤍 Keepalove (Azarell) (Sprav04ka)\n🤍 Hanssen\n🤍 https://github.com/F33RNI/GPT-Telegramus#-contributors\n\n😺 Halaman GitHub: https://github.com/F33RNI/GPT-Telegramus\n\n🎵 Dukung proyek ini dengan membeli musik saya: https://f3rni.bandcamp.com",
+    "help_message": "📄 /start - Pesan selamat datang dan versi bot\n❓ /help - Tampilkan pesan ini\n↕ /module - Ganti modul untuk berbicara\n🧹 /clear - Bersihkan riwayat obrolan\n🌎 /lang - Ganti bahasa\n🆔 /chatid - Tampilkan chat_id Anda\n\nSekarang untuk memulai, kirimkan saya pesan apa pun 💬",
+    "help_message_admin": "Perintah Admin:\n\n💬 /queue - Tampilkan antrian permintaan\n🔃 /restart [modul, opsional] - Mulai ulang modul (atau semua modul), muat ulang konfigurasi, bahasa, dan perintah\n👤 /users - Tampilkan daftar semua pengguna\n🔨 /ban <id> [alasan] - Larang pengguna berdasarkan id dengan alasan (opsional)\n🔓 /unban <id> - Buka larangan pengguna berdasarkan id\n📢 /broadcast <pesan> - Kirim pesan teks kepada semua kecuali pengguna yang diblokir",
+    "empty_request_module_changed": "✅ Modul Anda telah diubah menjadi {module_name}\nSekarang kirimkan permintaan Anda sebagai pesan",
+    "media_group_response": "Gambar yang dihasilkan untuk permintaan \"{request_text}\"",
+    "permissions_deny": "❌ Anda tidak memiliki izin untuk perintah ini!",
+    "queue_overflow": "Antrian penuh. Coba lagi nanti ⏳",
+    "queue_empty": "🗑 Antrian kosong",
+    "queue_accepted": "✅ Permintaan ke modul {module_name} ditambahkan ke antrian.\nPosisi: {queue_size}/{queue_max} ⏳",
+    "response_error": "❌ Kesalahan: {error_text}\n\nMembersihkan riwayat dan buat permintaan lain atau coba lagi nanti",
+    "empty_message": "⚠️ Kosong! Lihat log untuk detailnya",
+    "regenerate_error_not_last": "❌ Kesalahan! Hanya bisa menghasilkan ulang permintaan terakhir!",
+    "regenerate_error_empty": "❌ Kesalahan! Permintaan kosong!",
+    "continue_error_not_last": "❌ Kesalahan! Hanya bisa melanjutkan permintaan terakhir!",
+    "stop_error_not_last": "❌ Kesalahan! Hanya bisa menghentikan permintaan terakhir!",
+    "stop_error": "❌ Kesalahan! Tidak dapat menghentikan penghasilan!",
+    "response_link_format": "\n📄 {source_name}: {link}",
+    "suggestion_format": "💡 {suggestion}",
+    "suggestion_error": "❌ Mungkin menggunakan permintaan yang diajukan hanya dari pesan terakhir!",
+    "users_read_error": "❌ Kesalahan membaca atau menguraikan daftar pengguna!",
+    "users_admin": "Dilarang? Admin? Bahasa Modul ID Nama - Permintaan\n\n{users_data}",
+    "users_total_stats": "Pengguna: {users_num}, diblokir {banned_num}, admin: {admins_num}",
+    "restarting": "🙏 Sedang dilakukan proses restart...\nTunggu sebentar",
+    "restarting_done": "{reload_logs}\n✅ Restart selesai",
+    "chat_cleared": "✅ Riwayat obrolan dibersihkan untuk {module_name}",
+    "clear_error": "❌ Kesalahan membersihkan riwayat obrolan!\n\n{error_text}",
+    "clear_select_module": "Pilih modul yang ingin Anda bersihkan riwayat obrolannya,\natau abaikan pesan ini",
+    "module_select_module": "Modul saat ini Anda: {current_module}\nPilih modul untuk berbicara,\natau abaikan pesan ini",
+    "user_cooldown_error": "❌ Harap tunggu {time_formatted} sebelum mengirim permintaan ke modul {module_name}!",
+    "hours": "j",
+    "minutes": "m",
+    "seconds": "d",
+    "ban_message_admin": "✅ Pengguna diblokir: {banned_user}\n\nAlasan: {ban_reason}",
+    "ban_no_user_id": "❌ Kesalahan! Harap tentukan user_id",
+    "ban_message_user": "❌ Anda tidak masuk daftar putih atau Anda telah diblokir!\n\nAlasan: {ban_reason}",
+    "ban_reason_default": "Alasan tidak ditentukan",
+    "unban_message_admin": "✅ Pengguna dibuka blokir: {unbanned_user}",
+    "broadcast_no_message": "❌ Tidak ada pesan untuk disiarkan!",
+    "broadcast": "📢 {message}",
+    "broadcast_initiated": "⏳ Proses siaran sedang berlangsung... Harap tunggu dan jangan kirim pesan baru!",
+    "broadcast_done": "✅ Siaran selesai! Pesan telah dikirim ke pengguna:\n{broadcast_ok_users}",
+    "style_changed": "✅ Gaya percakapan diubah menjadi {changed_style}",
+    "style_change_error": "❌ Kesalahan mengubah gaya percakapan!\n\n{error_text}",
+    "style_select": "Gaya percakapan Anda: {current_style}\nPilih gaya percakapan baru Bing,\natau abaikan pesan ini",
+    "style_precise": "📏 Presisi",
+    "style_balanced": "⚖️ Seimbang",
+    "style_creative": "🎨 Kreatif",
+    "model_changed": "✅ Model dari modul {module_name} berubah menjadi {changed_model}",
+    "model_select": "Model modul {module_name} Anda: {current_model}\nPilih model baru modul {module_name},\natau abaikan pesan ini",
+    "model_change_error": "❌ Kesalahan saat mengubah model!\n\n{error_text}",
+    "model_no_models": "❌ Anda tidak dapat mengubah model modul saat ini!",
+    "button_model_change": "⚙️ Ubah model",
+    "button_stop_generating": "🛑 Hentikan penghasilan",
+    "button_continue": "⏩ Lanjutkan",
+    "button_regenerate": "🔄 Hasilkan ulang",
+    "button_clear": "🧹 Bersihkan riwayat",
+    "button_module": "↕️ Ganti modul",
+    "button_style_change": "⚙️ Ubah gaya",
+    "modules": {
+        "lmao_chatgpt": {
+            "icon": "💬",
+            "name": "ChatGPT (LMAO API)"
+        },
+        "lmao_ms_copilot": {
+            "icon": "🟦",
+            "name": "MS Copilot (LMAO API)"
+        },
+        "chatgpt": {
+            "icon": "💬",
+            "name": "ChatGPT"
+        },
+        "dalle": {
+            "icon": "🖼",
+            "name": "DALL-E"
+        },
+        "ms_copilot": {
+            "icon": "🔵",
+            "name": "MS Copilot"
+        },
+        "ms_copilot_designer": {
+            "icon": "🎨",
+            "name": "MS Copilot designer"
+        },
+        "gemini": {
+            "icon": "♊",
+            "name": "Gemini"
+        },
+        "groq": {
+            "icon": "🔴",
+            "name": "Groq"
+        }
+    }
+}

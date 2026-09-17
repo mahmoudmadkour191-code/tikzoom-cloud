@@ -1,0 +1,1709 @@
+
+msgid ""
+msgstr ""
+"Project-Id-Version: mybot VERSION\n"
+"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
+"POT-Creation-Date: 2023-03-11 08:51+0300\n"
+"PO-Revision-Date: 2023-03-11 08:51+0300\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language: en\n"
+"Language-Team: en <LL@li.org>\n"
+"Plural-Forms: nplurals=2; plural=(n != 1)\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.9.1\n"
+
+#: ../tgbot/handlers/admin_functions.py:49
+msgid "<b>📢 Введите текст для рассылки пользователям</b>"
+msgstr "<b>📢 Enter the text to send to users</b>"
+
+#: ../tgbot/handlers/admin_functions.py:109
+msgid "<b>📢 Включить пост в ротацию бота?</b>"
+msgstr "<b>📢 Include the post in the bot rotation?</b>"
+
+#: ../tgbot/handlers/admin_functions.py:114
+#: ../tgbot/handlers/admin_functions.py:142
+#: ../tgbot/handlers/admin_functions.py:465
+msgid ""
+"<b>❌ Ошибка синтаксиса HTML.</b>\n"
+"📢 Введите текст для рассылки пользователям.\n"
+"❕ Вы можете использовать HTML разметку."
+msgstr ""
+"<b>❌ Ошибка синтаксиса HTML.</b>📢 Введите текст для рассылки "
+"пользователям.❕ Вы можете использовать HTML разметку."
+
+#: ../tgbot/handlers/admin_functions.py:189
+#: ../tgbot/handlers/admin_functions.py:262
+msgid "<b>📢 Вы отменили отправку рассылки ✅</b>"
+msgstr "<b>📢 Вы отменили отправку рассылки ✅</b>"
+
+#: ../tgbot/handlers/admin_functions.py:198
+msgid "<b>👤 Введите логин или айди пользователя</b>"
+msgstr "<b>👤 Введите логин или айди пользователя</b>"
+
+#: ../tgbot/handlers/admin_functions.py:206
+msgid "<b>🧾 Отправьте номер чека</b>"
+msgstr "<b>🧾 Отправьте номер чека</b>"
+
+msgid "<b>🧾 Посмотрим поданные вакансии:</b>"
+msgstr "<b>🧾 Посмотрим поданные вакансии:</b>"
+
+
+#: ../tgbot/handlers/admin_functions.py:215
+msgid "<b>🧾 Посмотрим запросы продавцов:</b>"
+msgstr "<b>🧾 Посмотрим запросы продавцов:</b>"
+
+#: ../tgbot/handlers/admin_functions.py:272
+msgid "🎁 Последние 10 покупок"
+msgstr "🎁 Последние 10 покупок"
+
+#: ../tgbot/handlers/admin_functions.py:285
+msgid "❗ У пользователя отсутствуют покупки"
+msgstr "❗ У пользователя отсутствуют покупки"
+
+msgid "<b>♻ Подождите, платёж генерируется...</b>"
+msgstr "<b>♻ Подождите, платёж генерируется...</b>"
+
+#: ../tgbot/handlers/admin_functions.py:393
+msgid " Запрос был успешно удален."
+msgstr " Запрос был успешно удален."
+
+#: ../tgbot/handlers/admin_functions.py:396
+#, fuzzy
+msgid ""
+"<b>Ваш запрос был отклонен. Вы можете попробовать подать следующий запрос"
+" через 14 дней.</b>"
+msgstr ""
+"<b>Ваш запрос был отклонен. Вы можете попробовать подать следующий запрос"
+" через 14 дней.</b>"
+
+msgid "Топ - продавцов"
+msgstr "Топ - продавцов"
+
+msgid "шт."
+msgstr "шт."
+
+
+#: ../tgbot/handlers/admin_functions.py:405
+msgid "<b>💰 Введите сумму для выдачи баланса</b>"
+msgstr "<b>💰 Введите сумму для выдачи баланса</b>"
+
+#: ../tgbot/handlers/admin_functions.py:414
+msgid "<b>💰 Введите сумму для изменения баланса</b>"
+msgstr "<b>💰 Введите сумму для выдачи баланса</b>"
+
+#: ../tgbot/handlers/admin_functions.py:442
+msgid "<b> Вам была выдана роль Продавца магазина </b>"
+msgstr "<b> Вам была выдана роль Продавца магазина </b>"
+
+#: ../tgbot/handlers/admin_functions.py:485
+msgid ""
+"<b>❌ Профиль не был найден</b>\n"
+"👤 Введите логин или айди пользователя."
+msgstr "<b>❌ Профиль не был найден</b>👤 Введите логин или айди пользователя."
+
+#: ../tgbot/handlers/admin_functions.py:507
+msgid ""
+"<b>❌ Сумма выдачи не может быть меньше 1 и больше 1 000 000 000</b>\n"
+"💰 Введите сумму для выдачи баланса"
+msgstr ""
+"<b>❌ Сумма выдачи не может быть меньше 1 и больше 1 000 000 000</b>💰 "
+"Введите сумму для выдачи баланса"
+
+msgid "<b>❌ Данные были введены неверно.</b>"
+msgstr "<b>❌ Данные были введены неверно.</b>"
+
+msgid "<b>📢 Рассылка началась... ("
+msgstr "<b>📢 Рассылка началась... ("
+
+msgid "<b>✅ Пользователю"
+msgstr "<b>✅ Пользователю"
+
+msgid "было отправлено сообщение:</b>"
+msgid "было отправлено сообщение:</b>"
+
+#: ../tgbot/handlers/admin_functions.py:510
+msgid ""
+"<b>❌ Данные были введены неверно.</b>"
+"💰 Введите сумму для выдачи баланса"
+msgstr "<b>❌ Данные были введены неверно.</b>"
+"💰 Введите сумму для выдачи баланса"
+
+#: ../tgbot/handlers/admin_functions.py:531
+msgid ""
+"<b>❌ Сумма изменения не может быть меньше 0 и больше 1 000 000 000</b>\n"
+"💰 Введите сумму для изменения баланса"
+msgstr ""
+"<b>❌ Сумма изменения не может быть меньше 0 и больше 1 000 000 000</b>💰 "
+"Введите сумму для изменения баланса"
+
+#: ../tgbot/handlers/admin_functions.py:534
+msgid ""
+"<b>❌ Данные были введены неверно.</b>"
+"💰 Введите сумму для изменения баланса"
+msgstr "<b>❌ Данные были введены неверно.</b>\n"
+"💰 Введите сумму для изменения баланса"
+
+#: ../tgbot/handlers/admin_functions.py:544
+msgid ""
+"<b>💌 Введите сообщение для отправки</b>\n"
+"⚠ Сообщение будет сразу отправлено пользователю."
+msgstr ""
+"<b>💌 Введите сообщение для отправки</b>⚠ Сообщение будет сразу отправлено"
+" пользователю."
+
+#: ../tgbot/handlers/admin_products.py:29 ../tgbot/handlers/user_menu.py:144
+#: ../tgbot/handlers/user_menu_i18n.py:152
+msgid "<b>🗃 Введите название для категории 🏷</b>"
+msgstr "<b>🗃 Введите название для категории 🏷</b>"
+
+#: ../tgbot/handlers/admin_products.py:38
+#: ../tgbot/handlers/admin_products.py:139
+msgid "<b>🗃 Выберите категорию для изменения 🖍</b>"
+msgstr "<b>🗃 Выберите категорию для изменения 🖍</b>"
+
+#: ../tgbot/handlers/admin_products.py:41
+msgid "<b>🗃 Категории отсутствуют 🖍</b>"
+msgstr "<b>🗃 Категории отсутствуют 🖍</b>"
+
+#: ../tgbot/handlers/admin_products.py:49
+msgid ""
+"<b>🗃 Вы действительно хотите удалить все категории? ❌</b>\n"
+"❗ Так же будут удалены все позиции и товары"
+msgstr ""
+"<b>🗃 Вы действительно хотите удалить все категории? ❌</b>❗ Так же будут "
+"удалены все позиции и товары"
+
+#: ../tgbot/handlers/admin_products.py:59 ../tgbot/handlers/user_menu.py:152
+#: ../tgbot/handlers/user_menu.py:1558 ../tgbot/handlers/user_menu.py:1567
+#: ../tgbot/handlers/user_menu.py:1576 ../tgbot/handlers/user_menu.py:1598
+#: ../tgbot/handlers/user_menu.py:1608 ../tgbot/handlers/user_menu_i18n.py:160
+#: ../tgbot/handlers/user_menu_i18n.py:1566
+#: ../tgbot/handlers/user_menu_i18n.py:1575
+#: ../tgbot/handlers/user_menu_i18n.py:1584
+#: ../tgbot/handlers/user_menu_i18n.py:1606
+#: ../tgbot/handlers/user_menu_i18n.py:1616
+msgid "<b>📁 Выберите категорию с нужной позицией 🖍</b>"
+msgstr "<b>📁 Выберите категорию с нужной позицией 🖍</b>"
+
+#: ../tgbot/handlers/admin_products.py:67
+#: ../tgbot/handlers/user_menu_i18n.py:986
+msgid ""
+"<b>📁 Вы действительно хотите удалить все позиции? ❌</b>\n"
+"❗ Так же будут удалены все товары"
+msgstr ""
+"<b>📁 Вы действительно хотите удалить все позиции? ❌</b>❗ Так же будут "
+"удалены все товары"
+
+#: ../tgbot/handlers/admin_products.py:78
+#: ../tgbot/handlers/admin_products.py:919
+#: ../tgbot/handlers/admin_products.py:928
+msgid "<b>🎁 Выберите категорию с нужной позицией</b>"
+msgstr "<b>🎁 Выберите категорию с нужной позицией</b>"
+
+#: ../tgbot/handlers/admin_products.py:81
+msgid "<b>❌ Отсутствуют позиции для добавления товара.</b>"
+msgstr "<b>❌ Отсутствуют позиции для добавления товара.</b>"
+
+#: ../tgbot/handlers/admin_products.py:90
+#: ../tgbot/handlers/user_menu_i18n.py:1252
+#, fuzzy
+msgid ""
+"<b>🖍 Вводите айди товаров, которые нужно удалить</b>\n"
+"❕ Получить айди товаров можно при изменении позиции\n"
+"❕ Если хотите удалить несколько товаров, отправьте ID товаров через "
+"запятую или пробел. Пример:\n"
+"<code>▶ 123456,123456,123456</code>\n"
+"<code>▶ 123456 123456 123456</code>"
+msgstr ""
+"<b>🖍 Вводите айди товаров, которые нужно удалить</b>❕ Получить айди "
+"товаров можно при изменении позиции❕ Если хотите удалить несколько "
+"товаров, отправьте ID товаров через запятую или пробел. Пример:<code>▶ "
+"123456,123456,123456</code><code>▶ 123456 123456 123456</code>"
+
+#: ../tgbot/handlers/admin_products.py:103 ../tgbot/handlers/user_menu.py:1219
+#: ../tgbot/handlers/user_menu_i18n.py:1227
+msgid "<b>🎁 Вы действительно хотите удалить все товары? ❌</b>\n"
+msgstr "<b>🎁 Вы действительно хотите удалить все товары? ❌</b>"
+
+#: ../tgbot/handlers/admin_products.py:116
+msgid "<b>🗃 Категория была успешно создана ✅</b>"
+msgstr "<b>🗃 Категория была успешно создана ✅</b>"
+
+#: ../tgbot/handlers/admin_products.py:118
+msgid ""
+"<b>❌ Название не может превышать 100 символов.</b>"
+"🗃 Введите название для категории 🏷"
+msgstr ""
+"<b>❌ Название не может превышать 100 символов.</b>""
+"🗃 Введите название для категории 🏷"
+
+#: ../tgbot/handlers/admin_products.py:179
+msgid "<b>🗃 Введите новое название для категории 🏷</b>"
+msgstr "<b>🗃 Введите новое название для категории 🏷</b>"
+
+#: ../tgbot/handlers/admin_products.py:201
+msgid ""
+"<b>❌ Название не может превышать 100 символов.</b>\n"
+"🗃 Введите новое название для категории 🏷"
+msgstr ""
+"<b>❌ Название не может превышать 100 символов.</b>🗃 Введите новое "
+"название для категории 🏷"
+
+#: ../tgbot/handlers/admin_products.py:295
+#: ../tgbot/handlers/admin_products_shop.py:220
+#: ../tgbot/handlers/user_menu.py:652 ../tgbot/handlers/user_menu_i18n.py:660
+msgid "<b>📁 Выберите категорию для позиции</b>"
+msgstr "<b>📁 Выберите категорию для позиции</b>"
+
+#: ../tgbot/handlers/admin_products.py:298
+msgid "<b>❌ Отсутствуют категории для создания позиции.</b>"
+msgstr "<b>❌ Отсутствуют категории для создания позиции.</b>"
+
+#: ../tgbot/handlers/admin_products.py:311 ../tgbot/handlers/user_menu.py:1328
+#: ../tgbot/handlers/user_menu.py:1380 ../tgbot/handlers/user_menu_i18n.py:1336
+#: ../tgbot/handlers/user_menu_i18n.py:1388
+msgid "<b>📁 Введите название для позиции 🏷</b>"
+msgstr "<b>📁 Введите название для позиции 🏷</b>"
+
+#: ../tgbot/handlers/admin_products.py:358 ../tgbot/handlers/user_menu.py:1422
+#: ../tgbot/handlers/user_menu_i18n.py:1430
+msgid "<b>📁 Введите цену для позиции 💰</b>"
+msgstr "<b>📁 Введите цену для позиции 💰</b>""
+
+#: ../tgbot/handlers/admin_products.py:360
+#: ../tgbot/handlers/user_menu_i18n.py:1411
+msgid ""
+"<b>❌ Название не может превышать 100 символов.</b>\n"
+"📁 Введите название для позиции 🏷"
+msgstr ""
+"<b>❌ Название не может превышать 100 символов.</b>📁 Введите название для "
+"позиции 🏷"
+
+#: ../tgbot/handlers/admin_products.py:373
+#: ../tgbot/handlers/user_menu_i18n.py:1487
+msgid ""
+"<b>📁 Введите описание для позиции 📜</b>\n"
+"❕ Вы можете использовать HTML разметку\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>📁 Введите описание для позиции 📜</b>❕ Вы можете использовать HTML "
+"разметку❕ Отправьте <code>0</code> чтобы пропустить."
+
+#: ../tgbot/handlers/admin_products.py:377
+#: ../tgbot/handlers/admin_products.py:594
+#: ../tgbot/handlers/user_menu_i18n.py:1444
+#: ../tgbot/handlers/user_menu_i18n.py:1737
+msgid ""
+"<b>❌ Цена не может быть меньше 0 или больше 10 000 000.</b>\n"
+"📁 Введите цену для позиции 💰"
+msgstr ""
+"<b>❌ Цена не может быть меньше 0 или больше 10 000 000.</b>📁 Введите цену"
+" для позиции 💰"
+
+#: ../tgbot/handlers/admin_products.py:380
+#: ../tgbot/handlers/admin_products.py:597
+#: ../tgbot/handlers/user_menu_i18n.py:1447
+#: ../tgbot/handlers/user_menu_i18n.py:1740
+msgid ""
+"<b>❌ Данные были введены неверно.</b>"
+"📁 Введите цену для позиции 💰"
+msgstr "<b>❌ Данные были введены неверно.</b>"
+"📁 Введите цену для позиции 💰"
+
+#: ../tgbot/handlers/admin_products.py:398
+#: ../tgbot/handlers/user_menu_i18n.py:1506
+msgid ""
+"<b>📁 Отправьте изображение для позиции 📸</b>\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>📁 Отправьте изображение для позиции 📸</b>❕ Отправьте <code>0</code> "
+"чтобы пропустить."
+
+#: ../tgbot/handlers/admin_products.py:401
+#: ../tgbot/handlers/admin_products.py:643
+#: ../tgbot/handlers/user_menu_i18n.py:1509
+#: ../tgbot/handlers/user_menu_i18n.py:1788
+msgid ""
+"<b>❌ Описание не может превышать 600 символов.</b>\n"
+"📁 Введите новое описание для позиции 📜\n"
+"❕ Вы можете использовать HTML разметку\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>❌ Описание не может превышать 600 символов.</b>📁 Введите новое "
+"описание для позиции 📜❕ Вы можете использовать HTML разметку❕ Отправьте "
+"<code>0</code> чтобы пропустить."
+
+#: ../tgbot/handlers/admin_products.py:406
+#: ../tgbot/handlers/user_menu_i18n.py:1514
+msgid ""
+"<b>❌ Ошибка синтаксиса HTML.</b>\n"
+"📁 Введите описание для позиции 📜\n"
+"❕ Вы можете использовать HTML разметку\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>❌ Ошибка синтаксиса HTML.</b>📁 Введите описание для позиции 📜❕ Вы "
+"можете использовать HTML разметку❕ Отправьте <code>0</code> чтобы "
+"пропустить."
+
+#: ../tgbot/handlers/admin_products.py:434 ../tgbot/handlers/user_menu.py:1550
+#: ../tgbot/handlers/user_menu_i18n.py:1558
+msgid "<b>📁 Позиция была успешно создана ✅</b>"
+msgstr "<b>📁 Позиция была успешно создана ✅</b>""
+
+#: ../tgbot/handlers/admin_products.py:514 ../tgbot/handlers/user_menu.py:1009
+#: ../tgbot/handlers/user_menu.py:1586 ../tgbot/handlers/user_menu.py:1646
+#: ../tgbot/handlers/user_menu_i18n.py:1017
+#: ../tgbot/handlers/user_menu_i18n.py:1594
+#: ../tgbot/handlers/user_menu_i18n.py:1654
+msgid "<b>📁 Выберите нужную вам позицию 🖍</b>"
+msgstr "<b>📁 Выберите нужную вам позицию 🖍</b>""
+
+#: ../tgbot/handlers/admin_products.py:534 ../tgbot/handlers/user_menu.py:1667
+#: ../tgbot/handlers/user_menu_i18n.py:1675
+msgid "<b>📁 Введите новое название для позиции 🏷</b>"
+msgstr "<b>📁 Введите новое название для позиции 🏷</b>""
+
+#: ../tgbot/handlers/admin_products.py:555
+#: ../tgbot/handlers/user_menu_i18n.py:1697
+msgid ""
+"<b>❌ Название не может превышать 100 символов.</b>\n"
+"📁 Введите новое название для позиции 🏷"
+msgstr ""
+"<b>❌ Название не может превышать 100 символов.</b>📁 Введите новое "
+"название для позиции 🏷"
+
+#: ../tgbot/handlers/admin_products.py:572 ../tgbot/handlers/user_menu.py:1705
+#: ../tgbot/handlers/user_menu_i18n.py:1713
+msgid "<b>📁 Введите новую цену для позиции 💰</b>"
+msgstr "<b>📁 Введите новую цену для позиции 💰</b>""
+
+#: ../tgbot/handlers/admin_products.py:614
+#: ../tgbot/handlers/admin_products_shop.py:282
+#: ../tgbot/handlers/user_menu_i18n.py:1757
+msgid ""
+"<b>📁 Введите новое описание для позиции 📜</b>\n"
+"❕ Вы можете использовать HTML разметку\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>📁 Введите новое описание для позиции 📜</b>❕ Вы можете использовать "
+"HTML разметку❕ Отправьте <code>0</code> чтобы пропустить."
+
+#: ../tgbot/handlers/admin_products.py:648
+#: ../tgbot/handlers/user_menu_i18n.py:1793
+msgid ""
+"<b>❌ Ошибка синтаксиса HTML.</b>\n"
+"📁 Введите новое описание для позиции 📜\n"
+"❕ Вы можете использовать HTML разметку\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>❌ Ошибка синтаксиса HTML.</b>📁 Введите новое описание для позиции 📜❕ "
+"Вы можете использовать HTML разметку❕ Отправьте <code>0</code> чтобы "
+"пропустить."
+
+#: ../tgbot/handlers/admin_products.py:667
+msgid "<b>📁 Введите новый остаток для позиции 🏷</b>"
+msgstr "<b>📁 Введите новый остаток для позиции 🏷</b>""
+
+#: ../tgbot/handlers/admin_products.py:688
+msgid ""
+"<b>❌ Название не может превышать 100 символов.</b>\n"
+"📁 Введите новый остаток для позиции 🏷"
+msgstr ""
+"<b>❌ Название не может превышать 100 символов.</b>📁 Введите новый остаток"
+" для позиции 🏷"
+
+#: ../tgbot/handlers/admin_products.py:706
+#: ../tgbot/handlers/admin_products_shop.py:334
+#: ../tgbot/handlers/user_menu_i18n.py:1812
+msgid ""
+"<b>📁 Отправьте новое изображение для позиции 📸</b>\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>📁 Отправьте новое изображение для позиции 📸</b>❕ Отправьте "
+"<code>0</code> чтобы пропустить."
+
+#: ../tgbot/handlers/admin_products.py:824 ../tgbot/handlers/user_menu.py:990
+#: ../tgbot/handlers/user_menu.py:2139 ../tgbot/handlers/user_menu_i18n.py:998
+#: ../tgbot/handlers/user_menu_i18n.py:2147
+msgid "<b>📁 Вы действительно хотите удалить позицию? ❌</b>"
+"❗ Так же будут удалены все товары"
+msgstr "<b>📁 Вы действительно хотите удалить позицию? ❌</b>""
+"❗ Так же будут удалены все товары"
+
+#: ../tgbot/handlers/admin_products.py:863
+msgid "<b>📁 Вы хотите удалить все товары позиции?</b>"
+msgstr "<b>📁 Вы хотите удалить все товары позиции?</b>""
+
+#: ../tgbot/handlers/admin_products.py:938
+msgid "<b>🎁 Выберите нужную вам позицию</b>"
+msgstr "<b>🎁 Выберите нужную вам позицию</b>""
+
+#: ../tgbot/handlers/admin_products.py:974
+msgid ""
+"<b>📤 Отправьте данные товаров.</b>\n"
+"❗ Товары разделяются одной пустой строчкой. Пример:\n"
+"<code>Данные товара...\n"
+"\n"
+"Данные товара...\n"
+"\n"
+"Данные товара...</code>"
+msgstr ""
+"<b>📤 Отправьте данные товаров.</b>❗ Товары разделяются одной пустой "
+"строчкой. Пример:<code>Данные товара...Данные товара...Данные "
+"товара...</code>"
+
+#: ../tgbot/handlers/admin_products.py:1007
+msgid "<b>⌛ Ждите, товары добавляются...</b>"
+msgstr "<b>⌛ Ждите, товары добавляются...</b>""
+
+#: ../tgbot/handlers/admin_products_shop.py:31
+msgid "<b>🏪 Магазин уже существует 🏷</b>"
+msgstr "<b>🏪 Магазин уже существует 🏷</b>""
+
+#: ../tgbot/handlers/admin_products_shop.py:34
+#: ../tgbot/handlers/user_menu.py:798 ../tgbot/handlers/user_menu_i18n.py:806
+msgid "<b>🏪 Введите название для магазина 🏷</b>"
+msgstr "<b>🏪 Введите название для магазина 🏷</b>""
+
+#: ../tgbot/handlers/admin_products_shop.py:44
+#: ../tgbot/handlers/user_menu_i18n.py:816
+msgid ""
+"<b>🏪 Введите описание для магазина 📜</b>\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>🏪 Введите описание для магазина 📜</b>❕ Отправьте <code>0</code> чтобы "
+"пропустить."
+
+#: ../tgbot/handlers/admin_products_shop.py:47
+#: ../tgbot/handlers/admin_products_shop.py:136
+#: ../tgbot/handlers/user_menu_i18n.py:819
+msgid ""
+"<b>❌ Название не может превышать 100 символов.</b>\n"
+"🏪 Введите название для магазина 🏷"
+msgstr ""
+"<b>❌ Название не может превышать 100 символов.</b>🏪 Введите название для "
+"магазина 🏷"
+
+#: ../tgbot/handlers/admin_products_shop.py:60
+#: ../tgbot/handlers/user_menu_i18n.py:832
+msgid ""
+"<b>🏪 Отправьте адресс магазина 📍</b>\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>🏪 Отправьте адресс магазина 📍</b>❕ Отправьте <code>0</code> чтобы "
+"пропустить."
+
+#: ../tgbot/handlers/admin_products_shop.py:65
+#: ../tgbot/handlers/user_menu_i18n.py:837
+msgid ""
+"<b>❌ Описание не может превышать 600 символов.</b>\n"
+"🏪 Введите новое описание для магазина 📜\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>❌ Описание не может превышать 600 символов.</b>🏪 Введите новое "
+"описание для магазина 📜❕ Отправьте <code>0</code> чтобы пропустить."
+
+#: ../tgbot/handlers/admin_products_shop.py:78
+#: ../tgbot/handlers/user_menu_i18n.py:850
+msgid ""
+"<b>🏪 Отправьте телефон магазина ☎️</b>\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>🏪 Отправьте телефон магазина ☎️</b>❕ Отправьте <code>0</code> чтобы "
+"пропустить."
+
+#: ../tgbot/handlers/admin_products_shop.py:90
+#: ../tgbot/handlers/user_menu_i18n.py:862
+msgid ""
+"<b>🏪 Отправьте лого магазина 📷</b>\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>🏪 Отправьте лого магазина 📷</b>❕ Отправьте <code>0</code> чтобы "
+"пропустить."
+
+#: ../tgbot/handlers/admin_products_shop.py:123
+#: ../tgbot/handlers/admin_products_shop.py:134
+#: ../tgbot/handlers/user_menu.py:887 ../tgbot/handlers/user_menu_i18n.py:895
+msgid "<b>🏪 Магазин был успешно создан ✅</b>"
+msgstr "<b>🏪 Магазин был успешно создан ✅</b>"
+
+#: ../tgbot/handlers/admin_products_shop.py:153
+#: ../tgbot/handlers/admin_products_shop.py:167
+#: ../tgbot/handlers/user_menu.py:899 ../tgbot/handlers/user_menu.py:919
+#: ../tgbot/handlers/user_menu.py:932 ../tgbot/handlers/user_menu_i18n.py:907
+#: ../tgbot/handlers/user_menu_i18n.py:927
+#: ../tgbot/handlers/user_menu_i18n.py:940
+msgid "<b>🏪 Выберите магазин для изменения 🖍</b>"
+msgstr "<b>🏪 Выберите магазин для изменения 🖍</b>"
+
+#: ../tgbot/handlers/admin_products_shop.py:156
+#: ../tgbot/handlers/user_menu.py:922 ../tgbot/handlers/user_menu_i18n.py:930
+msgid "<b>🏪 Ваши магазины отсутствуют 🖍</b>"
+msgstr "<b>🏪 Ваши магазины отсутствуют 🖍</b>"
+
+#: ../tgbot/handlers/admin_products_shop.py:170
+#: ../tgbot/handlers/user_menu.py:902 ../tgbot/handlers/user_menu.py:935
+#: ../tgbot/handlers/user_menu_i18n.py:910
+#: ../tgbot/handlers/user_menu_i18n.py:943
+msgid "<b>🏪 Магазины отсутствуют 🖍</b>"
+msgstr "<b>🏪 Магазины отсутствуют 🖍</b>"
+
+#: ../tgbot/handlers/admin_products_shop.py:206
+msgid "<b>📁 Выберите нужный Вам магазин 🖍</b>"
+msgstr "<b>📁 Выберите нужный Вам магазин 🖍</b>"
+
+#: ../tgbot/handlers/admin_products_shop.py:242
+msgid "<b>📁 Введите новое название для магазина 🏷</b>"
+msgstr "<b>📁 Введите новое название для магазина 🏷</b>"
+
+#: ../tgbot/handlers/admin_products_shop.py:264
+msgid ""
+"<b>❌ Название не может превышать 100 символов.</b>\n"
+"🗃 Введите новое название для магазина 🏷"
+msgstr ""
+"<b>❌ Название не может превышать 100 символов.</b>🗃 Введите новое "
+"название для магазина 🏷"
+
+#: ../tgbot/handlers/admin_products_shop.py:311
+msgid ""
+"<b>❌ Описание не может превышать 600 символов.</b>\n"
+"📁 Введите новое описание для магазина 📜\n"
+"❕ Вы можете использовать HTML разметку\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>❌ Описание не может превышать 600 символов.</b>📁 Введите новое "
+"описание для магазина 📜❕ Вы можете использовать HTML разметку❕ Отправьте "
+"<code>0</code> чтобы пропустить."
+
+#: ../tgbot/handlers/admin_products_shop.py:316
+msgid ""
+"<b>❌ Ошибка синтаксиса HTML.</b>\n"
+"📁 Введите новое описание для магазина 📜\n"
+"❕ Вы можете использовать HTML разметку\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>❌ Ошибка синтаксиса HTML.</b>📁 Введите новое описание для магазина 📜❕ "
+"Вы можете использовать HTML разметку❕ Отправьте <code>0</code> чтобы "
+"пропустить."
+
+#: ../tgbot/handlers/admin_products_shop.py:381
+#: ../tgbot/handlers/admin_products_shop.py:389
+msgid "<b>📁 Выберите магазин для изменения 🖍</b>"
+msgstr "<b>📁 Выберите магазин для изменения 🖍</b>"
+
+#: ../tgbot/handlers/admin_products_shop.py:468
+msgid "<b>❗ Вы действительно хотите удалить один из магазинов?</b>"
+msgstr "<b>❗ Вы действительно хотите удалить один из магазинов?</b>"
+
+#: ../tgbot/handlers/admin_products_shop.py:483
+msgid "🗃 Магазин был успешно удален ✅"
+msgstr "🗃 Магазин был успешно удален ✅"
+
+#: ../tgbot/handlers/admin_settings.py:18
+#: ../tgbot/handlers/admin_settings.py:124
+#: ../tgbot/handlers/admin_settings.py:141
+#: ../tgbot/handlers/admin_settings.py:159
+msgid "<b>🖍 Изменение настроек бота.</b>"
+msgstr "<b>🖍 Изменение настроек бота.</b>"
+
+#: ../tgbot/handlers/admin_settings.py:25
+msgid "<b>🕹 Включение и выключение основных функций</b>"
+msgstr "<b>🕹 Включение и выключение основных функций</b>"
+
+#: ../tgbot/handlers/admin_settings.py:94
+msgid ""
+"<b>☎ Отправьте ID пользователя.</b>\n"
+"❕ Вводимый ID должен быть пользователем бота."
+msgstr ""
+"<b>☎ Отправьте ID пользователя.</b>❕ Вводимый ID должен быть "
+"пользователем бота."
+
+#: ../tgbot/handlers/admin_settings.py:101
+msgid "<b>ℹ Выберите тип площадки: real | digital | hybrid</b>"
+msgstr "<b>ℹ Выберите тип площадки: real | digital | hybrid</b>"
+
+#: ../tgbot/handlers/admin_settings.py:107
+msgid ""
+"<b>ℹ Введите новый текст для FAQ</b>\n"
+"❕ Вы можете использовать заготовленный синтаксис и HTML разметку:\n"
+"<code>▶ {username}</code>  - логин пользоваля\n"
+"<code>▶ {user_id}</code>   - айди пользователя\n"
+"<code>▶ {firstname}</code> - имя пользователя"
+msgstr ""
+"<b>ℹ Введите новый текст для FAQ</b>❕ Вы можете использовать "
+"заготовленный синтаксис и HTML разметку:<code>▶ {username}</code>  - "
+"логин пользоваля<code>▶ {user_id}</code>   - айди пользователя<code>▶ "
+"{firstname}</code> - имя пользователя"
+
+#: ../tgbot/handlers/admin_settings.py:126
+msgid ""
+"<b>❌ Ошибка синтаксиса HTML.</b>\n"
+"ℹ Введите новый тип real | digital | hybrid."
+msgstr ""
+"<b>❌ Ошибка синтаксиса HTML.</b>ℹ Введите новый тип real | digital | "
+"hybrid."
+
+#: ../tgbot/handlers/admin_settings.py:143
+msgid ""
+"<b>❌ Ошибка синтаксиса HTML.</b>\n"
+"ℹ Введите новый текст для FAQ"
+msgstr "<b>❌ Ошибка синтаксиса HTML.</b>ℹ Введите новый текст для FAQ"
+
+#: ../tgbot/handlers/admin_settings.py:158
+msgid "<b>☎ Поддержка была успешно обновлена ✅</b>"
+msgstr "<b>☎ Поддержка была успешно обновлена ✅</b>"
+
+#: ../tgbot/handlers/admin_settings.py:161
+msgid ""
+"<b>❌ У пользоваля отсутствует юзернейм.</b>"
+"☎ Отправьте ID пользователя."
+msgstr "<b>❌ У пользоваля отсутствует юзернейм.</b>\n"
+"☎ Отправьте ID пользователя."
+
+#: ../tgbot/handlers/admin_settings.py:164
+msgid ""
+"<b>❌ Пользователь не был найден.</b>\n"
+"☎ Отправьте ID пользователя."
+msgstr "<b>❌ Пользователь не был найден.</b>☎ Отправьте ID пользователя."
+
+#: ../tgbot/handlers/admin_settings.py:167
+msgid ""
+"<b>❌ Данные были введены неверно.</b>"
+"☎ Отправьте ID пользователя."
+msgstr "<b>❌ Данные были введены неверно.</b>"
+"☎ Отправьте ID пользователя."
+
+#: ../tgbot/handlers/main_start.py:55 ../tgbot/handlers/main_start.py:59
+msgid "<b>⛔ Бот находится на технических работах.</b>"
+msgstr "<b>⛔ Бот находится на технических работах.</b>"
+
+#: ../tgbot/handlers/main_start.py:67
+msgid "⛔ Бот находится на технических работах."
+msgstr "⛔ Бот находится на технических работах."
+
+#: ../tgbot/handlers/main_start.py:77
+msgid "<b>⛔ Покупки временно отключены.</b>"
+msgstr "<b>⛔ Покупки временно отключены.</b>"
+
+#: ../tgbot/handlers/main_start.py:84
+msgid "⛔ Покупки временно отключены."
+msgstr "⛔ Покупки временно отключены."
+
+#: ../tgbot/handlers/main_start.py:94
+msgid "<b>⛔ Пополнение временно отключено.</b>"
+msgstr "<b>⛔ Пополнение временно отключено.</b>"
+
+#: ../tgbot/handlers/main_start.py:102
+msgid "⛔ Пополнение временно отключено."
+msgstr "⛔ Пополнение временно отключено."
+
+#: ../tgbot/handlers/main_start.py:163 ../tgbot/handlers/user_location.py:16
+msgid "Отправьте локацию или выберите город из списка"
+msgstr "Отправьте локацию или выберите город из списка"
+
+#: ../tgbot/handlers/user_menu.py:116 ../tgbot/handlers/user_menu_i18n.py:126
+msgid "<b>📁 Введите тип товара, который Вы будете продавать:</b>"
+msgstr "<b>📁 Введите тип товара, который Вы будете продавать:</b>"
+
+#: ../tgbot/handlers/user_menu.py:125 ../tgbot/handlers/user_menu_i18n.py:134
+msgid "<b>📁 Опишите пожалуйста события или среду, которые Вы создаете:</b>"
+msgstr "<b>📁 Опишите пожалуйста события или среду, которые Вы создаете:</b>"
+
+#: ../tgbot/handlers/user_menu.py:137 ../tgbot/handlers/user_menu_i18n.py:146
+msgid "<b>🎁 Редактирование товаров дмаг.</b>"
+msgstr "<b>🎁 Редактирование товаров дмаг.</b>"
+
+#: ../tgbot/handlers/user_menu.py:192 ../tgbot/handlers/user_menu.py:198
+#: ../tgbot/handlers/user_menu.py:2400 ../tgbot/handlers/user_menu.py:2473
+#: ../tgbot/handlers/user_menu.py:2557 ../tgbot/handlers/user_menu.py:2568
+#: ../tgbot/handlers/user_menu.py:2690 ../tgbot/handlers/user_menu.py:2699
+#: ../tgbot/handlers/user_menu.py:2719 ../tgbot/handlers/user_menu.py:2723
+#: ../tgbot/handlers/user_menu.py:2955 ../tgbot/handlers/user_menu.py:3742
+#: ../tgbot/handlers/user_menu_i18n.py:174
+#: ../tgbot/handlers/user_menu_i18n.py:180
+#: ../tgbot/handlers/user_menu_i18n.py:200
+#: ../tgbot/handlers/user_menu_i18n.py:206
+#: ../tgbot/handlers/user_menu_i18n.py:2408
+#: ../tgbot/handlers/user_menu_i18n.py:2481
+#: ../tgbot/handlers/user_menu_i18n.py:2565
+#: ../tgbot/handlers/user_menu_i18n.py:2576
+#: ../tgbot/handlers/user_menu_i18n.py:2698
+#: ../tgbot/handlers/user_menu_i18n.py:2707
+#: ../tgbot/handlers/user_menu_i18n.py:2727
+#: ../tgbot/handlers/user_menu_i18n.py:2731
+#: ../tgbot/handlers/user_menu_i18n.py:2963
+#: ../tgbot/handlers/user_menu_i18n.py:3750
+#: ../tgbot/handlers/z_all_errors.py:29 ../tgbot/handlers/z_all_errors.py:42
+msgid "<b>🎁 Выберите нужный вам товар:</b>"
+msgstr "<b>🎁 Выберите нужный вам товар:</b>"
+
+#: ../tgbot/handlers/user_menu.py:217 ../tgbot/handlers/user_menu.py:225
+#: ../tgbot/handlers/user_menu_i18n.py:225
+#: ../tgbot/handlers/user_menu_i18n.py:233
+msgid "<b>📁 Выберите категорию для Вашей позиции</b>"
+msgstr "<b>📁 Выберите категорию для Вашей позиции</b>"
+
+#: ../tgbot/handlers/user_menu.py:239 ../tgbot/handlers/user_menu.py:245
+#: ../tgbot/handlers/user_menu_i18n.py:247
+#: ../tgbot/handlers/user_menu_i18n.py:253
+msgid "<b>🎁 Выберите нужный вам магазин:</b>"
+msgstr "<b>🎁 Выберите нужный вам магазин:</b>"
+
+msgid "<b>👤 Ваш профиль:</b>"
+msgstr "<b>👤 Ваш профиль:</b>"
+
+msgid "🆔 ID: <code>"
+msgstr "🆔 ID: <code>"
+
+msgid "💰 Баланс: <code>"
+msgstr "💰 Баланс: <code>"
+
+msgid "📄 Скидка(промокод): <code>"
+msgstr "📄 Скидка(промокод):: <code>"
+
+msgid "🎁 Куплено товаров: <code>"
+msgstr "🎁 Куплено товаров: <code>"
+
+msgid "🕰 Регистрация: <code>"
+msgstr "🕰 Регистрация: <code>"
+
+msgid "🏙 Город: <code>"
+msgstr "🏙 Город: <code>>"
+
+msgid "📄 Роль: <code>"
+msgstr "📄 Роль:<code>"
+
+msgid "📄 Бесплатная доставка от: "
+msgstr "📄 Бесплатная доставка от: "
+
+msgid "📄 Ставка доставки: "
+msgstr "📄 Ставка доставки: "
+
+#: ../tgbot/handlers/user_menu.py:263 ../tgbot/handlers/user_menu_i18n.py:271
+msgid "<b>Выберите интересное для Вас:</b>"
+msgstr "<b>Выберите интересное для Вас:</b>"
+
+#: ../tgbot/handlers/user_menu.py:296 ../tgbot/handlers/user_menu.py:299
+#: ../tgbot/handlers/user_menu.py:323 ../tgbot/handlers/user_menu_i18n.py:304
+#: ../tgbot/handlers/user_menu_i18n.py:307
+#: ../tgbot/handlers/user_menu_i18n.py:331
+msgid "<b>События в городе, выберите что-нибудь интересное:</b>"
+msgstr "<b>События в городе, выберите что-нибудь интересное:</b>"
+
+#: ../tgbot/handlers/user_menu.py:310 ../tgbot/handlers/user_menu.py:313
+#: ../tgbot/handlers/user_menu_i18n.py:318
+#: ../tgbot/handlers/user_menu_i18n.py:321
+msgid "<b>События в месте, выберите что-нибудь интересное:</b>"
+msgstr "<b>События в месте, выберите что-нибудь интересное:</b>"
+
+#: ../tgbot/handlers/user_menu.py:332 ../tgbot/handlers/user_menu_i18n.py:340
+msgid "<b>Напишите, что Вы хотите добавить, мы добавим.:</b>"
+msgstr "<b>Напишите, что Вы хотите добавить, мы добавим.:</b>"
+
+#: ../tgbot/handlers/user_menu.py:491 ../tgbot/handlers/user_menu_i18n.py:499
+msgid "<b>🏪 Введите название артиста или коллектива 🏷</b>"
+msgstr "<b>🏪 Введите название артиста или коллектива 🏷</b>"
+
+#: ../tgbot/handlers/user_menu.py:565 ../tgbot/handlers/user_menu_i18n.py:573
+msgid "<b>🏪 Карточка артиста была успешно создана ✅</b>"
+msgstr "<b>🏪 Карточка артиста была успешно создана ✅</b>"
+
+#: ../tgbot/handlers/user_menu.py:948 ../tgbot/handlers/user_menu_i18n.py:956
+msgid "<b>☎ Нажмите кнопку ниже для связи с Администратором.</b>"
+msgstr "<b>☎ Нажмите кнопку ниже для связи с Администратором.</b>"
+
+#: ../tgbot/handlers/user_menu.py:1054 ../tgbot/handlers/user_menu.py:1102
+#: ../tgbot/handlers/user_menu_i18n.py:1062
+#: ../tgbot/handlers/user_menu_i18n.py:1110
+msgid "<b>🖲 Выберите способ пополнения</b>"
+msgstr "<b>🖲 Выберите способ пополнения</b>"
+
+#: ../tgbot/handlers/user_menu.py:1114 ../tgbot/handlers/user_menu_i18n.py:1122
+msgid "<b>🥝 Введите <code>номер (через +7, +380)</code> QIWI кошелька 🖍</b>"
+msgstr "<b>🥝 Введите <code>номер (через +7, +380)</code> QIWI кошелька 🖍</b>"
+
+#: ../tgbot/handlers/user_menu.py:1182 ../tgbot/handlers/user_menu_i18n.py:1190
+msgid "<b>🥝 Проверка введённых QIWI данных... 🔄</b>"
+msgstr "<b>🥝 Проверка введённых QIWI данных... 🔄</b>"
+
+#: ../tgbot/handlers/user_menu.py:1211 ../tgbot/handlers/user_menu_i18n.py:1219
+msgid "<b>📁 Вы отменили удаление всех позиций ✅</b>"
+msgstr "<b>📁 Вы отменили удаление всех позиций ✅</b>"
+
+#: ../tgbot/handlers/user_menu.py:1235 ../tgbot/handlers/user_menu_i18n.py:1243
+msgid "<b>🎁 Вы отменили удаление всех товаров ✅</b>"
+msgstr "<b>🎁 Вы отменили удаление всех товаров ✅</b>"
+
+#: ../tgbot/handlers/user_menu.py:1307 ../tgbot/handlers/user_menu.py:1315
+#: ../tgbot/handlers/user_menu_i18n.py:1315
+#: ../tgbot/handlers/user_menu_i18n.py:1323
+msgid "<b>📁 Выберите категорию для позиции ➕</b>"
+msgstr "<b>📁 Выберите категорию для позиции ➕</b>"
+
+#: ../tgbot/handlers/user_menu.py:1362 ../tgbot/handlers/user_menu.py:1849
+#: ../tgbot/handlers/user_menu_i18n.py:1370
+#: ../tgbot/handlers/user_menu_i18n.py:1857
+msgid "<b>Выберите магазин для добавления позиции.</b>"
+msgstr "<b>Выберите магазин для добавления позиции.</b>"
+
+#: ../tgbot/handlers/user_menu.py:1365 ../tgbot/handlers/user_menu_i18n.py:1373
+msgid "<b>У Вас еще нет магазина на площадке, но Вы можете его создать.</b>"
+msgstr "<b>У Вас еще нет магазина на площадке, но Вы можете его создать.</b>"
+
+#: ../tgbot/handlers/user_menu.py:1401 ../tgbot/handlers/user_menu_i18n.py:1409
+msgid "<b>📁 Введите тип позиции 1 - реальная, 2 - цифровая</b>"
+msgstr "<b>📁 Введите тип позиции 1 - реальная, 2 - цифровая</b>"
+
+#: ../tgbot/handlers/user_menu.py:1448 ../tgbot/handlers/user_menu_i18n.py:1456
+msgid "<b>📁 Введите остаток для позиции 📜</b>"
+msgstr "<b>📁 Введите остаток для позиции 📜</b>"
+
+#: ../tgbot/handlers/user_menu.py:2274 ../tgbot/handlers/user_menu.py:2476
+#: ../tgbot/handlers/user_menu.py:2560 ../tgbot/handlers/user_menu_i18n.py:2282
+#: ../tgbot/handlers/user_menu_i18n.py:2484
+#: ../tgbot/handlers/user_menu_i18n.py:2568
+#: ../tgbot/handlers/z_all_errors.py:33 ../tgbot/handlers/z_all_errors.py:47
+#: ../tgbot/handlers/z_all_errors.py:53
+msgid "<b>🎁 Товары в данное время отсутствуют.</b>"
+msgstr "<b>🎁 Товары в данное время отсутствуют.</b>"
+
+#: ../tgbot/handlers/user_menu.py:2667 ../tgbot/handlers/user_menu_i18n.py:2675
+msgid "<b>🎁 Выберите нужного артиста:</b>"
+msgstr "<b>🎁 Выберите нужного артиста:</b>"
+
+#: ../tgbot/handlers/user_menu.py:2681 ../tgbot/handlers/user_menu_i18n.py:2689
+msgid "<b>🌐 Выберите категорию:</b>"
+msgstr "<b>🌐 Выберите категорию:</b>"
+
+#: ../tgbot/handlers/user_menu.py:2855 ../tgbot/handlers/user_menu.py:3683
+#: ../tgbot/handlers/user_menu_i18n.py:2863
+#: ../tgbot/handlers/user_menu_i18n.py:3691
+msgid "<b>🎁 Товар который вы хотели купить, закончился</b>"
+msgstr "<b>🎁 Товар который вы хотели купить, закончился</b>"
+
+#: ../tgbot/handlers/user_menu.py:2870 ../tgbot/handlers/user_menu.py:3695
+#: ../tgbot/handlers/user_menu_i18n.py:2878
+#: ../tgbot/handlers/user_menu_i18n.py:3703
+msgid "<b>🔄 Ждите, товары подготавливаются</b>"
+msgstr "<b>🔄 Ждите, товары подготавливаются</b>"
+
+#: ../tgbot/handlers/user_menu.py:2951 ../tgbot/handlers/user_menu.py:3738
+#: ../tgbot/handlers/user_menu_i18n.py:2959
+#: ../tgbot/handlers/user_menu_i18n.py:3746
+msgid "<b>🎁 Товар который вы хотели купить закончился или изменился.</b>"
+msgstr "<b>🎁 Товар который вы хотели купить закончился или изменился.</b>"
+
+#: ../tgbot/handlers/user_menu.py:2958 ../tgbot/handlers/user_menu.py:3745
+#: ../tgbot/handlers/user_menu_i18n.py:2966
+#: ../tgbot/handlers/user_menu_i18n.py:3753
+msgid "<b>✅ Вы отменили покупку товаров.</b>"
+msgstr "<b>✅ Вы отменили покупку товаров.</b>"
+
+#: ../tgbot/handlers/user_menu.py:2967 ../tgbot/handlers/user_menu_i18n.py:2975
+msgid "<b> Удалить корзину и ее позиции?</b>"
+msgstr "<b> Удалить корзину и ее позиции?</b>"
+
+#: ../tgbot/handlers/user_menu.py:3736 ../tgbot/handlers/user_menu_i18n.py:3744
+msgid "<b>❗ На вашем счёте недостаточно средств</b>"
+msgstr "<b>❗ На вашем счёте недостаточно средств</b>"
+
+#: ../tgbot/handlers/user_menu_i18n.py:177
+#: ../tgbot/handlers/user_menu_i18n.py:203
+#: ../tgbot/handlers/user_menu_i18n.py:250
+msgid ""
+"<b>🎁 В Вашем городе товаров нет, но Вы можете разместить свои, отправив запрос продавца или ак частное лицо, выбрав пункт Продать</b>"
+"\n"
+"🏙 Изменить город вы можете в личном кабинете"
+msgstr ""
+"<b>🎁 В Вашем городе товаров нет, но Вы можете разместить свои, отправив запрос продавца или как частное лицо, выбрав пункт Продать</b>"
+"\n"
+"🏙 Изменить город вы можете в личном кабинете"
+
+#: ../tgbot/handlers/user_menu_i18n.py:509
+msgid ""
+"<b>🏪 Введите Bio артиста 📜</b>\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr "<b>🏪 Введите Bio артиста 📜</b>❕ Отправьте <code>0</code> чтобы пропустить."
+
+#: ../tgbot/handlers/user_menu_i18n.py:512
+msgid ""
+"<b>❌ Название не может превышать 100 символов.</b>\n"
+"🏪 Введите название для артиста 🏷"
+msgstr ""
+"<b>❌ Название не может превышать 100 символов.</b>🏪 Введите название для "
+"артиста 🏷"
+
+#: ../tgbot/handlers/user_menu_i18n.py:524
+msgid ""
+"<b>🏪 Отправьте веб-сайт артиста 📍</b>\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>🏪 Отправьте веб-сайт артиста 📍</b>❕ Отправьте <code>0</code> чтобы "
+"пропустить."
+
+#: ../tgbot/handlers/user_menu_i18n.py:529
+msgid ""
+"<b>❌ Описание не может превышать 600 символов.</b>\n"
+"🏪 Введите новое Bio для артиста 📜\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>❌ Описание не может превышать 600 символов.</b>🏪 Введите новое Bio для"
+" артиста 📜❕ Отправьте <code>0</code> чтобы пропустить."
+
+#: ../tgbot/handlers/user_menu_i18n.py:542
+msgid ""
+"<b>🏪 Отправьте лого артиста 📷</b>\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>🏪 Отправьте лого артиста 📷</b>❕ Отправьте <code>0</code> чтобы "
+"пропустить."
+
+#: ../tgbot/handlers/user_menu_i18n.py:1160
+msgid ""
+"<b>❌ Номер должен начинаться с + <code>(+7..., +380...)</code></b>\n"
+"🥝 Введите <code>номер (через +7, +380)</code> QIWI кошелька 🖍"
+msgstr ""
+"<b>❌ Номер должен начинаться с + <code>(+7..., +380...)</code></b>🥝 "
+"Введите <code>номер (через +7, +380)</code> QIWI кошелька 🖍"
+
+#: ../tgbot/handlers/user_menu_i18n.py:1432
+msgid ""
+"<b>❌ Тип позиции не может отличаться от перечисленных значений. 1 или "
+"2.</b>\n"
+"📁 Введите тип позиции 🏷"
+msgstr ""
+"<b>❌ Тип позиции не может отличаться от перечисленных значений. 1 или "
+"2.</b>📁 Введите тип позиции 🏷"
+
+#: ../tgbot/handlers/user_menu_i18n.py:1478
+msgid ""
+"<b>❌ Остаток не может быть меньше 0 или больше 10 000.</b>\n"
+"📁 Введите остаток позиции 💰"
+msgstr ""
+"<b>❌ Остаток не может быть меньше 0 или больше 10 000.</b>📁 Введите "
+"остаток позиции 💰"
+
+#: ../tgbot/handlers/user_menu_i18n.py:1481
+msgid ""
+"<b>❌ Данные были введены неверно.</b>"
+"📁 Введите остаток позиции 💰"
+msgstr "<b>❌ Данные были введены неверно.</b>"
+"📁 Введите остаток позиции 💰"
+
+#: ../tgbot/handlers/user_menu_i18n.py:1970
+msgid ""
+"<b>❌ Название не может превышать 100 символов.</b>\n"
+"📁 Введите новое название для артиста 🏷"
+msgstr ""
+"<b>❌ Название не может превышать 100 символов.</b>📁 Введите новое "
+"название для артиста 🏷"
+
+#: ../tgbot/handlers/user_menu_i18n.py:2019
+msgid ""
+"<b>❌ Описание не может превышать 600 символов.</b>\n"
+"📁 Введите новое описание для артиста 📜\n"
+"❕ Вы можете использовать HTML разметку\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>❌ Описание не может превышать 600 символов.</b>📁 Введите новое "
+"описание для артиста 📜❕ Вы можете использовать HTML разметку❕ Отправьте "
+"<code>0</code> чтобы пропустить."
+
+#: ../tgbot/handlers/user_menu_i18n.py:2024
+msgid ""
+"<b>❌ Ошибка синтаксиса HTML.</b>"
+"📁 Введите новое описание для артиста 📜\n"
+"❕ Вы можете использовать HTML разметку\n"
+"❕ Отправьте <code>0</code> чтобы пропустить."
+msgstr ""
+"<b>❌ Ошибка синтаксиса HTML.</b>\n"
+"📁 Введите новое описание для артиста 📜❕ \n"
+"Вы можете использовать HTML разметку❕ Отправьте <code>0</code> чтобы "
+"пропустить."
+
+#: ../tgbot/handlers/user_transactions.py:23
+msgid "<b>💰 Выберите способ пополнения</b>"
+msgstr "<b>💰 Выберите способ пополнения</b>"
+
+#: ../tgbot/handlers/user_transactions.py:25
+msgid "⛔ Пополнение временно недоступно"
+msgstr "⛔ Пополнение временно недоступно"
+
+#: ../tgbot/handlers/user_transactions.py:35
+msgid "<b>💰 Введите сумму пополнения</b>"
+msgstr "<b>💰 Введите сумму пополнения</b>"
+
+#: ../tgbot/handlers/user_transactions.py:73
+msgid ""
+"<b>❌ Данные были введены неверно.</b>"
+"💰 Введите сумму для пополнения средств"
+msgstr ""
+"<b>❌ Данные были введены неверно.</b>"
+"💰 Введите сумму для пополнения "
+"средств"
+
+#: ../tgbot/handlers/user_transactions.py:102
+#: ../tgbot/handlers/user_transactions.py:132
+msgid "❗ Ваше пополнение уже было зачислено."
+msgstr "❗ Ваше пополнение уже было зачислено."
+
+#: ../tgbot/handlers/user_transactions.py:104
+#: ../tgbot/handlers/user_transactions.py:134
+msgid "<b>❌ Время оплаты вышло. Платёж был удалён.</b>"
+msgstr "<b>❌ Время оплаты вышло. Платёж был удалён.</b>"
+
+#: ../tgbot/handlers/user_transactions.py:106
+#: ../tgbot/handlers/user_transactions.py:136
+#: ../tgbot/handlers/user_transactions.py:156
+msgid ""
+"❗ Платёж не был найден.\n"
+"⌛ Попробуйте чуть позже."
+msgstr "❗ Платёж не был найден.⌛ Попробуйте чуть позже."
+
+#: ../tgbot/handlers/user_transactions.py:109
+#: ../tgbot/handlers/user_transactions.py:139
+msgid "<b>❌ Счёт был отклонён.</b>"
+msgstr "<b>❌ Счёт был отклонён.</b>"
+
+#: ../tgbot/handlers/user_transactions.py:154
+msgid "❗ Оплата была произведена не в рублях."
+msgstr "❗ Оплата была произведена не в рублях."
+
+#: ../tgbot/handlers/user_transactions.py:165
+#, fuzzy
+msgid "❗ Ваше пополнение уже зачислено."
+msgstr "❗ Ваше пополнение уже было зачислено."
+
+#: ../tgbot/handlers/z_all_errors.py:31 ../tgbot/handlers/z_all_errors.py:34
+msgid "❗ Категория была изменена или удалена"
+msgstr "❗ Категория была изменена или удалена"
+
+#: ../tgbot/handlers/z_all_errors.py:45 ../tgbot/handlers/z_all_errors.py:48
+#: ../tgbot/handlers/z_all_errors.py:54
+msgid "❗ Позиция была изменена или удалена"
+msgstr "❗ Позиция была изменена или удалена"
+
+#: ../tgbot/handlers/z_all_missed_.py:29
+msgid ""
+"<b>❌ Данные не были найдены из-за перезапуска скрипта.\n"
+"♻ Выполните действие заново.</b>"
+msgstr ""
+"<b>❌ Данные не были найдены из-за перезапуска скрипта.♻ Выполните "
+"действие заново.</b>"
+
+#: ../tgbot/handlers/z_all_missed_.py:36
+msgid ""
+"♦ Неизвестная команда.\n"
+"▶ Введите /start"
+msgstr "♦ Неизвестная команда.▶ Введите /start"
+
+#: ../tgbot/keyboards/inline_admin.py:26
+msgid "💰 Изменить баланс"
+msgstr "💰 Изменить баланс"
+
+#: ../tgbot/keyboards/inline_admin.py:27
+msgid "💰 Выдать баланс"
+msgstr "💰 Выдать баланс"
+
+#: ../tgbot/keyboards/inline_admin.py:29
+msgid "🎁 Покупки"
+msgstr "🎁 Покупки"
+
+#: ../tgbot/keyboards/inline_admin.py:30
+msgid "💌 Отправить СМС"
+msgstr "💌 Отправить СМС"
+
+#: ../tgbot/keyboards/inline_admin.py:32
+msgid "🔄 Обновить"
+msgstr "🔄 Обновить"
+
+#: ../tgbot/keyboards/inline_admin.py:42
+msgid " Подтвердить запрос"
+msgstr "Подтвердить запрос"
+
+#: ../tgbot/keyboards/inline_admin.py:43
+msgid " Отклонить запрос"
+msgstr "Отклонить запрос"
+
+#: ../tgbot/keyboards/inline_admin.py:44
+msgid " Удалить запрос"
+msgstr "Удалить запрос"
+
+#: ../tgbot/keyboards/inline_admin.py:81 ../tgbot/keyboards/inline_user.py:353
+msgid "📋 По форме"
+msgstr "📋 По форме"
+
+#: ../tgbot/keyboards/inline_admin.py:82 ../tgbot/keyboards/inline_user.py:354
+msgid "📞 По номеру"
+msgstr "📞 По номеру"
+
+#: ../tgbot/keyboards/inline_admin.py:83 ../tgbot/keyboards/inline_user.py:355
+msgid "Ⓜ По никнейму"
+msgstr "Ⓜ По никнейму"
+
+#: ../tgbot/keyboards/inline_admin.py:84
+msgid "📋 По Yoo"
+msgstr "📋 По Yoo"
+
+#: ../tgbot/keyboards/inline_admin.py:85
+msgid "📋 Свободные реквизиты"
+msgstr "📋 Свободные реквизиты"
+
+#: ../tgbot/keyboards/inline_admin.py:159
+#: ../tgbot/keyboards/inline_admin.py:171
+#: ../tgbot/keyboards/inline_admin.py:183
+#: ../tgbot/keyboards/inline_admin.py:216
+#: ../tgbot/keyboards/inline_admin.py:247
+#: ../tgbot/keyboards/inline_admin.py:300
+msgid "🏷 Изм. название"
+msgstr "🏷 Изм. название"
+
+#: ../tgbot/keyboards/inline_admin.py:160
+#: ../tgbot/keyboards/inline_admin.py:172
+#: ../tgbot/keyboards/inline_admin.py:184
+#: ../tgbot/keyboards/inline_admin.py:235
+#: ../tgbot/keyboards/inline_admin.py:255
+#: ../tgbot/keyboards/inline_admin.py:315
+msgid "❌ Удалить"
+msgstr "❌ Удалить"
+
+#: ../tgbot/keyboards/inline_admin.py:162
+#: ../tgbot/keyboards/inline_admin.py:174
+#: ../tgbot/keyboards/inline_admin.py:186
+#: ../tgbot/keyboards/inline_admin.py:237
+#: ../tgbot/keyboards/inline_admin.py:257
+#: ../tgbot/keyboards/inline_admin.py:317 ../tgbot/keyboards/inline_user.py:187
+#: ../tgbot/keyboards/inline_user.py:199 ../tgbot/keyboards/inline_user.py:207
+#: ../tgbot/keyboards/inline_user.py:214 ../tgbot/keyboards/inline_user.py:221
+#: ../tgbot/keyboards/inline_user.py:233
+#: ../tgbot/keyboards/inline_z_page.py:245
+#: ../tgbot/keyboards/inline_z_page.py:304
+msgid "⬅ Вернуться ↩"
+msgstr "⬅ Вернуться ↩"
+
+#: ../tgbot/keyboards/inline_admin.py:195
+#: ../tgbot/keyboards/inline_admin.py:206
+#: ../tgbot/keyboards/inline_admin.py:266
+#: ../tgbot/keyboards/inline_admin.py:279
+msgid "❌ Да, удалить"
+msgstr "❌ Да, удалить"
+
+#: ../tgbot/keyboards/inline_admin.py:196
+#: ../tgbot/keyboards/inline_admin.py:207
+#: ../tgbot/keyboards/inline_admin.py:267
+#: ../tgbot/keyboards/inline_admin.py:280
+#: ../tgbot/keyboards/inline_admin.py:291
+#: ../tgbot/keyboards/inline_z_all.py:122
+#: ../tgbot/keyboards/inline_z_all.py:143
+#: ../tgbot/keyboards/inline_z_all.py:157
+msgid "✅ Нет, отменить"
+msgstr "✅ Нет, отменить"
+
+#: ../tgbot/keyboards/inline_admin.py:217
+#: ../tgbot/keyboards/inline_admin.py:301
+msgid "💰 Изм. цену"
+msgstr "💰 Изм. цену"
+
+#: ../tgbot/keyboards/inline_admin.py:219
+#: ../tgbot/keyboards/inline_admin.py:250
+#: ../tgbot/keyboards/inline_admin.py:303
+msgid "📜 Изм. описание"
+msgstr "📜 Изм. описание"
+
+#: ../tgbot/keyboards/inline_admin.py:220
+#: ../tgbot/keyboards/inline_admin.py:251
+#: ../tgbot/keyboards/inline_admin.py:304
+msgid "📸 Изм. фото"
+msgstr "📸 Изм. фото"
+
+#: ../tgbot/keyboards/inline_admin.py:223
+msgid "📜 Изменить остаток"
+msgstr "📜 Изменить остаток"
+
+#: ../tgbot/keyboards/inline_admin.py:224
+msgid "📸 <---<ВП>-->"
+msgstr "📸 <---<ВП>-->"
+
+#: ../tgbot/keyboards/inline_admin.py:227
+#: ../tgbot/keyboards/inline_admin.py:248
+#: ../tgbot/keyboards/inline_admin.py:307
+#, fuzzy
+msgid "🏙 Изм. город"
+msgstr "📡 Изменить город"
+
+#: ../tgbot/keyboards/inline_admin.py:228
+msgid "🏙 Изм. магазин"
+msgstr "🏙 Изм. магазин"
+
+#: ../tgbot/keyboards/inline_admin.py:231
+#: ../tgbot/keyboards/inline_admin.py:254
+msgid "🗑 Очистить"
+msgstr "🗑 Очистить"
+
+#: ../tgbot/keyboards/inline_admin.py:232
+msgid "🎁 Добавить товары"
+msgstr "🎁 Добавить товары"
+
+#: ../tgbot/keyboards/inline_admin.py:234
+msgid "📥 Товары"
+msgstr "📥 Товары"
+
+#: ../tgbot/keyboards/inline_admin.py:290
+msgid "❌ Да, очистить"
+msgstr "❌ Да, очистить"
+
+#: ../tgbot/keyboards/inline_admin.py:308
+msgid "Для симметрии"
+msgstr "Для симметрии"
+
+#: ../tgbot/keyboards/inline_admin.py:311
+msgid "X🗑 Очистить"
+msgstr "X🗑 Очистить"
+
+#: ../tgbot/keyboards/inline_admin.py:312
+msgid "X🎁 Добавить товары"
+msgstr "X🎁 Добавить товары"
+
+#: ../tgbot/keyboards/inline_admin.py:326
+msgid "✅ Да, удалить"
+msgstr "✅ Да, удалить"
+
+#: ../tgbot/keyboards/inline_admin.py:327
+msgid "❌ Отменить удаление"
+msgstr "❌ Отменить удаление"
+
+#: ../tgbot/keyboards/inline_user.py:12
+msgid "Да, удалите"
+msgstr "Да, удалите"
+
+#: ../tgbot/keyboards/inline_user.py:13
+msgid "Нет, вернуться в корзину"
+msgstr "Нет, вернуться в корзину"
+
+#: ../tgbot/keyboards/inline_user.py:48
+msgid "📋 QIWI форма"
+msgstr "📋 QIWI форма"
+
+#: ../tgbot/keyboards/inline_user.py:50
+msgid "📞 QIWI номер"
+msgstr "📞 QIWI номер"
+
+#: ../tgbot/keyboards/inline_user.py:52
+msgid "Ⓜ QIWI никнейм"
+msgstr "Ⓜ QIWI никнейм"
+
+#: ../tgbot/keyboards/inline_user.py:54
+msgid "📋 Yoo форма"
+msgstr "📋 Yoo форма"
+
+#: ../tgbot/keyboards/inline_user.py:70 ../tgbot/keyboards/inline_user.py:173
+msgid "⬅ Вернуться в профиль ↩"
+msgstr "⬅ Вернуться в профиль ↩"
+
+#: ../tgbot/keyboards/inline_user.py:71
+msgid "⬅ Вернуться в корзину ↩"
+msgstr "⬅ Вернуться в корзину ↩"
+
+msgid "<b>♻ Подождите, платёж генерируется...</b>"
+msgstr "<b>♻ Please wait, payment data is rendering..</b>"
+
+#: ../tgbot/keyboards/inline_user.py:101
+msgid "✅ Реальная"
+msgstr "✅ Реальная"
+
+#: ../tgbot/keyboards/inline_user.py:103
+msgid "❌ Цифровая"
+msgstr "❌ Цифровая"
+
+#: ../tgbot/keyboards/inline_user.py:113
+msgid "✅ Открыть"
+msgstr "✅ Открыть"
+
+#: ../tgbot/keyboards/inline_user.py:115
+msgid "❌ Стартовать магазин"
+msgstr "❌ Стартовать магазин"
+
+#: ../tgbot/keyboards/inline_user.py:124
+msgid "🌀 Перейти к оплате"
+msgstr "🌀 Перейти к оплате"
+
+#: ../tgbot/keyboards/inline_user.py:126
+msgid "🔄 Проверить оплату"
+msgstr "🔄 Проверить оплату"
+
+#: ../tgbot/keyboards/inline_user.py:136 ../tgbot/keyboards/inline_z_all.py:77
+msgid "Поделиться номером"
+msgstr "Поделиться номером"
+
+#: ../tgbot/keyboards/inline_user.py:145
+msgid "💰 Забронировать столик"
+msgstr "💰 Забронировать столик"
+
+#: ../tgbot/keyboards/inline_user.py:149
+msgid "⬅ Вернуться в место ↩"
+msgstr "⬅ Вернуться в место ↩"
+
+#: ../tgbot/keyboards/inline_user.py:153
+msgid "⬅ Вернуться в город ↩"
+msgstr "⬅ Вернуться в город ↩"
+
+#: ../tgbot/keyboards/inline_user.py:175
+msgid "⬅ Ввести данные заново ↩"
+msgstr "⬅ Ввести данные заново ↩"
+
+#: ../tgbot/keyboards/inline_user.py:185 ../tgbot/keyboards/inline_user.py:197
+#: ../tgbot/keyboards/inline_user.py:205
+msgid "🛒 Добавить в корзину"
+msgstr "🛒 Добавить в корзину"
+
+#: ../tgbot/keyboards/inline_user.py:212 ../tgbot/keyboards/inline_user.py:219
+msgid "💰 Купить товар"
+msgstr "💰 Купить товар"
+
+#: ../tgbot/keyboards/inline_user.py:229
+msgid "🛒 Переключиться в категории"
+msgstr "🛒 Переключиться в категории
+
+#: ../tgbot/keyboards/inline_user.py:231
+msgid "🛒 Переключиться в магазины"
+msgstr "🛒 Переключиться в магазины"
+
+#: ../tgbot/keyboards/inline_user.py:241
+msgid "🌀 Вернуться в профиль"
+msgstr "🌀 Вернуться в профиль"
+
+#: ../tgbot/keyboards/inline_user.py:243
+msgid "🔄 Повторить ввод промокода"
+msgstr "🔄 Повторить ввод промокода"
+
+#: ../tgbot/keyboards/inline_user.py:254 ../tgbot/keyboards/inline_z_all.py:43
+#: ../tgbot/keyboards/inline_z_all.py:55 ../tgbot/keyboards/inline_z_all.py:61
+#: ../tgbot/keyboards/inline_z_all.py:68
+msgid "💰 Пополнить"
+msgstr "💰 Пополнить"
+
+#: ../tgbot/keyboards/inline_user.py:284 ../tgbot/keyboards/inline_z_all.py:128
+msgid "✅ Да, оформить"
+msgstr "✅ Да, оформить"
+
+#: ../tgbot/keyboards/inline_user.py:285 ../tgbot/keyboards/inline_z_all.py:129
+#: ../tgbot/keyboards/inline_z_all.py:136
+msgid "❌ Вернуться в Корзину"
+msgstr "❌ Вернуться в Корзину"
+
+#: ../tgbot/keyboards/inline_user.py:294 ../tgbot/keyboards/inline_z_all.py:104
+msgid "📱 Подтвердить получение"
+msgstr "📱 Подтвердить получение"
+
+#: ../tgbot/keyboards/inline_user.py:297 ../tgbot/keyboards/inline_z_all.py:107
+msgid "❓ Задать вопрос продавцу"
+msgstr "❓ Задать вопрос продавцу"
+
+#: ../tgbot/keyboards/inline_user.py:306 ../tgbot/keyboards/inline_z_all.py:90
+msgid "🏢 Ввести адрес"
+msgstr "🏢 Ввести адрес"
+
+#: ../tgbot/keyboards/inline_user.py:307 ../tgbot/keyboards/inline_z_all.py:91
+msgid "📱 Ввести телефон"
+msgstr "📱 Ввести телефон"
+
+#: ../tgbot/keyboards/inline_user.py:308 ../tgbot/keyboards/inline_z_all.py:92
+msgid " ! Оформить заказ"
+msgstr " ! Оформить заказ"
+
+#: ../tgbot/keyboards/inline_user.py:310
+msgid "📱 Изменить статус заказа"
+msgstr "📱 Изменить статус заказа"
+
+#: ../tgbot/keyboards/inline_user.py:311
+msgid "💰 Написать покупателю"
+msgstr "💰 Написать покупателю"
+
+#: ../tgbot/keyboards/inline_user.py:312
+msgid "❓ Написать продавцу"
+msgstr "❓ Написать продавцу"
+
+#: ../tgbot/keyboards/inline_user.py:314 ../tgbot/keyboards/inline_z_all.py:98
+msgid " Удалить корзину"
+msgstr " Удалить корзину"
+
+#: ../tgbot/keyboards/inline_user.py:356
+msgid "📋 По форме Yoo"
+msgstr "📋 По форме Yoo"
+
+#: ../tgbot/keyboards/inline_user.py:364 ../tgbot/keyboards/inline_user.py:374
+#: ../tgbot/keyboards/inline_user.py:384 ../tgbot/keyboards/inline_user.py:395
+msgid "✅ Подтвердить"
+msgstr "✅ Подтвердить"
+
+#: ../tgbot/keyboards/inline_user.py:365 ../tgbot/keyboards/inline_user.py:375
+#: ../tgbot/keyboards/inline_user.py:385 ../tgbot/keyboards/inline_user.py:396
+#: ../tgbot/keyboards/inline_z_all.py:30
+msgid "❌ Отменить"
+msgstr "❌ Отменить"
+
+#: ../tgbot/keyboards/inline_user.py:406
+msgid "✅ Да, оставить текущий адрес"
+msgstr "✅ Да, оставить текущий адрес"
+
+#: ../tgbot/keyboards/inline_user.py:407
+msgid "❌ Ввести новый адрес"
+msgstr "❌ Ввести новый адрес"
+
+#: ../tgbot/keyboards/inline_user.py:417
+msgid "✅ Да, оставить текущий номер"
+msgstr "✅ Да, оставить текущий номер"
+
+#: ../tgbot/keyboards/inline_user.py:418
+msgid "❌ Ввести новый номер"
+msgstr "❌ Ввести новый номер"
+
+#: ../tgbot/keyboards/inline_user.py:427 ../tgbot/keyboards/inline_user.py:447
+msgid "✅ Вернуться в Корзину"
+msgstr "✅ Вернуться в Корзину"
+
+#: ../tgbot/keyboards/inline_user.py:428 ../tgbot/keyboards/inline_user.py:448
+msgid "❌ Ввести новое сообщение"
+msgstr "❌ Ввести новое сообщение"
+
+#: ../tgbot/keyboards/inline_user.py:437
+msgid "✅ Ответить на сообщение"
+msgstr "✅ Ответить на сообщение"
+
+#: ../tgbot/keyboards/inline_user.py:438 ../tgbot/keyboards/inline_user.py:459
+msgid "❌ Остановить сделку"
+msgstr "❌ Остановить сделку"
+
+#: ../tgbot/keyboards/inline_user.py:458
+msgid "✅ Ответить на сообщение покупателя"
+msgstr "✅ Ответить на сообщение покупателя"
+
+#: ../tgbot/keyboards/inline_user.py:468
+msgid "💌 Написать в поддержку"
+msgstr "💌 Написать в поддержку"
+
+#: ../tgbot/keyboards/inline_z_all.py:29
+msgid "✅ Отправить"
+msgstr "✅ Отправить"
+
+#: ../tgbot/keyboards/inline_z_all.py:36
+msgid "✅ Включить"
+msgstr "✅ Включить"
+
+#: ../tgbot/keyboards/inline_z_all.py:37
+msgid "❌ Отправить только один раз"
+msgstr "❌ Отправить только один раз"
+
+#: ../tgbot/keyboards/inline_z_all.py:48
+msgid "Обновить"
+msgstr "Обновить"
+
+#: ../tgbot/keyboards/inline_z_all.py:49
+msgid "Разместить ссылку в каталоге"
+msgstr "Разместить ссылку в каталоге"
+
+#: ../tgbot/keyboards/inline_z_all.py:56 ../tgbot/keyboards/inline_z_all.py:62
+#: ../tgbot/keyboards/inline_z_all.py:69
+msgid "🎁 Мои покупки"
+msgstr "🎁 Мои покупки"
+
+#: ../tgbot/keyboards/inline_z_all.py:63 ../tgbot/keyboards/inline_z_all.py:70
+msgid "➰ Ввести промокод"
+msgstr "➰ Ввести промокод"
+
+#: ../tgbot/keyboards/inline_z_all.py:64 ../tgbot/keyboards/inline_z_all.py:71
+msgid "📡 Изменить город"
+msgstr "📡 Изменить город"
+
+#: ../tgbot/keyboards/inline_z_all.py:72
+msgid "🚛 Изменить настройки доставки"
+msgstr "🚛 Изменить настройки доставки"
+
+#: ../tgbot/keyboards/inline_z_all.py:84
+msgid "❌ Закрыть"
+msgstr "❌ Закрыть"
+
+#: ../tgbot/keyboards/inline_z_all.py:94
+msgid "📱 Поделиться номером"
+msgstr "📱 Поделиться номером"
+
+#: ../tgbot/keyboards/inline_z_all.py:95
+msgid "💰 Пополнить счет"
+msgstr "💰 Пополнить счет"
+
+#: ../tgbot/keyboards/inline_z_all.py:96
+msgid "❓ Спросить продавца"
+msgstr "❓ Спросить продавца"
+
+#: ../tgbot/keyboards/inline_z_all.py:113
+msgid "❌ Да, удалить корзину"
+msgstr "❌ Да, удалить корзину"
+
+#: ../tgbot/keyboards/inline_z_all.py:114
+msgid "✅ Нет, вернуться в корзину"
+msgstr "✅ Нет, вернуться в корзину"
+
+#: ../tgbot/keyboards/inline_z_all.py:121
+#: ../tgbot/keyboards/inline_z_all.py:142
+#: ../tgbot/keyboards/inline_z_all.py:156
+msgid "❌ Да, удалить все"
+msgstr "❌ Да, удалить все"
+
+#: ../tgbot/keyboards/inline_z_all.py:135
+msgid "✅ Да, пополнить баланс"
+msgstr "✅ Да, пополнить баланс"
+
+#: ../tgbot/keyboards/inline_z_all.py:148
+msgid "Психологическая помощь PsyBorBot"
+msgstr "Психологическая помощь PsyBorBot"
+
+#: ../tgbot/keyboards/inline_z_all.py:150
+msgid "Юридический сервис Спроси Юриста"
+msgstr "Юридический сервис Спроси Юриста"
+
+#: ../tgbot/keyboards/inline_z_page.py:36
+#: ../tgbot/keyboards/inline_z_page.py:47
+#: ../tgbot/keyboards/inline_z_page.py:83
+#: ../tgbot/keyboards/inline_z_page.py:94
+#: ../tgbot/keyboards/inline_z_page.py:120
+#: ../tgbot/keyboards/inline_z_page.py:145
+#: ../tgbot/keyboards/inline_z_page.py:156
+#: ../tgbot/keyboards/inline_z_page.py:176
+#: ../tgbot/keyboards/inline_z_page.py:182
+#: ../tgbot/keyboards/inline_z_page.py:231
+#: ../tgbot/keyboards/inline_z_page.py:242
+#: ../tgbot/keyboards/inline_z_page.py:290
+#: ../tgbot/keyboards/inline_z_page.py:301
+#: ../tgbot/keyboards/inline_z_page.py:327
+#: ../tgbot/keyboards/inline_z_page.py:352
+#: ../tgbot/keyboards/inline_z_page.py:379
+#: ../tgbot/keyboards/inline_z_page.py:400
+#: ../tgbot/keyboards/inline_z_page.py:406
+#: ../tgbot/keyboards/inline_z_page.py:433
+#: ../tgbot/keyboards/inline_z_page.py:453
+#: ../tgbot/keyboards/inline_z_page.py:459
+#: ../tgbot/keyboards/inline_z_page.py:481
+#: ../tgbot/keyboards/inline_z_page.py:487
+#: ../tgbot/keyboards/inline_z_page.py:512
+#: ../tgbot/keyboards/inline_z_page.py:523
+#: ../tgbot/keyboards/inline_z_page.py:549
+#: ../tgbot/keyboards/inline_z_page.py:569
+#: ../tgbot/keyboards/inline_z_page.py:575
+#: ../tgbot/keyboards/inline_z_page.py:602
+#: ../tgbot/keyboards/inline_z_page.py:613
+#: ../tgbot/keyboards/inline_z_page.py:642
+#: ../tgbot/keyboards/inline_z_page.py:665
+#: ../tgbot/keyboards/inline_z_page.py:671
+#: ../tgbot/keyboards/inline_z_page.py:696
+#: ../tgbot/keyboards/inline_z_page.py:707
+#: ../tgbot/keyboards/inline_z_page.py:733
+#: ../tgbot/keyboards/inline_z_page.py:753
+#: ../tgbot/keyboards/inline_z_page.py:759
+#: ../tgbot/keyboards/inline_z_page.py:784
+#: ../tgbot/keyboards/inline_z_page.py:795
+#: ../tgbot/keyboards/inline_z_page.py:847
+#: ../tgbot/keyboards/inline_z_page.py:858
+#: ../tgbot/keyboards/inline_z_page.py:891
+#: ../tgbot/keyboards/inline_z_page.py:902
+#: ../tgbot/keyboards/inline_z_page.py:934
+#: ../tgbot/keyboards/inline_z_page.py:945
+#: ../tgbot/keyboards/inline_z_page.py:981
+#: ../tgbot/keyboards/inline_z_page.py:992
+#: ../tgbot/keyboards/inline_z_page.py:1031
+#: ../tgbot/keyboards/inline_z_page.py:1042
+#: ../tgbot/keyboards/inline_z_page.py:1074
+#: ../tgbot/keyboards/inline_z_page.py:1085
+#: ../tgbot/keyboards/inline_z_page.py:1120
+#: ../tgbot/keyboards/inline_z_page.py:1131
+#: ../tgbot/keyboards/inline_z_page.py:1160
+#: ../tgbot/keyboards/inline_z_page.py:1194
+#: ../tgbot/keyboards/inline_z_page.py:1205
+#: ../tgbot/keyboards/shop_keyboards.py:38
+#: ../tgbot/keyboards/shop_keyboards.py:49
+#: ../tgbot/keyboards/shop_keyboards.py:75
+msgid "Далее ➡"
+msgstr "Далее ➡"
+
+#: ../tgbot/keyboards/inline_z_page.py:40
+#: ../tgbot/keyboards/inline_z_page.py:45
+#: ../tgbot/keyboards/inline_z_page.py:87
+#: ../tgbot/keyboards/inline_z_page.py:92
+#: ../tgbot/keyboards/inline_z_page.py:113
+#: ../tgbot/keyboards/inline_z_page.py:118
+#: ../tgbot/keyboards/inline_z_page.py:149
+#: ../tgbot/keyboards/inline_z_page.py:154
+#: ../tgbot/keyboards/inline_z_page.py:180
+#: ../tgbot/keyboards/inline_z_page.py:235
+#: ../tgbot/keyboards/inline_z_page.py:240
+#: ../tgbot/keyboards/inline_z_page.py:294
+#: ../tgbot/keyboards/inline_z_page.py:299
+#: ../tgbot/keyboards/inline_z_page.py:372
+#: ../tgbot/keyboards/inline_z_page.py:377
+#: ../tgbot/keyboards/inline_z_page.py:404
+#: ../tgbot/keyboards/inline_z_page.py:426
+#: ../tgbot/keyboards/inline_z_page.py:431
+#: ../tgbot/keyboards/inline_z_page.py:457
+#: ../tgbot/keyboards/inline_z_page.py:485
+#: ../tgbot/keyboards/inline_z_page.py:516
+#: ../tgbot/keyboards/inline_z_page.py:521
+#: ../tgbot/keyboards/inline_z_page.py:542
+#: ../tgbot/keyboards/inline_z_page.py:547
+#: ../tgbot/keyboards/inline_z_page.py:573
+#: ../tgbot/keyboards/inline_z_page.py:606
+#: ../tgbot/keyboards/inline_z_page.py:611
+#: ../tgbot/keyboards/inline_z_page.py:635
+#: ../tgbot/keyboards/inline_z_page.py:640
+#: ../tgbot/keyboards/inline_z_page.py:669
+#: ../tgbot/keyboards/inline_z_page.py:700
+#: ../tgbot/keyboards/inline_z_page.py:705
+#: ../tgbot/keyboards/inline_z_page.py:726
+#: ../tgbot/keyboards/inline_z_page.py:731
+#: ../tgbot/keyboards/inline_z_page.py:757
+#: ../tgbot/keyboards/inline_z_page.py:788
+#: ../tgbot/keyboards/inline_z_page.py:793
+#: ../tgbot/keyboards/inline_z_page.py:851
+#: ../tgbot/keyboards/inline_z_page.py:856
+#: ../tgbot/keyboards/inline_z_page.py:895
+#: ../tgbot/keyboards/inline_z_page.py:900
+#: ../tgbot/keyboards/inline_z_page.py:938
+#: ../tgbot/keyboards/inline_z_page.py:943
+#: ../tgbot/keyboards/inline_z_page.py:985
+#: ../tgbot/keyboards/inline_z_page.py:990
+#: ../tgbot/keyboards/inline_z_page.py:1035
+#: ../tgbot/keyboards/inline_z_page.py:1040
+#: ../tgbot/keyboards/inline_z_page.py:1078
+#: ../tgbot/keyboards/inline_z_page.py:1083
+#: ../tgbot/keyboards/inline_z_page.py:1124
+#: ../tgbot/keyboards/inline_z_page.py:1129
+#: ../tgbot/keyboards/inline_z_page.py:1153
+#: ../tgbot/keyboards/inline_z_page.py:1158
+#: ../tgbot/keyboards/inline_z_page.py:1198
+#: ../tgbot/keyboards/inline_z_page.py:1203
+#: ../tgbot/keyboards/shop_keyboards.py:47
+msgid "⬅ Назад"
+msgstr "⬅ Назад"
+
+#: ../tgbot/keyboards/location_keyboards.py:7
+#: ../tgbot/keyboards/location_keyboards.py:16
+msgid "📡 Поделиться своим местоположением"
+msgstr "📡 Поделиться своим местоположением"
+
+#: ../tgbot/keyboards/location_keyboards.py:8
+#: ../tgbot/keyboards/location_keyboards.py:17
+msgid "📋 Выбрать город из списка"
+msgstr "📋 Выбрать город из списка"
+
+#: ../tgbot/keyboards/location_keyboards.py:9
+msgid "⬆️ Выбрать город позже"
+msgstr "⬆️ Выбрать город позже"
+
+msgid "<b>Нажмите пожалуйста кнопку:</b>"
+msgstr "<b>Нажмите пожалуйста кнопку:</b>"
+
+msgid "🎁 Купить"
+msgstr "🎁 Купить"
+
+msgid "🌐 Продать"
+msgstr "🌐 Продать"

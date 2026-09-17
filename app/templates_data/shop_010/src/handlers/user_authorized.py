@@ -1,0 +1,788 @@
+import logging
+import random
+from decimal import Decimal
+from aiogram import F, Router
+from aiogram.enums import ChatAction
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message, CallbackQuery
+from src.middlewares import user_authorized_mw, throttling_mw
+from src.keyboards import user_authorized_kb
+from src.states import user_authorized_fsm
+from src.database import postgres_dbms
+from src.services import internal_functions, localization as loc
+from src.services.date_formatting import format_localized_bonus_days, format_localized_datetime
+from src.config import settings
+from src.runtime import bot
+from src.payments.enums import PaymentProviderName
+from src.payments.exceptions import ProviderError
+from src.payments.runtime import payment_service
+
+
+logger = logging.getLogger(__name__)
+
+router = Router(name="user_authorized")
+
+
+@router.message(F.text == loc.auth.btns['my_subscription'])
+@user_authorized_mw.authorized_only()
+async def my_subscription(message: Message):
+    """Send unified subscription info card with how-to-connect and how-to-renew buttons."""
+    telegram_id = message.from_user.id
+    client_id = await postgres_dbms.get_clientID_by_telegramID(telegram_id)
+
+    subscription_url = await postgres_dbms.get_client_remnawave_subscription_url_by_telegramID(telegram_id)
+    url = subscription_url or loc.auth.msgs['my_subscription_url_pending']
+    locations_status_page = loc.auth.msgs['my_subscription_locations_status_page']
+
+    # Determine status and expiry line.
+    # Priority: blank (EPOCH) → free → active → inactive/expired.
+    # blank and free subscriptions carry no expiry line.
+    if await postgres_dbms.is_subscription_blank(telegram_id):
+        status = loc.auth.msgs['my_subscription_status_blank']
+        expiry = ''
+        locations_status_page = ''
+        url = loc.auth.msgs['my_subscription_url_blank']
+        await message.answer(loc.unauth.msgs['need_renew_sub'])
+    elif await postgres_dbms.is_subscription_free(telegram_id):
+        status = loc.auth.msgs['my_subscription_status_free']
+        expiry = ''
+    elif await postgres_dbms.is_subscription_active(telegram_id):
+        status = loc.auth.msgs['my_subscription_status_active']
+        expiration_date = await postgres_dbms.get_subscription_expiration_date(telegram_id)
+        expiry = loc.auth.msgs['my_subscription_expiry_line_active'].format(
+            format_localized_datetime(expiration_date)) if expiration_date else ''
+    else:
+        status = loc.auth.msgs['my_subscription_status_inactive']
+        expiration_date = await postgres_dbms.get_subscription_expiration_date(telegram_id)
+        expiry = loc.auth.msgs['my_subscription_expiry_line_inactive'].format(
+            format_localized_datetime(expiration_date)) if expiration_date else ''
+
+    _, title, description, price = await postgres_dbms.get_subscription_info_by_clientID(client_id)
+    max_devices = await postgres_dbms.get_max_configurations_by_telegramID(telegram_id)
+
+    await message.answer(
+        loc.auth.msgs['my_subscription'].format(
+            status=status, expiry=expiry, url=url,
+            title=title, description=description,
+            price=price, max_devices=max_devices,
+            locations_status_page=locations_status_page,
+        ),
+        reply_markup=user_authorized_kb.my_subscription_inline,
+    )
+
+
+@router.callback_query(F.data == 'subscription_how_to_connect')
+@user_authorized_mw.authorized_only()
+async def subscription_how_to_connect(callback: CallbackQuery):
+    """Send instructions on how to connect the subscription."""
+    await callback.answer()
+    await callback.message.answer(loc.auth.msgs['how_to_connect_subscription'])
+
+
+@router.callback_query(F.data == 'subscription_how_to_renew')
+@user_authorized_mw.authorized_only()
+async def subscription_how_to_renew(callback: CallbackQuery):
+    """Send instructions on how to renew/pay for the subscription."""
+    await callback.answer()
+    await callback.message.answer(
+        loc.auth.msgs['how_to_renew_subscription'].format(loc.auth.btns['sub_renewal'])
+    )
+
+
+@router.callback_query(F.data == 'subscription_location_types')
+@user_authorized_mw.authorized_only()
+async def subscription_location_types(callback: CallbackQuery):
+    """Send explanation of Fast, Breach and Pure location types."""
+    await callback.answer()
+    await callback.message.answer(loc.auth.msgs['location_types_info'])
+
+
+@router.message(
+    F.text == loc.auth.btns['return_main_menu'],
+    StateFilter(None, user_authorized_fsm.AccountMenu.menu, user_authorized_fsm.PaymentMenu.menu),
+)
+@user_authorized_mw.authorized_only()
+async def submenu_fsm_cancel(message: Message, state: FSMContext):
+    """Cancel FSM state for submenu and return to menu keyboard regardless of machine state."""
+    await state.clear()
+    await message.answer(loc.auth.msgs['return_to_main_menu'], reply_markup=user_authorized_kb.menu)
+
+
+@router.message(F.text == loc.auth.btns['sub_renewal'])
+@user_authorized_mw.authorized_only()
+async def sub_renewal_fsm_start(message: Message, state: FSMContext):
+    """Start FSM for subscription renewal and show subscription renewal keyboard."""
+    if await postgres_dbms.is_subscription_free(message.from_user.id):
+        await message.answer(loc.auth.msgs['sub_renewal_free'])
+        return
+
+    await state.set_state(user_authorized_fsm.PaymentMenu.menu)
+    await message.answer(loc.auth.msgs['go_sub_renewal_menu'], reply_markup=user_authorized_kb.sub_renewal)
+
+
+async def _go_to_payment(
+    message: Message,
+    state: FSMContext,
+    *,
+    days_number: int,
+    discount: float,
+) -> None:
+    """Entry point after the user picks days. Decides UI flow based on enabled providers.
+
+    Two paths:
+
+    - **One provider enabled** → skip the selection step entirely and call
+      ``_initiate_payment`` directly. Showing a one-button "choose your
+      payment method" screen would be UX noise.
+    - **Two or more providers enabled** → stash the chosen days+discount in
+      FSM data and transition to ``provider_selection`` so the user can pick.
+
+    The empty-list case is impossible — schema-level validation in
+    :class:`PaymentsSettings` forbids it.
+    """
+    enabled = user_authorized_kb.ENABLED_PAYMENT_PROVIDERS
+    if len(enabled) == 1:
+        await _initiate_payment(
+            message, state,
+            days_number=days_number, discount=discount,
+            provider_name=enabled[0],
+        )
+        return
+
+    await state.update_data(payment_days_number=days_number, payment_discount=discount)
+    await state.set_state(user_authorized_fsm.PaymentMenu.provider_selection)
+    await message.answer(
+        loc.auth.msgs['choose_payment_provider'],
+        reply_markup=user_authorized_kb.sub_renewal_provider_choice,
+    )
+
+
+async def _initiate_payment(
+    message: Message,
+    state: FSMContext,
+    *,
+    days_number: int,
+    discount: float,
+    provider_name: PaymentProviderName,
+) -> None:
+    """Initiate a subscription-renewal payment with the selected provider and present the link.
+
+    Non-blocking: the actual payment-status confirmation arrives later via webhook
+    (or via the reconciler / manual «Проверить платёж» button). The FSM is set to
+    ``verification`` so the user sees the verification keyboard until they get a
+    confirmation message.
+    """
+    try:
+        initiated = await payment_service.initiate(
+            telegram_id=message.from_user.id,
+            days_number=days_number,
+            discount=discount,
+            provider_name=provider_name,
+            return_url=settings.payments.return_url,
+        )
+    except ProviderError:
+        # Already logged in service.initiate with stack trace.
+        await message.answer(loc.auth.msgs['payment_provider_error'])
+        return
+    except Exception:
+        # Anything else — config error, network panic, asyncpg blip during the orphan
+        # cleanup, etc. Log here (service might not have, depending on where it failed)
+        # and give the user the same friendly message — the underlying detail isn't
+        # actionable to them either way.
+        logger.exception(
+            "Unexpected error initiating payment via %s for telegram_id=%s",
+            provider_name, message.from_user.id,
+        )
+        await message.answer(loc.auth.msgs['payment_provider_error'])
+        return
+
+    # The verification keyboard / FSM state are independent of which provider
+    # was used — same user-facing flow regardless of YooKassa vs YooMoney.
+    await message.answer(
+        loc.internal.msgs['wait_payment'],
+        reply_markup=user_authorized_kb.sub_renewal_verification,
+    )
+    await state.set_state(user_authorized_fsm.PaymentMenu.verification)
+
+    # Build the payment-link message with discount/test annotations.
+    discount_str = ''
+    if discount:
+        # Re-derive shown discount amount for the message text. Mirrors the
+        # legacy formula so the user sees consistent numbers.
+        sub_price_proxy = initiated.price / (days_number * (1 - discount) / 30)
+        discount_str = loc.internal.msgs['discount_str'].format(
+            sub_price_proxy / 30 * days_number * discount
+        )
+    test_note = loc.internal.msgs['test_price_note'] if initiated.is_test_payment else ''
+
+    message_info = await message.answer(
+        loc.internal.msgs['payment_form'].format(
+            initiated.sub_title, initiated.days_number, initiated.price, initiated.payment_id,
+            discount_str=discount_str, test_note=test_note,
+        ),
+        reply_markup=await user_authorized_kb.sub_renewal_link_inline(initiated.payment_url),
+    )
+
+    await postgres_dbms.update_payment_telegram_message_id(initiated.payment_id, message_info.message_id)
+
+
+@router.message(
+    F.text == loc.auth.btns['payment_30d'],
+    StateFilter(user_authorized_fsm.PaymentMenu.menu),
+)
+@user_authorized_mw.authorized_only()
+@throttling_mw.antiflood(rate_limit=4)
+async def sub_renewal_days_30(message: Message, state: FSMContext):
+    """Pick 30-day subscription, then prompt the user to choose a payment provider."""
+    await _go_to_payment(message, state, days_number=30, discount=0.)
+
+
+@router.message(
+    F.text == loc.auth.btns['payment_90d'],
+    StateFilter(user_authorized_fsm.PaymentMenu.menu),
+)
+@user_authorized_mw.authorized_only()
+@throttling_mw.antiflood(rate_limit=4)
+async def sub_renewal_days_90(message: Message, state: FSMContext):
+    """Pick 90-day subscription, then prompt the user to choose a payment provider."""
+    await _go_to_payment(message, state, days_number=90, discount=.1)
+
+
+@router.message(
+    F.text == loc.auth.btns['payment_365d'],
+    StateFilter(user_authorized_fsm.PaymentMenu.menu),
+)
+@user_authorized_mw.authorized_only()
+@throttling_mw.antiflood(rate_limit=4)
+async def sub_renewal_days_365(message: Message, state: FSMContext):
+    """Pick 365-day subscription, then prompt the user to choose a payment provider."""
+    await _go_to_payment(message, state, days_number=365, discount=.15)
+
+
+@router.message(
+    F.text == loc.auth.btns['pay_yookassa'],
+    StateFilter(user_authorized_fsm.PaymentMenu.provider_selection),
+)
+@user_authorized_mw.authorized_only()
+@throttling_mw.antiflood(rate_limit=1)
+async def sub_renewal_pick_yookassa(message: Message, state: FSMContext):
+    """User picked YooKassa (card / SBP) — initiate the payment with that provider."""
+    data = await state.get_data()
+    days_number = data.get('payment_days_number')
+    discount = data.get('payment_discount', 0.)
+    if days_number is None:
+        # FSM data lost (Redis restart, manual nudge) — bounce user back to days picker.
+        await state.set_state(user_authorized_fsm.PaymentMenu.menu)
+        await message.answer(loc.auth.msgs['go_sub_renewal_menu'], reply_markup=user_authorized_kb.sub_renewal)
+        return
+    await _initiate_payment(
+        message, state,
+        days_number=days_number, discount=discount,
+        provider_name=PaymentProviderName.YOOKASSA,
+    )
+
+
+@router.message(
+    F.text == loc.auth.btns['pay_yoomoney'],
+    StateFilter(user_authorized_fsm.PaymentMenu.provider_selection),
+)
+@user_authorized_mw.authorized_only()
+@throttling_mw.antiflood(rate_limit=1)
+async def sub_renewal_pick_yoomoney(message: Message, state: FSMContext):
+    """User picked YooMoney (wallet transfer) — initiate the payment with that provider."""
+    data = await state.get_data()
+    days_number = data.get('payment_days_number')
+    discount = data.get('payment_discount', 0.)
+    if days_number is None:
+        await state.set_state(user_authorized_fsm.PaymentMenu.menu)
+        await message.answer(loc.auth.msgs['go_sub_renewal_menu'], reply_markup=user_authorized_kb.sub_renewal)
+        return
+    await _initiate_payment(
+        message, state,
+        days_number=days_number, discount=discount,
+        provider_name=PaymentProviderName.YOOMONEY,
+    )
+
+
+@router.message(
+    F.text == loc.auth.btns['payment_history'],
+    StateFilter(user_authorized_fsm.PaymentMenu.menu),
+)
+@user_authorized_mw.authorized_only()
+async def sub_renewal_payment_history(message: Message):
+    """Send messages with successful payments history."""
+    payment_history = await postgres_dbms.get_payments_successful_info(await postgres_dbms.get_clientID_by_telegramID(message.from_user.id))
+    is_payment_found = False
+
+    payment_price: Decimal
+    for payment_id, sub_title, payment_price, payment_days_number, payment_date in payment_history:
+        await message.answer(loc.auth.msgs['payment_history_message'].format(sub_title, payment_days_number, float(payment_price), format_localized_datetime(payment_date), payment_id))
+        is_payment_found = True
+
+    if not is_payment_found:
+        await message.answer(loc.auth.msgs['cant_find_payments'])
+
+
+@router.message(
+    F.text == loc.auth.btns['payment_cancel'],
+    StateFilter(
+        None,
+        user_authorized_fsm.PaymentMenu.provider_selection,
+        user_authorized_fsm.PaymentMenu.verification,
+    ),
+)
+@user_authorized_mw.authorized_only()
+async def sub_renewal_submenu_fsm_cancel(message: Message, state: FSMContext):
+    """Cancel the payment flow from any sub-state (provider pick / awaiting verification).
+
+    Tries to delete the last payment-link message we sent so the user doesn't
+    accidentally pay an abandoned invoice. Returns the user to the renewal
+    menu (days picker).
+    """
+    last_payment_message_id = await postgres_dbms.get_payment_last_message_id(await postgres_dbms.get_clientID_by_telegramID(message.from_user.id))
+
+    await internal_functions.safe_delete_message(message.chat.id, last_payment_message_id)
+
+    await state.set_state(user_authorized_fsm.PaymentMenu.menu)
+    await message.answer(loc.auth.msgs['cancel_payment'], reply_markup=user_authorized_kb.sub_renewal)
+
+
+@router.message(
+    F.text == loc.auth.btns['payment_check'],
+    StateFilter(user_authorized_fsm.PaymentMenu.verification),
+)
+@user_authorized_mw.authorized_only()
+@throttling_mw.antiflood(rate_limit=4)
+async def sub_renewal_verification(message: Message, state: FSMContext):
+    """Manual user-triggered re-check of pending payments for the last hour.
+
+    Webhooks are the primary success-confirmation channel; this handler exists
+    as a user-initiated fallback for cases where the webhook hasn't arrived yet
+    (network blip, provider delay) and the user wants immediate feedback.
+
+    ``PaymentService.recheck_user_pending`` handles the entire finalize chain
+    on hit (deletes payment message, resets FSM, sends "payment successful"
+    with the renewal keyboard). The handler only needs to emit the "nothing
+    found" path itself.
+    """
+    await message.answer(loc.auth.msgs['check_payment_hour'])
+    await bot.send_chat_action(message.from_user.id, ChatAction.TYPING)
+
+    finalized = await payment_service.recheck_user_pending(
+        message.from_user.id, minutes=60,
+    )
+
+    if not finalized:
+        await message.answer(loc.auth.msgs['cant_find_payments'])
+        await message.answer(loc.auth.msgs['restore_payments'])
+
+
+@router.message(F.text == loc.auth.btns['personal_account'])
+@user_authorized_mw.authorized_only()
+async def account_fsm_start(message: Message, state: FSMContext):
+    """Start FSM for account menu and show account menu keyboard."""
+    await state.set_state(user_authorized_fsm.AccountMenu.menu)
+    await message.answer(loc.auth.msgs['go_personal_account'], reply_markup=user_authorized_kb.account)
+
+
+@router.message(
+    F.text == loc.auth.btns['about_client'],
+    StateFilter(user_authorized_fsm.AccountMenu.menu),
+)
+@user_authorized_mw.authorized_only()
+async def account_client_info(message: Message):
+    """Send message with information about client."""
+    _, name, surname, username, register_date, _ = await postgres_dbms.get_client_info_by_telegramID(message.from_user.id)
+
+    surname_str = ''
+    if surname is not None:
+        surname_str = loc.auth.msgs['client_info_surname_str'].format(surname) + '\n'
+
+    username_str = ''
+    if username is not None:
+        username_str = loc.auth.msgs['client_info_username_str'].format(username) + '\n'
+
+    await message.answer(loc.auth.msgs['client_info'].format(name, message.from_user.id, format_localized_datetime(register_date), surname_str=surname_str, username_str=username_str))
+
+
+@router.message(
+    F.text == loc.auth.btns['return_to_account_menu_1'],
+    StateFilter(
+        None,
+        user_authorized_fsm.AccountMenu.ref_program,
+        user_authorized_fsm.AccountMenu.settings,
+    ),
+)
+@router.message(
+    F.text == loc.auth.btns['return_to_account_menu_2'],
+    StateFilter(None, user_authorized_fsm.AccountMenu.promo),
+)
+@user_authorized_mw.authorized_only()
+async def account_submenu_fsm_cancel(message: Message, state: FSMContext):
+    """Cancel FSM state for account submenu and return to account menu keyboard."""
+    await state.set_state(user_authorized_fsm.AccountMenu.menu)
+    await message.answer(loc.auth.msgs['return_to_personal_account'], reply_markup=user_authorized_kb.account)
+
+
+@router.message(
+    F.text == loc.auth.btns['ref_program'],
+    StateFilter(user_authorized_fsm.AccountMenu.menu),
+)
+@user_authorized_mw.authorized_only()
+@user_authorized_mw.nonblank_subscription_only()
+async def account_ref_program_fsm_start(message: Message, state: FSMContext):
+    """Start FSM for account referral program menu and show account referral program menu keyboard."""
+    await state.set_state(user_authorized_fsm.AccountMenu.ref_program)
+    await internal_functions.send_photo_safely(message.from_user.id,
+                                               telegram_file_id=loc.auth.tfids['ref_program_info'],
+                                               caption=loc.auth.msgs['ref_program_info'],
+                                               reply_markup=user_authorized_kb.ref_program)
+
+
+@router.message(
+    F.text == loc.auth.btns['promo'],
+    StateFilter(user_authorized_fsm.AccountMenu.menu),
+)
+@user_authorized_mw.authorized_only()
+async def account_promo_fsm_start(message: Message, state: FSMContext):
+    """Start FSM for account promocodes menu and show account promocodes menu keyboard."""
+    await state.set_state(user_authorized_fsm.AccountMenu.promo)
+    await message.answer(loc.auth.msgs['go_promo_menu'], reply_markup=user_authorized_kb.promo)
+    await message.answer(loc.auth.msgs['enter_promo'])
+
+
+@router.message(
+    F.text == loc.auth.btns['settings'],
+    StateFilter(user_authorized_fsm.AccountMenu.menu),
+)
+@user_authorized_mw.authorized_only()
+async def account_settings_fsm_start(message: Message, state: FSMContext):
+    """Start FSM for account settings menu and show account settings menu keyboard."""
+    await state.set_state(user_authorized_fsm.AccountMenu.settings)
+    await message.answer(loc.auth.msgs['go_settings'], reply_markup=user_authorized_kb.settings)
+
+
+@router.message(
+    F.text == loc.auth.btns['ref_program_participation'],
+    StateFilter(user_authorized_fsm.AccountMenu.ref_program),
+)
+@user_authorized_mw.authorized_only()
+@user_authorized_mw.nonblank_subscription_only()
+async def account_ref_program_info(message: Message):
+    """Send message with information about client's participation in referral program."""
+    who_invited_client = await postgres_dbms.get_invited_by_client_info(message.from_user.id)
+    who_was_invited_by_client = await postgres_dbms.get_invited_clients_list(message.from_user.id)
+
+    if who_invited_client:
+        name, username = who_invited_client
+        username_str = await internal_functions.format_none_string(username)
+        await message.answer(loc.auth.msgs['invited_by'].format(name, username_str))
+    else:
+        await message.answer(loc.auth.msgs['invited_by_nobody'])
+
+    if who_was_invited_by_client:
+        invited_str = ''
+        for idx, (name, username) in enumerate(who_was_invited_by_client):
+            username_str = await internal_functions.format_none_string(username)
+            invited_str += loc.auth.msgs['who_was_invited_str'].format(idx + 1, name, username_str) + '\n'
+
+        await message.answer(loc.auth.msgs['who_was_invited'].format(invited_str=invited_str))
+    else:
+        await message.answer(loc.auth.msgs['nobody_was_invited'])
+
+
+@router.message(
+    F.text == loc.auth.btns['generate_invite'],
+    StateFilter(user_authorized_fsm.AccountMenu.ref_program),
+)
+@user_authorized_mw.authorized_only()
+@user_authorized_mw.nonblank_subscription_only()
+async def account_ref_program_invite(message: Message):
+    """Send message with random invite text from messages.py."""
+    ref_promocode = await postgres_dbms.get_referral_promo(message.from_user.id)
+    text: str = random.choice(loc.auth.msgs['ref_program_invites_texts']).format(ref_promocode)
+    await message.answer(text)
+
+
+@router.message(
+    F.text == loc.auth.btns['show_ref_code'],
+    StateFilter(user_authorized_fsm.AccountMenu.ref_program),
+)
+@user_authorized_mw.authorized_only()
+@user_authorized_mw.nonblank_subscription_only()
+async def account_ref_program_promocode(message: Message):
+    """Send message with client's own referral promocode."""
+    ref_promo_phrase: str = await postgres_dbms.get_referral_promo(message.from_user.id)
+    await message.answer(loc.auth.msgs['your_ref_code'].format(ref_promo_phrase))
+
+
+@router.message(
+    F.text == loc.auth.btns['used_promos'],
+    StateFilter(user_authorized_fsm.AccountMenu.promo),
+)
+@user_authorized_mw.authorized_only()
+async def account_promo_info(message: Message):
+    """Send message with information about entered by client promocodes."""
+    ref_promos, global_promos, local_promos = await postgres_dbms.get_client_entered_promos(await postgres_dbms.get_clientID_by_telegramID(message.from_user.id))
+
+    has_entered_promos = False
+    ref_promo_str = ''
+    if ref_promos:
+        ref_promo_phrase, client_creator_name = ref_promos
+        ref_promo_str = loc.auth.msgs['ref_promo_str'].format(ref_promo_phrase, client_creator_name) + '\n\n'
+        has_entered_promos = True
+
+    global_promos_str = ''
+    if global_promos:
+        global_promo_row_str = ''
+        for idx, (global_promo_phrase, bonus_time, date_of_entry) in enumerate(global_promos):
+            global_promo_row_str += loc.auth.msgs['global_promo_row_str'].format(idx + 1, global_promo_phrase, format_localized_bonus_days(bonus_time), format_localized_datetime(date_of_entry)) + '\n'
+        global_promos_str = loc.auth.msgs['global_promos_str'].format(global_promo_row_str=global_promo_row_str) + '\n\n'
+        has_entered_promos = True
+
+    local_promos_str = ''
+    if local_promos:
+        local_promo_row_str = ''
+        for idx, (local_promo_phrase, bonus_time, date_of_entry) in enumerate(local_promos):
+            local_promo_row_str += loc.auth.msgs['local_promo_row_str'].format(idx + 1, local_promo_phrase, format_localized_bonus_days(bonus_time), format_localized_datetime(date_of_entry)) + '\n'
+        local_promos_str = loc.auth.msgs['local_promos_str'].format(local_promo_row_str=local_promo_row_str) + '\n\n'
+        has_entered_promos = True
+
+    if has_entered_promos:
+        await message.answer(ref_promo_str + global_promos_str + local_promos_str)
+    else:
+        await message.answer(loc.auth.msgs['no_promo_entered'])
+
+
+@router.message(StateFilter(user_authorized_fsm.AccountMenu.promo))
+@user_authorized_mw.authorized_only()
+async def account_promo_check(message: Message, state: FSMContext):
+    """Check entered promocode is valid, send information about successfuly entered promocode, update subscription period for client.
+
+    If specified promocode is local promocode, it can also change subscription type for client.
+    Referral promocodes are accepted within 7 days of registration for clients who haven't used one yet.
+    """
+    client_id = await postgres_dbms.get_clientID_by_telegramID(message.from_user.id)
+
+    if await postgres_dbms.is_referral_promo(message.text):
+        # Referral promos are only accepted within 7 days of registration and only once.
+        if not await postgres_dbms.can_enter_ref_promo_as_authorized(client_id):
+            await message.answer(loc.auth.msgs['error_promo_entered_ref_code'])
+            return
+
+        ref_promo_info = await postgres_dbms.get_refferal_promo_info_by_phrase(message.text)
+        if not ref_promo_info:
+            await message.answer(loc.auth.msgs['error_promo_not_exist'])
+            return
+
+        ref_promo_id, client_creator_id, provided_sub_id, bonus_time = ref_promo_info
+
+        if client_creator_id == client_id:
+            await message.answer(loc.auth.msgs['error_promo_own_ref_code'])
+            return
+
+        await postgres_dbms.apply_ref_promo_to_existing_client(client_id, ref_promo_id, provided_sub_id, bonus_time)
+        await internal_functions.notify_client_new_referal(client_creator_id, message.from_user.first_name, message.from_user.username)
+        await internal_functions.notify_admin_promo_entered(client_id, message.text, 'ref')
+        await internal_functions.extend_remnawave_expiry_for_client(client_id)
+
+        creator_name, *_ = await postgres_dbms.get_client_info_by_clientID(client_creator_id)
+        _, title, _, price = await postgres_dbms.get_subscription_info_by_clientID(client_id)
+        await message.answer(
+            loc.auth.msgs['ref_promo_accepted'].format(creator_name, format_localized_bonus_days(bonus_time), title, price),
+            reply_markup=user_authorized_kb.account,
+        )
+        await state.set_state(user_authorized_fsm.AccountMenu.menu)
+        return
+
+    global_promo_info = await postgres_dbms.get_global_promo_info(message.text)
+    local_promo_info = await postgres_dbms.get_local_promo_info(message.text)
+
+    if global_promo_info:
+        global_promo_id, _, _, bonus_time = global_promo_info
+
+        if not await postgres_dbms.is_global_promo_already_entered(client_id, global_promo_id):
+            if await postgres_dbms.is_global_promo_valid(global_promo_id):
+                if await postgres_dbms.is_global_promo_has_remaining_activations(global_promo_id):
+                    await postgres_dbms.insert_client_entered_global_promo(client_id, global_promo_id, bonus_time)
+                    await internal_functions.notify_admin_promo_entered(client_id, message.text, 'global')
+                    await internal_functions.extend_remnawave_expiry_for_client(client_id)
+                    await message.answer(loc.auth.msgs['global_promo_accepted'].format(format_localized_bonus_days(bonus_time)), reply_markup=user_authorized_kb.account)
+                    await state.set_state(user_authorized_fsm.AccountMenu.menu)
+                else:
+                    await message.answer(loc.auth.msgs['error_promo_limit_activations'])
+            else:
+                await message.answer(loc.auth.msgs['error_promo_expired'])
+        else:
+            await message.answer(loc.auth.msgs['error_promo_already_entered'])
+
+    elif local_promo_info:
+        local_promo_id, _, bonus_time, provided_sub_id = local_promo_info
+
+        if await postgres_dbms.is_local_promo_accessible(client_id, local_promo_id):
+            if not await postgres_dbms.is_local_promo_already_entered(client_id, local_promo_id):
+                if await postgres_dbms.is_local_promo_valid(local_promo_id):
+                    await postgres_dbms.insert_client_entered_local_promo(client_id, local_promo_id, bonus_time)
+                    await internal_functions.notify_admin_promo_entered(client_id, message.text, 'local')
+                    await internal_functions.extend_remnawave_expiry_for_client(client_id)
+
+                    new_sub_str = ''
+                    if provided_sub_id:
+                        await postgres_dbms.update_client_subscription(client_id, provided_sub_id)
+                        _, title, _, price = await postgres_dbms.get_subscription_info_by_subID(provided_sub_id)
+                        new_sub_str = loc.auth.msgs['new_sub_str'].format(title, price)
+
+                    await message.answer(loc.auth.msgs['loсal_promo_accepted'].format(format_localized_bonus_days(bonus_time), new_sub_str=new_sub_str), reply_markup=user_authorized_kb.account)
+                    await state.set_state(user_authorized_fsm.AccountMenu.menu)
+                else:
+                    await message.answer(loc.auth.msgs['error_promo_expired'])
+            else:
+                await message.answer(loc.auth.msgs['error_promo_already_entered'])
+        else:
+            await message.answer(loc.auth.msgs['error_promo_inaccessible'])
+    else:
+        await message.answer(loc.auth.msgs['error_promo_not_exist'])
+
+
+@router.message(
+    F.text == loc.auth.btns['return_to_settings'],
+    StateFilter(
+        None,
+        user_authorized_fsm.SettingsMenu.chatgpt,
+        user_authorized_fsm.SettingsMenu.notifications,
+    ),
+)
+@user_authorized_mw.authorized_only()
+async def account_settings_submenu_fsm_cancel(message: Message, state: FSMContext):
+    """Cancel FSM state for account settings submenu and return to account settings menu keyboard."""
+    await state.set_state(user_authorized_fsm.AccountMenu.settings)
+    await message.answer(loc.auth.msgs['return_to_settings'], reply_markup=user_authorized_kb.settings)
+
+
+@router.message(
+    F.text == loc.auth.btns['settings_chatgpt_mode'],
+    StateFilter(user_authorized_fsm.AccountMenu.settings),
+)
+@user_authorized_mw.authorized_only()
+async def account_settings_chatgpt(message: Message, state: FSMContext):
+    """Change account settings FSM state and show dynamic account settings ChatGPT mode keyboard."""
+    await state.set_state(user_authorized_fsm.SettingsMenu.chatgpt)
+    await message.answer(loc.auth.msgs['go_settings_chatgpt'], reply_markup=await user_authorized_kb.settings_chatgpt(await postgres_dbms.get_clientID_by_telegramID(message.from_user.id)))
+    await message.answer(loc.auth.msgs['settings_chatgpt_info'])
+
+
+@router.message(
+    F.text.in_({loc.auth.btns[key] for key in ('chatgpt_on', 'chatgpt_off')}),
+    StateFilter(user_authorized_fsm.SettingsMenu.chatgpt),
+)
+@user_authorized_mw.authorized_only()
+async def account_settings_chatgpt_mode(message: Message, state: FSMContext):
+    """Turn on/off client's ChatGPT mode for answering unrecognized messages."""
+    chatgpt_mode_status: bool = await postgres_dbms.update_chatgpt_mode(await postgres_dbms.get_clientID_by_telegramID(message.from_user.id))
+
+    if await state.get_state() == user_authorized_fsm.SettingsMenu.chatgpt.state:
+        reply_keyboard = await user_authorized_kb.settings_chatgpt(await postgres_dbms.get_clientID_by_telegramID(message.from_user.id))
+    else:
+        reply_keyboard = None
+
+    if chatgpt_mode_status:
+        await message.answer(loc.auth.msgs['chatgpt_on'], reply_markup=reply_keyboard)
+    else:
+        await message.answer(loc.auth.msgs['chatgpt_off'], reply_markup=reply_keyboard)
+
+
+@router.message(
+    F.text == loc.auth.btns['settings_notifications'],
+    StateFilter(user_authorized_fsm.AccountMenu.settings),
+)
+@user_authorized_mw.authorized_only()
+async def account_settings_notifications(message: Message, state: FSMContext):
+    """Change account settings FSM state and show dynamic account settings notifications keyboard."""
+    client_id = await postgres_dbms.get_clientID_by_telegramID(message.from_user.id)
+    await state.set_state(user_authorized_fsm.SettingsMenu.notifications)
+    await message.answer(loc.auth.msgs['go_settings_notifications'], reply_markup=await user_authorized_kb.settings_notifications(client_id))
+    await message.answer(loc.auth.msgs['settings_notifications_info'])
+
+
+@router.message(
+    F.text.in_({loc.auth.btns[key] for key in ('1d_on', '1d_off')}),
+    StateFilter(user_authorized_fsm.SettingsMenu.notifications),
+)
+@user_authorized_mw.authorized_only()
+async def account_settings_notifications_1d(message: Message):
+    """Turn on/off client's receiving notifications 1 day before subscription expiration."""
+    client_id = await postgres_dbms.get_clientID_by_telegramID(message.from_user.id)
+    expiration_in_1d_state = await postgres_dbms.update_notifications_1d(client_id)
+
+    if expiration_in_1d_state:
+        await message.answer(loc.auth.msgs['1d_on'], reply_markup=await user_authorized_kb.settings_notifications(client_id))
+    else:
+        await message.answer(loc.auth.msgs['1d_off'], reply_markup=await user_authorized_kb.settings_notifications(client_id))
+
+
+@router.message(
+    F.text.in_({loc.auth.btns[key] for key in ('3d_on', '3d_off')}),
+    StateFilter(user_authorized_fsm.SettingsMenu.notifications),
+)
+@user_authorized_mw.authorized_only()
+async def account_settings_notifications_3d(message: Message):
+    """Turn on/off client's receiving notifications 3 days before subscription expiration."""
+    client_id = await postgres_dbms.get_clientID_by_telegramID(message.from_user.id)
+    expiration_in_3d_state = await postgres_dbms.update_notifications_3d(client_id)
+
+    if expiration_in_3d_state:
+        await message.answer(loc.auth.msgs['3d_on'], reply_markup=await user_authorized_kb.settings_notifications(client_id))
+    else:
+        await message.answer(loc.auth.msgs['3d_off'], reply_markup=await user_authorized_kb.settings_notifications(client_id))
+
+
+@router.message(
+    F.text.in_({loc.auth.btns[key] for key in ('7d_on', '7d_off')}),
+    StateFilter(user_authorized_fsm.SettingsMenu.notifications),
+)
+@user_authorized_mw.authorized_only()
+async def account_settings_notifications_7d(message: Message):
+    """Turn on/off client's receiving notifications 7 days before subscription expiration."""
+    client_id = await postgres_dbms.get_clientID_by_telegramID(message.from_user.id)
+    expiration_in_7d_state = await postgres_dbms.update_notifications_7d(client_id)
+
+    if expiration_in_7d_state:
+        await message.answer(loc.auth.msgs['7d_on'], reply_markup=await user_authorized_kb.settings_notifications(client_id))
+    else:
+        await message.answer(loc.auth.msgs['7d_off'], reply_markup=await user_authorized_kb.settings_notifications(client_id))
+
+
+@router.message(F.text == loc.auth.btns['rules'])
+@router.message(Command(commands=['rules']))
+@user_authorized_mw.authorized_only()
+async def show_project_rules(message: Message):
+    """Send message with information about project rules."""
+    await internal_functions.send_photo_safely(message.from_user.id,
+                                               telegram_file_id=loc.auth.tfids['rules'],
+                                               caption=loc.auth.msgs['rules'])
+
+
+@router.message(Command(commands=['restore_payments']))
+@user_authorized_mw.authorized_only()
+@throttling_mw.antiflood(rate_limit=4)
+async def restore_payments(message: Message):
+    """Re-check the full payment history for this user.
+
+    Same shape as :func:`sub_renewal_verification` but without the 60-minute
+    cutoff — used when a payment has been pending for longer than the standard
+    flow accommodates (extended provider outage, user closed the bot for days).
+    """
+    await bot.send_chat_action(message.from_user.id, ChatAction.TYPING)
+
+    finalized = await payment_service.recheck_user_pending(
+        message.from_user.id, minutes=None,
+    )
+
+    if not finalized:
+        await message.answer(loc.auth.msgs['cant_find_payments_restore'])
+
+
+def register_handlers_authorized_client(dp):
+    """Attach the `user_authorized` router to the dispatcher."""
+    dp.include_router(router)

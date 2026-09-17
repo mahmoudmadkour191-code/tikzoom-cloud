@@ -1,0 +1,453 @@
+import base64
+import json
+import random
+from asyncio import sleep
+from typing import Union
+
+from loguru import logger
+from mistralai import ChatCompletionResponse, JSONSchemaTypedDict, Mistral, ResponseFormatTypedDict, TextChunk
+from mistralai.models import (
+    AssistantMessage,
+    DocumentURLChunk,
+    FunctionCall,
+    SystemMessage,
+    ToolCall,
+    ToolMessage,
+    UserMessage,
+)
+from openai.types.chat import ChatCompletionToolParam
+
+from chibi.config import application_settings, gpt_settings
+from chibi.exceptions import NoApiKeyProvidedError, NoResponseError
+from chibi.models import Message, User
+from chibi.schemas.app import ChatResponseSchema, ModelChangeSchema, ModeratorsAnswer, VisionResultSchema
+from chibi.services.interface import UserInterface
+from chibi.services.metrics import MetricsService
+from chibi.services.providers.provider import RestApiFriendlyProvider, ServiceResponseError
+from chibi.services.providers.tools import RegisteredChibiTools
+from chibi.services.providers.tools.constants import MODERATOR_PROMPT
+from chibi.services.providers.tools.schemas import ToolCallSchema
+from chibi.services.providers.utils import (
+    get_usage_from_mistral_response,
+    get_usage_msg,
+    prepare_system_prompt,
+    send_llm_thoughts,
+)
+from chibi.services.usage_cache import UsageCacheStore
+
+MistralMessageParam = Union[SystemMessage, UserMessage, AssistantMessage, ToolMessage]
+
+
+class MistralAI(RestApiFriendlyProvider):
+    api_key = gpt_settings.mistralai_key
+    chat_ready = True
+    moderation_ready = True
+    vision_ready = True
+    ocr_ready = True
+
+    name = "MistralAI"
+    model_name_keywords = ["mistral", "mixtral", "ministral"]
+    model_name_keywords_exclude = ["embed", "moderation", "ocr", "transcribe", "tts", "voxtral"]
+    default_model = "mistral-medium-latest"
+    default_moderation_model = "mistral-small-latest"
+    default_vision_model = "pixtral-12b-2409"
+    default_ocr_model = "mistral-ocr-latest"
+    frequency_penalty: float | None = 0.6
+    max_tokens: int = gpt_settings.max_tokens
+    presence_penalty: float | None = 0.3
+    temperature: float = 0.3
+
+    def __init__(self, token: str) -> None:
+        self._client: Mistral | None = None
+        super().__init__(token=token)
+
+    @property
+    def tools_list(self) -> list[ChatCompletionToolParam]:
+        """Return tools in OpenAI-compatible format (which Mistral uses)."""
+        return RegisteredChibiTools.get_tool_definitions()
+
+    @property
+    def client(self) -> Mistral:
+        if self._client:
+            return self._client
+
+        if not self.token:
+            raise NoApiKeyProvidedError(provider=self.name)
+
+        self._client = Mistral(api_key=self.token)
+        return self._client
+
+    def get_thoughts(self, assistant_message: AssistantMessage) -> str | None:
+        if not assistant_message.content:
+            return None
+        content = assistant_message.content
+        if isinstance(content, str):
+            return content
+
+        if not isinstance(content, list):
+            return None
+
+        for chunk in content:
+            if isinstance(chunk, TextChunk):
+                return chunk.text
+        return None
+
+    async def _generate_content(
+        self,
+        model: str,
+        messages: list[MistralMessageParam],
+    ) -> ChatCompletionResponse:
+        """Generate content with retry logic."""
+        for attempt in range(gpt_settings.retries):
+            response = await self.client.chat.complete_async(
+                model=model,
+                messages=messages,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                tools=self.tools_list,  # type: ignore[arg-type]
+                tool_choice="auto",
+                http_headers={"Cache-Control": "max-age=86400"},
+            )
+
+            if response.choices and len(response.choices) > 0:
+                return response
+
+            delay = gpt_settings.backoff_factor * (2**attempt)
+            jitter = delay * random.uniform(0.1, 0.5)
+            total_delay = delay + jitter
+
+            logger.warning(
+                f"Attempt #{attempt + 1}. Unexpected (empty) response received. Retrying in {total_delay} seconds..."
+            )
+            await sleep(total_delay)
+        raise NoResponseError(provider=self.name, model=model, detail="Unexpected (empty) response received")
+
+    async def get_chat_response(
+        self,
+        messages: list[Message],
+        user: User,
+        caller_storage_id: int,
+        caller_thread_id: int,
+        model: str | None = None,
+        system_prompt: str = gpt_settings.assistant_prompt,
+        interface: UserInterface | None = None,
+        track_prompt_size: bool = False,
+    ) -> tuple[ChatResponseSchema, list[Message]]:
+        model = model or self.default_model
+        initial_messages = [msg.to_mistral() for msg in messages]
+        chat_response, updated_messages = await self._get_chat_completion_response(
+            messages=initial_messages.copy(),
+            user=user,
+            model=model,
+            system_prompt=system_prompt,
+            interface=interface,
+            conversation_messages=messages,
+            track_prompt_size=track_prompt_size,
+            caller_storage_id=caller_storage_id,
+            caller_thread_id=caller_thread_id,
+        )
+        new_messages = [msg for msg in updated_messages if msg not in initial_messages]
+        return (
+            chat_response,
+            [Message.from_mistral(msg) for msg in new_messages if not isinstance(msg, SystemMessage)],
+        )
+
+    async def _get_chat_completion_response(
+        self,
+        messages: list[MistralMessageParam],
+        model: str,
+        user: User,
+        system_prompt: str = gpt_settings.assistant_prompt,
+        interface: UserInterface | None = None,
+        conversation_messages: list[Message] | None = None,
+        track_prompt_size: bool = False,
+        caller_storage_id: int | None = None,
+        caller_thread_id: int | None = None,
+    ) -> tuple[ChatResponseSchema, list[MistralMessageParam]]:
+        prepared_system_prompt = await prepare_system_prompt(
+            base_system_prompt=system_prompt,
+            user_id=user.id,
+            interface=interface,
+            conversation_messages=conversation_messages,
+            thread_id=caller_thread_id,
+        )
+        if not messages or not isinstance(messages[0], SystemMessage):
+            messages = [SystemMessage(content=prepared_system_prompt, role="system")] + messages
+        else:
+            messages = [SystemMessage(content=prepared_system_prompt, role="system")] + messages[1:]
+
+        response: ChatCompletionResponse = await self._generate_content(model=model, messages=messages)
+        usage = get_usage_from_mistral_response(response_message=response)
+        if track_prompt_size:
+            UsageCacheStore().store(
+                user_id=user.id,
+                thread_id=interface.thread_id if interface else 0,
+                usage=usage,
+                provider=self.name,
+            )
+
+        if application_settings.is_influx_configured:
+            MetricsService.send_usage_metrics(metric=usage, user=user, model=model, provider=self.name)
+
+        message_data = response.choices[0].message
+
+        tool_calls = message_data.tool_calls
+        if not tool_calls:
+            messages.append(
+                AssistantMessage(
+                    content=message_data.content or "",
+                )
+            )
+            return ChatResponseSchema(
+                answer=message_data.content or "no data",
+                provider=self.name,
+                model=model,
+                usage=usage,
+            ), messages
+
+        # Tool calls handling
+        logger.log("CALL", f"{model} requested the call of {len(tool_calls)} tools.")
+
+        thoughts = self.get_thoughts(assistant_message=message_data)
+        if thoughts:
+            await send_llm_thoughts(thoughts=thoughts, interface=interface)
+
+        logger.log("THINK", f"{model}: {thoughts}. {get_usage_msg(usage=usage)}")
+
+        calls = [
+            ToolCallSchema(
+                tool_name=tool_call.function.name,
+                args=(
+                    json.loads(tool_call.function.arguments)
+                    if isinstance(tool_call.function.arguments, str)
+                    else tool_call.function.arguments
+                ),
+            )
+            for tool_call in tool_calls
+        ]
+        results = await self.call_functions(
+            calls=calls,
+            caller_model=model,
+            caller_provider=self.name,
+            user_id=user.id,
+            interface=interface,
+            caller_storage_id=caller_storage_id,
+            caller_thread_id=caller_thread_id,
+        )
+
+        for tool_call, result in zip(tool_calls, results):
+            tool_call_message = AssistantMessage(
+                content=message_data.content or "",
+                tool_calls=[
+                    ToolCall(
+                        id=tool_call.id,
+                        function=FunctionCall(
+                            name=tool_call.function.name,
+                            arguments=tool_call.function.arguments,
+                        ),
+                    )
+                ],
+            )
+            tool_result_message = ToolMessage(
+                name=tool_call.function.name,
+                content=result.model_dump_json(),
+                tool_call_id=tool_call.id,
+            )
+            messages.append(tool_call_message)
+            messages.append(tool_result_message)
+            if conversation_messages is not None:
+                conversation_messages.append(Message.from_mistral(tool_call_message))
+                conversation_messages.append(Message.from_mistral(tool_result_message))
+
+        logger.log("CALL", "All the function results have been obtained. Returning them to the LLM...")
+        return await self._get_chat_completion_response(
+            messages=messages,
+            model=model,
+            user=user,
+            system_prompt=system_prompt,
+            interface=interface,
+            conversation_messages=conversation_messages,
+            track_prompt_size=track_prompt_size,
+        )
+
+    async def moderate_command(self, cmd: str, model: str | None = None) -> ModeratorsAnswer:
+        moderator_model = model or self.default_moderation_model or self.default_model
+        messages = [
+            SystemMessage(content=MODERATOR_PROMPT, role="system"),
+            Message(role="user", content=cmd).to_mistral(),
+        ]
+        response = await self.client.chat.complete_async(
+            model=moderator_model,
+            messages=messages,
+            max_tokens=1024,
+            temperature=0.2,
+            response_format=ResponseFormatTypedDict(
+                type="json_schema",
+                json_schema=JSONSchemaTypedDict(
+                    name="moderator_verdict",
+                    schema_definition={
+                        "type": "object",
+                        "properties": {
+                            "verdict": {"type": "string"},
+                            "reason": {"type": "string"},
+                            "status": {"type": "string", "default": "ok"},
+                        },
+                        "required": ["verdict"],
+                    },
+                    strict=True,
+                ),
+            ),
+        )
+        if not response.choices:
+            return ModeratorsAnswer(status="error", verdict="declined", reason="no response from moderator received")
+
+        usage = get_usage_from_mistral_response(response_message=response)
+
+        if application_settings.is_influx_configured:
+            MetricsService.send_usage_metrics(metric=usage, model=moderator_model, provider=self.name)
+
+        message_data = response.choices[0].message
+        answer = message_data.content
+        if not answer:
+            return ModeratorsAnswer(status="error", verdict="declined", reason="no response from moderator received")
+
+        try:
+            return ModeratorsAnswer.model_validate_json(answer, extra="ignore")  # type: ignore
+        except Exception as e:
+            msg = f"Error parsing moderator's response: {answer}. Error: {e}"
+            logger.error(msg)
+            return ModeratorsAnswer(verdict="declined", reason=msg, status="error")
+
+    async def vision(
+        self,
+        image: bytes,
+        mime_type: str,
+        model: str | None = None,
+        prompt: str | None = None,
+    ) -> VisionResultSchema:
+        model = model or self.default_vision_model
+        prompt = prompt or "Describe the image in detail."
+        logger.info(f"Analyzing image with model {model}...")
+
+        # Encode image to base64
+        image_base64 = base64.b64encode(image).decode("utf-8")
+        data_url = f"data:{mime_type};base64,{image_base64}"
+
+        # Use parse_async() for structured output with Pydantic models
+        response = await self.client.chat.parse_async(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": data_url},
+                        },
+                    ],
+                }
+            ],
+            response_format=VisionResultSchema,
+            max_tokens=16384,
+        )
+
+        if not response.choices:
+            raise ServiceResponseError(
+                provider=self.name,
+                model=model,
+                detail=f"Could not analyze image: empty response: {response}",
+            )
+
+        result = response.choices[0].message
+        if not result or not result.parsed:
+            raise ServiceResponseError(
+                provider=self.name,
+                model=model,
+                detail=f"Could not analyze image: empty response: {response}",
+            )
+
+        logger.info(f"Image analyzed successfully: {result.parsed.short_description}\n{result.parsed.full_description}")
+        return result.parsed
+
+    async def ocr(self, pdf: bytes, model: str | None = None) -> VisionResultSchema:
+        """Extract text from a PDF document using Mistral's OCR API.
+
+        Args:
+            pdf: The PDF file content as bytes.
+            model: The model to use for OCR. Defaults to mistral-ocr-latest.
+
+        Returns:
+            VisionResultSchema containing the extracted text and descriptions.
+        """
+        model = model or self.default_ocr_model
+        logger.info(f"[{self.name}] Extracting text from PDF with model {model}...")
+
+        # Encode PDF to base64
+        pdf_base64 = base64.b64encode(pdf).decode("utf-8")
+        document_url = f"data:application/pdf;base64,{pdf_base64}"
+
+        # Build the document using DocumentURLChunk
+        document = DocumentURLChunk(document_url=document_url)
+
+        try:
+            # Use the OCR API to process the PDF
+            response = await self.client.ocr.process_async(
+                model=model,
+                document=document,
+            )
+
+            if not response.pages:
+                raise ServiceResponseError(
+                    provider=self.name,
+                    model=model,
+                    detail="Could not extract text from PDF: empty response",
+                )
+
+            # Combine all pages' markdown content
+            full_text = "\n\n".join(page.markdown for page in response.pages)
+
+            # Create a short description from the first 100 characters
+            short_description = full_text[:100].replace("\n", " ").strip()
+            if len(full_text) > 100:
+                short_description += "..."
+
+            logger.info(f"[{self.name}] PDF text extracted successfully: {short_description}...")
+            return VisionResultSchema(
+                short_description=short_description,
+                full_description=full_text[:1000] if len(full_text) > 1000 else full_text,
+                text=full_text,
+            )
+
+        except ServiceResponseError:
+            raise
+        except Exception as e:
+            logger.error(f"Error extracting text from PDF: {e}")
+            raise ServiceResponseError(
+                provider=self.name,
+                model=model,
+                detail=f"Could not extract text from PDF: {e}",
+            )
+
+    async def get_available_models(self, image_generation: bool = False) -> list[ModelChangeSchema]:
+        if image_generation:
+            return []
+
+        try:
+            response = await self.client.models.list_async()
+            mistral_models = response.data or []
+        except Exception as e:
+            logger.error(f"Failed to get available models for provider {self.name} due to exception: {e}")
+            return []
+
+        all_models = [
+            ModelChangeSchema(
+                provider=self.name,
+                name=model.id,
+                display_name=model.id.replace("-", " ").title(),
+                image_generation=False,
+            )
+            for model in mistral_models
+            if not self._model_name_has_keywords_exclude(model_name=model.id)
+        ]
+        return self.filter_and_return_list_of_models(models=all_models, image_generation=image_generation)

@@ -1,0 +1,25 @@
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import PRODUCTION, TelegramAPIServer
+from aiogram.types import LinkPreviewOptions
+from redis.asyncio import Redis
+
+from .config import CONFIG
+from .logger import get_logger
+
+logger = get_logger(__name__)
+
+bot_api = TelegramAPIServer.from_base(str(CONFIG.botapi_server), is_local=True) if CONFIG.botapi_server else PRODUCTION
+session = AiohttpSession(api=bot_api)
+logger.info("Using BotAPI server", bot_api=str(bot_api))
+
+bot = Bot(
+    token=CONFIG.token.get_secret_value(),
+    default=DefaultBotProperties(link_preview=LinkPreviewOptions(is_disabled=True)),
+    session=session,
+)
+aredis = Redis(host=CONFIG.redis_host, port=CONFIG.redis_port, db=CONFIG.redis_db_states)
+dp = Dispatcher(disable_fsm=True)
+
+__all__ = ("aredis", "bot", "dp")

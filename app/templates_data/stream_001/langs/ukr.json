@@ -1,0 +1,99 @@
+{
+    "language_name": "🇺🇦 Українська",
+    "language_icon": "🇺🇦",
+    "language_select_error": "❌ Помилка вибору мови!\n\n{error_text}",
+    "language_select": "Будь ласка, оберіть мову інтерфейсу",
+    "language_changed": "🇺🇦 Ви обрали українську мову\n\nВи можете змінити мову у будь-який час прописавши команду /lang",
+    "start_message": "Здоровенькі були, 👋 чумба! 👋\n\n📄 GPT-Telegramus version {version}\n\n💜 Розробка: Ферн (F3RNI)\n💻 Соавторы:\n🤍 Keepalove (Azarell) (Sprav04ka)\n🤍 Hanssen\n🤍 https://github.com/F33RNI/GPT-Telegramus#-contributors\n\n😺 Страница GitHub: https://github.com/F33RNI/GPT-Telegramus\n\n🎵 Підтримайте проект, купивши мою музыку: https://f3rni.bandcamp.com",
+    "help_message": "📄 /start - Вітальне повідомлення та версія бота\n❓ /help - Показати це повідомлення\n↕ /module - Змінити модуль для чату\n🧹 /clear - Очистити історію чату\n🌎 /lang - змінити мову\n🆔 /chatid - Показати ваш chat_id\n\nТепер, щоб почати, відправте мені будь-яке повідомлення 💬",
+    "help_message_admin": "Команди адміністратора:\n\n💬 /queue - Показати чергу запитів\n🔃 /restart [модуль, необов'язково] - Перезапуск модуля (або всіх), перезавантаження конфігурації, мов та команд\n👤 /users - Показати перелік усіх користувачів\n🔨 /ban <id> [reason] - Заблокувати користувача по його id із зазначенням причини (опціонально)\n🔓 /unban <id> - Разблокувати користувача по id\n📢 /broadcast <message> - Відправити текстове повідомлення усім, окрім заблокованих користувачів",
+    "empty_request_module_changed": "✅ Модул було змінено на {module_name}\nТепер пришліть мені ваш запит у вигляді повідомлення",
+    "media_group_response": "Згенеровані зображення по запиту \"{request_text}\"",
+    "permissions_deny": "❌ У вас нема дозволу на цю команду!",
+    "queue_overflow": "Черга заповнена. Спробуйте пізніше ⏳",
+    "queue_empty": "🗑 Черга порожня",
+    "queue_accepted": "✅ Запит до {module_name} модулю був доданий у чергу.\nПозиція у черзі: {queue_size}/{queue_max} ⏳",
+    "response_error": "❌ Помилка: {error_text}\n\nОчистіть історію та зробіть ще один запит чи повторіть спробу пізніше",
+    "empty_message": "⚠️ Пусте повідомлення! Дивітьсялоги для детальної інформації",
+    "regenerate_error_not_last": "❌ Помилка! Можна згенерувати заново тільки останній запит!",
+    "regenerate_error_empty": "❌ Помилка! Порожній запит!",
+    "continue_error_not_last": "❌ Помилка! Можна продовжити тільки останнійзаприт!",
+    "stop_error_not_last": "❌ Помилка! Можна перервати тільки останній запит!",
+    "stop_error": "❌ Помилка! Неможливо припинити дегенерацію!",
+    "response_link_format": "\n📄 {source_name}: {link}",
+    "suggestion_format": "💡 {suggestion}",
+    "suggestion_error": "❌ Можливо використовувати запит, запропонований лише з останнього повідомлення!",
+    "users_read_error": "❌ Помилка читання або аналізу списку користувачів!",
+    "users_admin": "Забанений? Адмін? Мова Модуль ID Ім'я - Запитів\n\n{users_data}",
+    "users_total_stats": "Користувачі: {users_num}, заблоковані: {banned_num}, адміністратори: {admins_num}",
+    "restarting": "🙏 Виконується перезавантаження...\nБудь ласка, зачекайте",
+    "restarting_done": "{reload_logs}\n✅ Перезавантаження завершено",
+    "chat_cleared": "✅ Історія чату була очищена для {module_name}",
+    "clear_error": "❌ Помилка очищення історії чату!\n\n{error_text}",
+    "clear_select_module": "Виберіть модуль, історію чату, якого хочете очистити\nАбо проігноруйте це повідомлення",
+    "module_select_module": "Поточний модуль: {current_module}\nВиберіть модуль для чату\nАбо проігноруйте це повідомлення",
+    "user_cooldown_error": "❌ Будь ласка, зачекайте {time_formatted}, перш ніж відправляти запит к {module_name}",
+    "hours": "ч",
+    "minutes": "м",
+    "seconds": "с",
+    "ban_message_admin": "✅ Заблоковано користувача: {banned_user}\n\nПричина: {ban_reason}",
+    "ban_no_user_id": "❌ Помилка! Будь ласка, вкажіть user_id",
+    "ban_message_user": "❌ Ви не знаходитесь у білому списку або ви були забанені!\n\nПричина: {ban_reason}",
+    "ban_reason_default": "Причина не вказана",
+    "unban_message_admin": "✅ Разблоковано користувача: {unbanned_user}",
+    "broadcast_no_message": "❌ Нема повідомлення для мовлення!",
+    "broadcast": "📢 {message}",
+    "broadcast_initiated": "⏳ Мовлення у процесі... Будь ласка, очікуйте та не відправляйте нові повідомлення!",
+    "broadcast_done": "✅ Мовлення завершено! Повідомлення були відправлені користувачам:\n{broadcast_ok_users}",
+    "style_changed": "✅ Стиль спілкування змінено на {changed_style}",
+    "style_change_error": "❌ Помилка зміни стилю спілкування!\n\n{error_text}",
+    "style_select": "Поточний стиль спілкування: {current_style}\nОберіть новий стиль спілкування Bing,\nАбо проігноруйте це повідомлення",
+    "style_precise": "📏 Точний",
+    "style_balanced": "⚖️ Збалансований",
+    "style_creative": "🎨 Творчий",
+    "model_changed": "✅ Модель з модуля {module_name} змінився на {changed_model}",
+    "model_select": "Ваша модель модуля {module_name}: {current_model}\nВиберіть нову модель модуля {module_name},\nабо проігноруйте це повідомлення",
+    "model_change_error": "❌ Помилка при зміні моделі!\n\n{error_text}",
+    "model_no_models": "❌ Ви не можете змінити модель поточного модуля!",
+    "button_model_change": "⚙️ Змінити модель",
+    "button_stop_generating": "🛑 Припинити генерацію",
+    "button_continue": "⏩ Продовжити",
+    "button_regenerate": "🔄 Перегенерувати",
+    "button_clear": "🧹 Очистити історію",
+    "button_module": "↕️ Змінити модуль",
+    "button_style_change": "⚙️ Змінити стиль",
+    "modules": {
+        "lmao_chatgpt": {
+            "icon": "💬",
+            "name": "ChatGPT (LMAO API)"
+        },
+        "lmao_ms_copilot": {
+            "icon": "🟦",
+            "name": "MS Copilot (LMAO API)"
+        },
+        "chatgpt": {
+            "icon": "💬",
+            "name": "ChatGPT"
+        },
+        "dalle": {
+            "icon": "🖼",
+            "name": "DALL-E"
+        },
+        "ms_copilot": {
+            "icon": "🔵",
+            "name": "MS Copilot"
+        },
+        "ms_copilot_designer": {
+            "icon": "🎨",
+            "name": "MS Copilot designer"
+        },
+        "gemini": {
+            "icon": "♊",
+            "name": "Gemini"
+        },
+        "groq": {
+            "icon": "🔴",
+            "name": "Groq"
+        }
+    }
+}

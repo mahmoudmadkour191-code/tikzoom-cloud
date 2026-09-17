@@ -1,0 +1,1490 @@
+"""
+vLLM-Autokalibration: Suchablauf (Paket 3).
+
+Findet fuer einen Checkpoint den Betriebspunkt selbststaendig und
+persistiert ihn als Operating-Point-Profil + llama-swap-Eintrag:
+
+  Phase A  Modell-Analyse            (vllm_model_meta)
+  Phase B  GPU-Inventar              (calibration.gpu, Side-Channels raus)
+  Phase C  Topologie-Leiter          (TP=1 → TP in Klasse → TP×PP-Gitter)
+  Phase D  Kontext-Suche             (nativ starten, geparste Grenze nutzen,
+                                      MB-Reserve je Karte via GMU)
+  Phase E  k-Sweep                   (Arithmetik-Sperrzonen + Lohnt-Check,
+                                      je Kandidat messen)
+  Phase F  Persistierung             (Profil mit Hardware-Fingerprint,
+                                      Eintrag via operating_points.apply)
+
+Heuristiken saeen nur Kandidaten — entschieden wird durch Boots und
+Messungen (die llama.cpp-Kalibration verifiziert genauso).
+"""
+
+import logging
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Iterable, Iterator
+
+from ..config import (
+    LLAMASWAP_CONFIG_PATH,
+    PROJECT_ROOT,
+    VLLM_CALIBRATION_CACHE_MAX_GIB,
+    VLLM_CALIBRATION_CACHE_ROOT,
+    VLLM_CALIBRATION_CHUNK_AB,
+    VLLM_CALIBRATION_GMU_AB,
+    VLLM_CALIBRATION_K_EXHAUSTIVE,
+    VLLM_CALIBRATION_SHORT_PROBE,
+    VLLM_CALIBRATION_WORKLOAD_CONTEXT_TOKENS,
+)
+from ..formatting import format_number
+from .gpu import enumerate_gpus
+from .types import GPU
+from .vllm_model_meta import VllmModelMeta, analyze_checkpoint
+from .vllm_probe import (
+    probe_sampling,
+    OOM_SIGNATURES,
+    TemplateParsers,
+    VllmBootError,
+    VllmServer,
+    VllmSpec,
+    boot_vllm,
+    find_free_port,
+    load_vllm_runtime,
+    probe_coherence,
+    probe_long_context,
+    probe_throughput,
+    prune_calibration_cache,
+    template_parsers,
+)
+
+logger = logging.getLogger(__name__)
+
+# Feste MB-Reserve je Karte (Analogon zu LLAMACPP_VRAM_SAFETY_MARGIN):
+# CUDA-Kernels/Fragmentierung. Der GMU-Wert entsteht daraus deterministisch.
+VLLM_VRAM_RESERVE_MB = 1024
+# OOM-Retry: Inductor/Compile braucht Workspace auf der per GMU absichtlich
+# vollen Karte (vLLM fuellt den KV-Pool IMMER bis zum Budget, unabhaengig vom
+# Kontext). Erst die Reserve erhoehen (kostet Pool-Bloecke, KEIN Kontext-
+# Token — Kontext-Vorrang), erst danach den Kontext halbieren.
+OOM_RESERVE_STEP_MB = 1024
+OOM_MAX_RESERVE_STEPS = 2
+
+# Default-Workspace-Faktor fuers Weight-Processing; Stack-spezifisch
+# ueberschreibbar in data/vllm_runtime.yaml (weight_processing_factor).
+DEFAULT_WEIGHT_PROCESSING_FACTOR = 1.6
+# Lastannahme des Siegervergleichs: wie viele UNGECACHTE Prompt-Token je
+# erzeugtem Token anfallen. Sie uebersetzt Prefill- und Decode-Rate in EINE
+# Groesse — die Zeit eines Turns — statt zwei Raten ueber Schwellen
+# gegeneinander abzuwaegen. 4 entspricht z.B. 2.000 Prompt auf 500 Antwort.
+# Ueber "workload_prompt_per_generated" in vllm_runtime.yaml anpassbar:
+# wer ueberwiegend lange Dokumente einliest, setzt hoeher und gewichtet
+# damit den Prefill staerker; wer kurze Fragen mit langen Antworten fahrt,
+# setzt niedriger.
+DEFAULT_WORKLOAD_PROMPT_PER_GENERATED = 4.0
+# Mindestvorsprung, den eine Speed-Variante braucht, um ueberhaupt zu
+# entstehen. Ohne Schwelle genuegte frueher ein beliebiger Vorsprung —
+# 0,3 tok/s liegen aber im Messrauschen (Nachmessung 2026-09-04: 749 gegen
+# 751 tok/s Prefill bei identischer Konfiguration). Ueber
+# "speed_variant_min_gain" anpassbar.
+DEFAULT_SPEED_VARIANT_MIN_GAIN = 0.10
+# BEWUSST KEINE Kontext-Untergrenze fuer die Speed-Variante (Peuqui
+# 2026-09-04): Der Tausch Kontext gegen Tempo ist die Entscheidung des
+# Nutzers, nicht der Kalibration. Die Oberflaeche zeigt beim Umschalten
+# das aufgeloeste Modell mitsamt Fenster an, die Wahl ist also informiert;
+# und ein kleines Fenster bricht nicht hart, weil die History-Kompression
+# frueher greift. Ein Bruchteil waere eine gegriffene Zahl gewesen.
+
+# Spekulation lohnt nur, wenn der Draft-Block klein gegen die
+# Pro-Token-Leselast des Hauptmodells ist (Flash-Next-Befund: BF16-Block
+# mit 75 % der Leselast machte MTP zum Verlust; 27B mit 4 % gewinnt 2,5x).
+MTP_MAX_READ_FRACTION = 0.25
+
+# Geduld je Boot. Ein KALTER Spekulations-Boot laedt, kompiliert und faengt
+# Graphen; auf Volta/Turing summiert sich das auf ueber 20 min (Flash-Next
+# MTP, 2026-09-06). Echte Fehler faengt find_fatal_boot_signature in Sekunden
+# ab, dieser Wert bremst also nur das Aufgeben, nicht das Erkennen.
+BOOT_TIMEOUT_S = 2400
+MIN_USEFUL_CONTEXT = 4096
+
+# Siegerregel (Peuqui 2026-08-29): Kontext-Vorrang, danach entscheidet die
+# Gesamtzeit eines Turns (siehe _beats). Die frueheren Schwellen
+# LONG_TIE_BREAK_REL/-_PREFILL_REL sind damit ersetzt: sie wogen Decode und
+# Prefill nie gegeneinander auf, sondern liessen den Prefill nur bei
+# Decode-Gleichstand zu Wort kommen.
+
+
+@dataclass
+class TopologyCandidate:
+    gpu_ids: list[int]          # numerische PCI-Indizes in Stufenordnung
+    tp: int
+    pp: int
+    pp_partition: str | None
+    label: str
+
+
+@dataclass
+class VllmCalibrationResult:
+    spec: VllmSpec
+    throughput_tok_s: float
+    coherence: tuple[int, int]
+    k_sweep: dict[int, float]   # k -> tok/s (Kurzkontext)
+    profile_path: Path | None = None
+    # Speed-Kandidat (schnellste kontext-reduzierte Topologie, informativ)
+    speed_label: str = ""
+    speed_k: int = 0
+    speed_tps: float = 0.0
+    speed_mml: int = 0
+    # Alle Einzelmessungen (Topologie × k, Kurz- UND Langkontext) fuer die
+    # aggregierte Ergebnistabelle
+    measurements: list[dict] = field(default_factory=list)
+
+
+def _smi_index_by_uuid() -> dict[str, int]:
+    """nvidia-smi-Index (PCI-Ordnung) je GPU-UUID — vLLM/1Cat verlangt
+    numerische CUDA_VISIBLE_DEVICES."""
+    out = subprocess.run(
+        ["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"],
+        capture_output=True, text=True, timeout=10, check=True,
+    ).stdout
+    mapping = {}
+    for line in out.strip().splitlines():
+        idx, uuid = [p.strip() for p in line.split(",")]
+        mapping[uuid] = int(idx)
+    return mapping
+
+
+def eligible_gpus(reserved_uuids: set[str]) -> list[GPU]:
+    """Kalibrierbare GPUs: alle minus Side-Channel-Karten (TTS/VLM)."""
+    return [g for g in enumerate_gpus() if g.uuid not in reserved_uuids]
+
+
+def side_channel_uuids() -> set[str]:
+    """UUIDs der TTS-/VLM-Karten (bleiben frei, wie beim Betriebspunkt)."""
+    reserved: set[str] = set()
+    try:
+        from ..process_utils import get_tts_gpu_uuid
+        uuid = get_tts_gpu_uuid()
+        if uuid:
+            reserved.add(uuid)
+    except Exception as e:  # noqa: BLE001 — Side-Channel optional installiert
+        logger.debug(f"tts gpu lookup skipped: {e}")
+    try:
+        from ..vision_gpu_select import pick_vlm_gpu
+        vlm_index = pick_vlm_gpu()  # PCI_BUS_ID-Index
+        by_index = {v: k for k, v in _smi_index_by_uuid().items()}
+        if vlm_index in by_index:
+            reserved.add(by_index[vlm_index])
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"vlm gpu lookup skipped: {e}")
+    return reserved
+
+
+def _capture_sizes_for(k: int, runtime: dict) -> list[int]:
+    """Capture-Groessen: Basis [1,2,4,8] plus Verifier-Batch (k+1);
+    Stack-Limit aus der Runtime-Config (dieser 1Cat/sm70-Stack: >8 kaputt)."""
+    sizes = {1, 2, 4, 8, k + 1}
+    limit = runtime.get("max_capture_size")
+    if limit:
+        sizes = {s for s in sizes if s <= int(limit)}
+    return sorted(sizes)
+
+
+def topology_ladder(
+    meta: VllmModelMeta, gpus: list[GPU], runtime: dict,
+) -> Iterator[TopologyCandidate]:
+    """Kandidaten von billig nach teuer.
+
+    Regeln: TP nur innerhalb einer Compute-Klasse (Kernel-Dispatch je
+    Architektur), PP ueber die Klassengrenze; Stufenordnung hoechste
+    Klasse zuerst (Konvention der Capability-Gates). Riesen-Layer
+    (PLE-Klasse) muessen komplett in die Stufe mit dem meisten VRAM.
+    """
+    smi = _smi_index_by_uuid()
+    weights_mb = meta.total_bytes / (1024 * 1024)
+    factor = float(runtime.get("weight_processing_factor",
+                               DEFAULT_WEIGHT_PROCESSING_FACTOR))
+    need_mb = weights_mb * factor
+
+    by_class: dict[int, list[GPU]] = {}
+    for g in gpus:
+        by_class.setdefault(g.speed_class, []).append(g)
+    classes = [by_class[c] for c in sorted(by_class)]  # 0 = hoechste zuerst
+
+    # 1) Eine Karte je Compute-Klasse (die freieste — identische Karten
+    #    derselben Klasse liefern identische Messwerte, eine reicht)
+    for cls in classes:
+        g = max(cls, key=lambda g: g.free_mb)
+        if g.free_mb - VLLM_VRAM_RESERVE_MB >= need_mb:
+            yield TopologyCandidate([smi[g.uuid]], 1, 1, None, f"TP1 on {g.name}")
+
+    # 2) TP innerhalb einer Klasse — groesstes TP, das das Modell zulaesst
+    for cls in classes:
+        if len(cls) < 2:
+            continue
+        # Nicht jede Kartenzahl ist ein gueltiges TP: bei drei V100 und
+        # 4 KV-Heads waeren es TP3 -> vLLM bricht beim Worker-Start ab.
+        tp = max(meta.valid_tp_sizes(len(cls)))
+        if tp < 2:
+            continue
+        # Deterministische Auswahl: freieste Karte zuerst, bei Gleichstand
+        # der kleinere Index. Sonst kippt die Wahl zwischen baugleichen
+        # Karten mit dem Messrauschen des freien Speichers — und die
+        # Karten sind NICHT austauschbar (eine V100 haengt am USB4-Tunnel).
+        members = sorted(cls, key=lambda g: (-g.free_mb, smi[g.uuid]))[:tp]
+        budget = sum(g.free_mb - VLLM_VRAM_RESERVE_MB for g in members)
+        if budget >= need_mb:
+            ids = [smi[g.uuid] for g in members]
+            yield TopologyCandidate(ids, tp, 1, None,
+                                    f"TP{tp} across {cls[0].name} class")
+
+    # 3) TP×PP-Gitter ueber die Klassen (TP = kleinste Klassenstaerke)
+    if len(classes) >= 2:
+        max_tp = min(len(c) for c in classes)
+        tp = max(meta.valid_tp_sizes(max_tp))
+        if tp >= 1:
+            # Gleiche deterministische Ordnung wie oben (siehe dort).
+            stage_gpus = [
+                sorted(c, key=lambda g: (-g.free_mb, smi[g.uuid]))[:tp]
+                for c in classes
+            ]
+            ids = [smi[g.uuid] for stage in stage_gpus for g in stage]
+            partition = _seed_partition(meta, stage_gpus)
+            yield TopologyCandidate(
+                ids, tp, len(classes), partition,
+                f"TP{tp}×PP{len(classes)} grid",
+            )
+
+
+def _select_candidates(
+    candidates: Iterable[TopologyCandidate], topologies: list[str] | None,
+) -> list[TopologyCandidate]:
+    """Leiter auf die gewuenschten Sprossen einschraenken (None = alle).
+
+    Ein unbekanntes Label ist ein Aufruffehler, kein leerer Lauf: die
+    gueltigen Labels stehen in der Meldung.
+    """
+    candidates = list(candidates)
+    if topologies is None:
+        return candidates
+    known = {c.label for c in candidates}
+    unknown = [t for t in topologies if t not in known]
+    if unknown:
+        raise ValueError(
+            f"unknown topologies {unknown}; available: {sorted(known)}"
+        )
+    return [c for c in candidates if c.label in topologies]
+
+
+def topology_meta(tp: int, pp: int, gpu_ids: list[int]) -> str:
+    """Die Topologie-Zeile des Betriebspunkts (meta.topology)."""
+    return f"TP={tp} PP={pp} GPUs={list(gpu_ids)}"
+
+
+def parse_topology_meta(text: str) -> tuple[int, int, list[int]]:
+    """Umkehrung von topology_meta()."""
+    import re
+    m = re.fullmatch(r"TP=(\d+) PP=(\d+) GPUs=\[([\d, ]*)\]", text.strip())
+    if not m:
+        raise ValueError(f"unexpected operating-point topology: {text!r}")
+    gpu_ids = [int(x) for x in m.group(3).split(",") if x.strip()]
+    return int(m.group(1)), int(m.group(2)), gpu_ids
+
+
+def resweep_topology_labels(
+    entry_name: str, candidates: Iterable[TopologyCandidate],
+) -> list[str]:
+    """Labels der Leiter-Sprossen, die der persistierte Betriebspunkt faehrt.
+
+    Der Nachmessmodus startet auf genau dieser Topologie; ohne Betriebspunkt
+    gibt es nichts nachzumessen.
+    """
+    from ..operating_points import get_operating_point
+
+    candidates = list(candidates)
+    profile = get_operating_point(entry_name)
+    if profile is None:
+        raise RuntimeError(f"no operating point for {entry_name} — run a full calibration")
+    tp, pp, gpu_ids = parse_topology_meta(profile["meta"]["topology"])
+    labels = [c.label for c in candidates
+              if (c.tp, c.pp, c.gpu_ids) == (tp, pp, gpu_ids)]
+    if not labels:
+        raise RuntimeError(
+            f"operating point topology {profile['meta']['topology']} is not on "
+            f"today's ladder: {[c.label for c in candidates]}"
+        )
+    return labels
+
+
+def _seed_partition(meta: VllmModelMeta, stage_gpus: list[list[GPU]]) -> str | None:
+    """Layer-Partition proportional zum Stufen-VRAM; Riesen-Layer zwingen
+    ihre Stufe. Nur ein Startwert — die Kontext-Suche verschiebt notfalls."""
+    if meta.num_layers <= 0 or len(stage_gpus) < 2:
+        return None
+    vram = [sum(g.total_mb for g in stage) for stage in stage_gpus]
+    if meta.giant_layers:
+        # Riesen (PLE-Klasse) liegen in fruehen Layern → muessen auf die
+        # Stufe mit dem meisten VRAM; die bekommt die fruehen Layer.
+        if max(range(len(vram)), key=lambda i: vram[i]) != 0:
+            # Stufenordnung ist fix (Capability-Konvention) — dann
+            # Partition zugunsten Stufe 0 verschieben, die die Riesen
+            # tragen MUSS (alle giant_layers < Partitionsgrenze).
+            pass
+    total = sum(vram)
+    layers = [round(meta.num_layers * v / total) for v in vram]
+    layers[-1] = meta.num_layers - sum(layers[:-1])
+    if meta.giant_layers:
+        min_first = max(meta.giant_layers) + 1
+        if layers[0] < min_first:
+            delta = min_first - layers[0]
+            layers[0] += delta
+            layers[-1] -= delta
+    if any(n <= 0 for n in layers):
+        return None
+    return ",".join(str(n) for n in layers)
+
+
+def _gmu_for(gpus_in_use: list[GPU], reserve_mb: int = VLLM_VRAM_RESERVE_MB) -> float:
+    """GMU aus fester MB-Reserve: min ueber (Kapazitaet−Reserve)/Kapazitaet."""
+    return round(min((g.total_mb - reserve_mb) / g.total_mb
+                     for g in gpus_in_use), 2)
+
+
+def _spec_attn_for(
+    spec: VllmSpec, gpus: list[GPU], smi: dict[str, int], runtime: dict,
+) -> str | None:
+    """Drafter-Attention-Backend aus der Compute-Klasse der LETZTEN
+    PP-Stufe (dort lebt der Drafter) und der Runtime-Zuordnung."""
+    mapping = runtime.get("spec_attention_backend_by_cc") or {}
+    if not mapping:
+        return None
+    by_smi = {smi[g.uuid]: g for g in gpus}
+    last_stage = spec.gpu_ids[-spec.tp:]
+    for idx in last_stage:
+        gpu = by_smi.get(idx)
+        if gpu is not None:
+            backend = mapping.get(f"{gpu.compute_cap:.1f}")
+            if backend:
+                return str(backend)
+    return None
+
+
+def _mtp_worthwhile(meta: VllmModelMeta) -> bool:
+    """Draft-Block-Bytes relativ zur Pro-Token-Leselast des Hauptmodells."""
+    if not meta.mtp.present:
+        return False
+    read = meta.per_token_read_bytes()
+    if read <= 0:
+        return False
+    return meta.mtp_read_bytes_per_step() / read <= MTP_MAX_READ_FRACTION
+
+
+def _k_candidates(meta: VllmModelMeta, runtime: dict) -> list[int]:
+    """Zu messende Spekulationstiefen: block_size-guenstige k, gross → klein.
+
+    Strukturell unmoegliche k werden gar nicht erst gebootet: vLLM rundet
+    Capture-Groessen auf Vielfache von k+1 — liegt k+1 ueber dem
+    Stack-Limit (max_capture_size, dieser 1Cat/sm70-Stack: 8), existiert
+    keine gueltige Groesse und der Boot stirbt IMMER (dreifach belegt,
+    Lauf 5 2026-08-29). Spart ~2 min Boot je ausgeschlossenem k.
+    """
+    if not _mtp_worthwhile(meta):
+        return []
+    allowed = meta.allowed_k_block_sizes()
+    base_block = allowed[0]
+    good = [k for k, block in allowed.items() if k > 0 and block <= base_block * 2]
+    limit = runtime.get("max_capture_size")
+    if limit:
+        good = [k for k in good if k + 1 <= int(limit)]
+    good.sort(reverse=True)
+    if not good:
+        return []
+    if VLLM_CALIBRATION_K_EXHAUSTIVE:
+        # Baseline-Modus: alle zulaessigen Tiefen von oben bis 1.
+        return good
+    # Spreizung statt Top-3: grosses k glaenzt im Kurzkontext, kleines k
+    # verliert bei vollem Kontext am wenigsten (27B 2026-08-29: k=7..5
+    # lang 16-18 tok/s, Trend zu klein besser; k=3 war Kurz-Rekord,
+    # k=5 der Kurz-Sieger beider Topologien). Der Sweep muss beide Enden
+    # des Trade-offs sehen; das Maximum bleibt drin (modellabhaengig —
+    # Flash-Next gewann mit k=7).
+    picks = {good[0]} | ({5, 3, 2} & set(good))
+    if len(picks) < 3:
+        picks.add(good[len(good) // 2])
+    return sorted(picks, reverse=True)[:4]
+
+
+def _display_checkpoint_name(checkpoint: Path) -> str:
+    """HF-Cache-Snapshots heissen nach der Commit-ID — fuer Menschen den
+    Repo-Namen zeigen (…/models--Org--Name/snapshots/<hash>)."""
+    if checkpoint.parent.name == "snapshots":
+        repo = checkpoint.parent.parent.name
+        if repo.startswith("models--"):
+            return repo.removeprefix("models--").replace("--", "/", 1)
+    return checkpoint.name
+
+
+@dataclass
+class _RungResult:
+    """Messergebnis einer Topologie-Sprosse (k=0)."""
+    spec: VllmSpec
+    label: str
+    tps: float                  # Kurzkontext (0.0 wenn Kurzprobe aus)
+    coherence: tuple[int, int]
+    full_context: bool          # traegt den vollen nativen Kontext
+    short_tokens: int = 0       # Prompt-Token der Kurzsonde
+    # Langkontext-Punkt (0 = Fenster zu klein fuer die Sonde)
+    long_tokens: int = 0
+    long_prefill_tps: float = 0.0
+    long_decode_tps: float = 0.0
+
+
+def _rung_class(rung: _RungResult, gpus: list[GPU], smi: dict[str, int]) -> tuple:
+    """Spekulations-Klasse einer Sprosse: Stufenzahl und Kartentypen.
+
+    Der Gewinn durch Spekulation haengt an Akzeptanz und Schrittkosten des
+    Drafters — und der laeuft nur auf der letzten Pipeline-Stufe. Innerhalb
+    einer Stufenzahl auf denselben Kartentypen aendert die Kartenzahl (TP)
+    den Faktor nicht messbar (27B 2026-09-06: Paare 1,44 und 1,47, TP1 auf
+    demselben Kartentyp 1,45), zwischen den Stufenzahlen schon (Grid 1,28,
+    frueher 2,5).
+    """
+    names = sorted({g.name for g in gpus if smi[g.uuid] in rung.spec.gpu_ids})
+    return (rung.spec.pp, tuple(names))
+
+
+@dataclass(frozen=True)
+class _Speed:
+    """Messtripel einer Konstellation fuer die Siegerregel: Kurz- und
+    Langpunkt (Decode tok/s je mit Kontext-Token) und der Lang-Prefill."""
+    short_tps: float
+    short_tokens: int
+    long_tps: float
+    long_tokens: int
+    prefill_tps: float
+
+    def scaled(self, short_factor: float, long_factor: float) -> "_Speed":
+        return _Speed(self.short_tps * short_factor, self.short_tokens,
+                      self.long_tps * long_factor, self.long_tokens,
+                      self.prefill_tps)
+
+
+def _rung_speed(r: _RungResult) -> _Speed:
+    return _Speed(r.tps, r.short_tokens, r.long_decode_tps, r.long_tokens,
+                  r.long_prefill_tps)
+
+
+def _rung_metric(r: _RungResult) -> float:
+    """Entscheidungsmetrik: Lang-Decode; Kurzwert nur als Ersatz, wenn das
+    Fenster fuer den Langpunkt zu klein war (dann laeuft die Kurzprobe
+    unabhaengig vom Toggle)."""
+    return r.long_decode_tps if r.long_tokens else r.tps
+
+
+def _context_weight(speed: _Speed, context_tokens: int) -> float:
+    """Anteil des Langpunkts an der Turnzeit: die Lage des Alltagskontexts
+    zwischen Kurz- und Langpunkt (0 = ganz Kurzpunkt, 1 = ganz Langpunkt).
+    Ohne Kurzmessung zaehlt nur der Langpunkt, ohne Langpunkt nur der kurze."""
+    if speed.long_tokens <= 0 or speed.long_tps <= 0:
+        return 0.0
+    if speed.short_tps <= 0:
+        return 1.0
+    span = speed.long_tokens - speed.short_tokens
+    if span <= 0:
+        return 1.0
+    return min(1.0, max(0.0, (context_tokens - speed.short_tokens) / span))
+
+
+def _turn_seconds(speed: _Speed, ratio: float, context_tokens: int) -> float:
+    """Zeit eines Turns je erzeugtem Token am Alltagskontext, bei ``ratio``
+    Prompt-Token je Antwort-Token. Decode-Anteil: Kurz- und Langpunkt nach
+    der Lage des Alltagskontexts gewichtet; Prefill-Anteil aus dem
+    Lang-Prefill. Kleiner ist besser; 0 tok/s heisst unbrauchbar."""
+    weight = _context_weight(speed, context_tokens)
+    decode = 0.0
+    if weight < 1.0:
+        if speed.short_tps <= 0:
+            return float("inf")
+        decode += (1.0 - weight) / speed.short_tps
+    if weight > 0.0:
+        decode += weight / speed.long_tps
+    if decode <= 0:
+        return float("inf")
+    seconds = decode
+    if speed.prefill_tps > 0:
+        seconds += ratio / speed.prefill_tps
+    return seconds
+
+
+def _beats(new: _Speed, old: _Speed, ratio: float, context_tokens: int,
+           margin: float = 0.0) -> bool:
+    """Siegervergleich ueber die GESAMTZEIT eines Turns am Alltagskontext.
+
+    Seit 2026-09-06 zaehlen BEIDE Enden (Peuqui: Lang- und Kurzkontext sind
+    wichtig, Prefill auch): Lauf #3 gab dem V100-Paar am Langpunkt 1,5 %
+    Vorsprung, waehrend das RTX-Paar im Kurzkontext 10 % vorn lag — bei
+    12.000 Token Alltag gewinnt die RTX um ~5 %. Der Alltagskontext ist
+    ``workload_context_tokens`` in vllm_runtime.yaml.
+
+    Frueher entschied die Decode-Rate allein, und nur bei Quasi-Gleichstand
+    (5 %) brach der Prefill das Patt. Das verlor reale Zeit: Im Lauf
+    2026-09-04 gewann TP2 mit 56,4 tok/s Decode gegen das Gitter mit 50,7 —
+    obwohl das Gitter 749 statt 449 tok/s Prefill schafft und damit bei
+    25.000 Prompt-Token 21 Sekunden je Turn spart. Die 11 % Decode-Vorsprung
+    lagen ueber der Schwelle, also kam der Prefill nie zur Sprache.
+
+    Jetzt werden beide Raten in dieselbe Waehrung uebersetzt — Sekunden je
+    Turn unter einer expliziten Lastannahme (``ratio``). Innerhalb einer
+    Topologie ist der Prefill nahezu konstant, dort entscheidet weiterhin
+    faktisch der Decode; Messrauschen (834 gegen 833) verschiebt die Summe
+    nur im Promillebereich und friert kein k mehr ein.
+
+    ``margin`` verlangt einen relativen Mindestvorsprung (0 = jeder
+    Vorsprung zaehlt). Gebraucht wird er nur, wo ein Wechsel etwas
+    KOSTET — bei der Speed-Variante den Kontext; innerhalb eines
+    Sweeps ist jede echte Verbesserung mitzunehmen.
+    """
+    return (_turn_seconds(new, ratio, context_tokens)
+            < _turn_seconds(old, ratio, context_tokens) * (1.0 - margin))
+
+
+def _workload_ratio(runtime: dict) -> float:
+    return float(runtime.get("workload_prompt_per_generated",
+                             DEFAULT_WORKLOAD_PROMPT_PER_GENERATED))
+
+
+def _workload_context(runtime: dict) -> int:
+    return int(runtime.get("workload_context_tokens",
+                           VLLM_CALIBRATION_WORKLOAD_CONTEXT_TOKENS))
+
+
+def _speed_min_gain(runtime: dict) -> float:
+    return float(runtime.get("speed_variant_min_gain",
+                             DEFAULT_SPEED_VARIANT_MIN_GAIN))
+
+
+
+def _oom_step(
+    reserve_mb: int, mml: int, cand_gpus: list[GPU],
+) -> tuple[int, int, str] | None:
+    """Naechste Stufe der OOM-Leiter: (reserve_mb, mml, Meldung), None = ausgeschoepft.
+
+    Kontext-Vorrang: erst die per-GPU-Reserve erhoehen (kostet nur
+    Pool-Bloecke), erst danach den Kontext halbieren. Gilt fuer Boot-OOM
+    und fuer OOM in einer Sonde gleichermassen.
+    """
+    if reserve_mb < VLLM_VRAM_RESERVE_MB + OOM_MAX_RESERVE_STEPS * OOM_RESERVE_STEP_MB:
+        reserve_mb += OOM_RESERVE_STEP_MB
+        return reserve_mb, mml, (
+            f"raising per-GPU reserve to {format_number(reserve_mb)} MB "
+            f"(GMU {_gmu_for(cand_gpus, reserve_mb)}), ctx kept"
+        )
+    if mml // 2 >= MIN_USEFUL_CONTEXT:
+        return reserve_mb, mml // 2, f"retry with ctx {format_number(mml // 2)}"
+    return None
+
+
+def _probe_rung(
+    server: VllmServer, spec: VllmSpec, meta: VllmModelMeta,
+) -> tuple[int, int, float, int, dict | None]:
+    """Sonden einer Sprosse: (ok, total, short_tps, short_tokens, long_metrics)."""
+    ok, total, _ = probe_coherence(server)
+    sampling = probe_sampling(meta.generation_defaults, 0)
+    long_metrics = (probe_long_context(server, spec.mml, sampling=sampling)
+                    if ok == total else None)
+    # Kurzprobe: nur wenn eingeschaltet ODER der Langpunkt ausfaellt
+    # (jede Sprosse braucht genau eine Entscheidungszahl).
+    need_short = VLLM_CALIBRATION_SHORT_PROBE or long_metrics is None
+    short = (probe_throughput(server, sampling=sampling)
+             if (ok == total and need_short) else None)
+    tps = max(short.tps) if short else 0.0
+    return ok, total, tps, (short.prompt_tokens if short else 0), long_metrics
+
+
+def _measure_topology(
+    cand: TopologyCandidate,
+    entry_name: str,
+    meta: VllmModelMeta,
+    gpus: list[GPU],
+    smi: dict[str, int],
+    log_dir: Path,
+    progress: Callable[[str], None],
+    cancel_check: Callable[[], bool] | None,
+    *,
+    parsers: TemplateParsers,
+) -> _RungResult | None:
+    """Eine Sprosse booten und messen; None = Sprosse nicht nutzbar.
+
+    Kontext-Strategie: Start mit nativem Kontext. Nennt vLLM selbst eine
+    Grenze, wird sie uebernommen; ein nacktes OOM halbiert den Kontext.
+    So tritt jede Sprosse mit ihrem maximal tragbaren Kontext an.
+    """
+    cand_gpus = [g for g in gpus if smi[g.uuid] in cand.gpu_ids]
+    reserve_mb = VLLM_VRAM_RESERVE_MB
+    native = meta.native_context or 32768
+    mml = native
+    progress(f"🚀 Trying {cand.label} (GPUs {cand.gpu_ids}, GMU {_gmu_for(cand_gpus)})...")
+
+    server: VllmServer | None = None
+    spec: VllmSpec | None = None
+    # Steigt nur, wenn vLLM eine groessere Chunkgroesse fordert.
+    mbt = VllmSpec.max_batched_tokens
+    # Gesetzt nur, wenn die Architektur ein KV-Format erzwingt (DeepseekV4).
+    kv_dtype: str | None = VllmSpec.kv_cache_dtype
+    max_attempts = 6
+    probed: tuple[int, int, float, int, dict | None] | None = None
+    for attempt in range(max_attempts):
+        spec = VllmSpec(
+            checkpoint=meta.checkpoint, served_name=entry_name,
+            gpu_ids=cand.gpu_ids, tp=cand.tp, pp=cand.pp,
+            gmu=_gmu_for(cand_gpus, reserve_mb), mml=mml, k=0,
+            block_size=meta.boot_block_size(0),
+            pp_partition=cand.pp_partition,
+            language_model_only=meta.multimodal,
+            max_batched_tokens=mbt,
+            kv_cache_dtype=kv_dtype,
+            tool_call_parser=parsers.tool_call,
+            reasoning_parser=parsers.reasoning,
+        )
+        port = find_free_port()
+        gpu_slug = "-".join(str(i) for i in cand.gpu_ids)
+        log = log_dir / f"boot-{cand.tp}x{cand.pp}-gpu{gpu_slug}-try{attempt}.log"
+        retries_left = attempt < max_attempts - 1
+        try:
+            server = boot_vllm(spec, port, log, BOOT_TIMEOUT_S, cancel_check)
+        except VllmBootError as e:
+            if retries_left and e.required_kv_dtype and e.required_kv_dtype != kv_dtype:
+                # Architektur-Zwang: vLLM nennt das noetige Format selbst.
+                kv_dtype = e.required_kv_dtype
+                progress(f"   ↳ architecture requires kv-cache {kv_dtype}: retrying")
+                continue
+            if (retries_left and e.required_batched_tokens
+                    and e.required_batched_tokens > mbt):
+                # Hybrid-Checkpoint: vLLMs eigene Blockgroesse uebersteigt
+                # unseren Chunk-Deckel. Es nennt die noetige Zahl selbst.
+                mbt = e.required_batched_tokens
+                progress(
+                    f"   ↳ hybrid block size needs a larger chunk: retry with "
+                    f"{format_number(e.required_batched_tokens)}"
+                )
+                continue
+            if (retries_left and e.parsed_max_len
+                    and MIN_USEFUL_CONTEXT <= e.parsed_max_len < mml):
+                # vLLM nennt die Grenze selbst — uebernehmen, neu booten
+                mml = e.parsed_max_len
+                progress(f"   ↳ context capped by vLLM: retry with {format_number(mml)}")
+                continue
+            step = _oom_step(reserve_mb, mml, cand_gpus) if (retries_left and e.oom) else None
+            if step:
+                reserve_mb, mml, note = step
+                progress(f"   ↳ OOM: {note}")
+                continue
+            progress(f"   ↳ boot failed: {e.reason}")
+            logger.info(f"boot failure detail: {e.log_tail[-1500:]}")
+            break
+        progress(f"   ↳ boot OK, ctx {format_number(mml)}")
+        # Sonden absturzsicher: ein HTTP 500 des Servers (z.B. kaputter
+        # Spec-Pfad) ist ein Sprossen-Urteil, kein Flow-Abbruch — und der
+        # Server wird IMMER heruntergefahren (Lauf 2026-08-29: geleakte
+        # 25 GB nach ungefangener Probe-Exception).
+        try:
+            probed = _probe_rung(server, spec, meta)
+        except Exception as probe_err:  # noqa: BLE001
+            # Ein OOM erst in der Sonde (Prefill-Scratch, den das
+            # Speicherprofil nicht sieht — Lauf 2026-09-05: V100-Paar bei
+            # GMU 0,97) ist dieselbe Leiter wie ein Boot-OOM, kein Urteil
+            # ueber die Topologie.
+            probe_oom = any(sig in server.log_tail(1_000_000) for sig in OOM_SIGNATURES)
+            server.shutdown()
+            server = None
+            step = _oom_step(reserve_mb, mml, cand_gpus) if (retries_left and probe_oom) else None
+            if step:
+                reserve_mb, mml, note = step
+                progress(f"   ↳ probe hit OOM: {note}")
+                continue
+            progress(f"   ↳ probe crashed ({type(probe_err).__name__}) — rung rejected")
+            return None
+        server.shutdown()
+        break
+
+    if server is None or spec is None or probed is None:
+        return None
+    ok, total, tps, short_tokens, long_metrics = probed
+    if ok < total:
+        progress(f"   ↳ incoherent ({ok}/{total}) — rung rejected")
+        return None
+    if tps:
+        progress(f"   ↳ {cand.label}: short {format_number(tps, 1)} tok/s "
+                 f"(coherence {ok}/{total})")
+    else:
+        progress(f"   ↳ {cand.label}: coherence {ok}/{total}")
+    if long_metrics:
+        lt = long_metrics["tokens"]
+        lp = long_metrics["prefill_tps"]
+        ld = long_metrics["decode_tps"]
+        progress(f"   ↳ long ctx @{format_number(lt)} tok: prefill "
+                 f"{format_number(lp, 0)} tok/s, decode {format_number(ld, 1)} tok/s")
+    else:
+        lt, lp, ld = 0, 0.0, 0.0
+    return _RungResult(spec=spec, label=cand.label, tps=tps,
+                       coherence=(ok, total), short_tokens=short_tokens,
+                       full_context=(spec.mml >= native),
+                       long_tokens=lt, long_prefill_tps=lp, long_decode_tps=ld)
+
+
+def _sweep_k(
+    rung: _RungResult,
+    meta: VllmModelMeta,
+    gpus: list[GPU],
+    smi: dict[str, int],
+    runtime: dict,
+    log_dir: Path,
+    progress: Callable[[str], None],
+    cancel_check: Callable[[], bool] | None,
+    allow_ctx_reduction: bool = False,
+    matrix: list[dict] | None = None,
+) -> tuple[VllmSpec, _Speed, int, dict[int, float]]:
+    """k-Sweep auf einer Topologie: (best_spec, best_speed, best_k, sweep).
+
+    Siegerregel je k: Turnzeit am Alltagskontext (_beats). ``sweep`` enthaelt
+    je k den Lang-Decode (Kurzwert nur als Ersatz, wenn kein Langpunkt
+    moeglich ist) — die Berichtsgroesse des Betriebspunkts.
+
+    ``matrix``: Sammel-Liste fuer die aggregierte Ergebnistabelle — jede
+    kohaerente k-Messung wird als Zeile (Topologie, k, ctx, Kurz- und
+    Langkontext-Werte, Akzeptanz) angehaengt.
+
+    ``allow_ctx_reduction``: Der Draftkopf kostet KV-Budget — nennt vLLM
+    beim k-Boot eine kleinere Kontextgrenze, wird sie uebernommen und neu
+    gebootet. Nur fuer den Speed-Kandidaten erlaubt (dort ist reduzierter
+    Kontext akzeptabel); Sieg-Kandidaten muessen ihr k beim vollen
+    Sprossen-Kontext tragen (Kontext-Vorrang), sonst ist das k abgelehnt.
+
+    Eine per Proben-OOM gelernte GMU gilt fuer die restlichen k dieses
+    Sweeps (Topologie-Eigenschaft). Traegt sie bei einem spaeteren k den
+    nativen Kontext nicht mehr, wird sie fuer dieses k einmalig auf den
+    Sprossenwert zurueckgesetzt — Kontext-Vorrang schlaegt Zeitersparnis.
+    """
+    sweep: dict[int, float] = {0: _rung_metric(rung)}
+    best_k, best_speed = 0, _rung_speed(rung)
+    best_mml = rung.spec.mml
+    best_gmu = rung.spec.gmu
+    ratio, context_tokens = _workload_ratio(runtime), _workload_context(runtime)
+    # Ein Proben-OOM ist eine Eigenschaft der TOPOLOGIE (zu wenig
+    # Workspace auf der vollsten Karte), nicht des einzelnen k — die
+    # gelernte GMU gilt deshalb fuer den Rest des Sweeps. Ohne das
+    # bootet jedes k denselben OOM neu (Lauf 2026-08-30: 6 von 7
+    # Gitter-Sprossen, je ~2 min; bei 150-GB-Modellen ein Vielfaches).
+    sweep_gmu = rung.spec.gmu
+    # Chunk-Deckel gilt fuer den GANZEN Sweep, nicht je k: fordert vLLM
+    # einmal mehr, bleibt der Wert stehen. Sonst booten alle folgenden k
+    # erst in dieselbe Assertion (je ~8 min Gewichtsladen umsonst) und
+    # wuerden ausserdem bei verschiedenen Chunkgroessen gemessen — genau
+    # der Achse, die den Prefill um bis zu 12 % dreht.
+    mbt_k = rung.spec.max_batched_tokens
+    # Kontext wandert wie GMU und Chunk-Deckel durch den Sweep. Jedes k
+    # startete frueher wieder beim vollen Sprossen-Kontext, scheiterte und
+    # lernte den Deckel erst im zweiten Boot — sieben k kosteten so sieben
+    # Boots umsonst (Lauf 2026-09-04: je ~6,5 min auf der Einzelkarte).
+    # Der Sweep laeuft k ABSTEIGEND, und niedrigeres k traegt MEHR Kontext:
+    # der geerbte Wert bootet deshalb immer sofort. Was er kostet, holt der
+    # Nachschlag unten zurueck.
+    sweep_mml = rung.spec.mml
+    # (k, erzwungener Start-Kontext). Der Nachschlag fuer den Sieger wird
+    # waehrend des Laufs angehaengt — siehe unten.
+    plan: list[tuple[int, int | None]] = [
+        (k, None) for k in _k_candidates(meta, runtime)
+    ]
+    regrown = False
+    plan_idx = 0
+
+    def _needs_regrow() -> bool:
+        """Der Sieger wurde beim geerbten Kontext gemessen und koennte
+        mehr tragen? Dann bekommt er genau einen Nachschlag-Boot."""
+        return bool(not regrown and best_k and best_mml < rung.spec.mml)
+
+    # Die Bedingung (statt ein Block am Koerperende) sorgt dafuer, dass der
+    # Nachschlag auch dann kommt, wenn das letzte k per "continue" ausfaellt.
+    while plan_idx < len(plan) or _needs_regrow():
+        if plan_idx >= len(plan):
+            regrown = True
+            plan.append((best_k, rung.spec.mml))
+            progress(f"   ↳ re-measuring the winner k={best_k} at full "
+                     f"context to reclaim what the shared cap cost...")
+        k, forced_mml = plan[plan_idx]
+        plan_idx += 1
+        is_regrow = forced_mml is not None
+        capture = _capture_sizes_for(k, runtime)
+        spec_attn = _spec_attn_for(rung.spec, gpus, smi, runtime)
+        mml_k = forced_mml if forced_mml is not None else sweep_mml
+        # Proben-OOM-Retry: die per GMU volle Karte kann bei der ERSTEN
+        # echten Anfrage noch kippen (Gitter-k=6 2026-08-29: 120 MB
+        # QPN8-Workspace fehlten) — einmal mit gesenkter GMU neu booten
+        # statt das k zu verwerfen.
+        gmu_k = sweep_gmu
+        ok_k, total_k, tps, short_tokens = 0, 1, 0.0, 0
+        long_metrics: dict | None = None
+        probe_failed = True
+        for oom_round in range(2):
+            if cancel_check and cancel_check():
+                raise RuntimeError("cancelled")
+            server = None
+            # vLLMs Grenzschaetzung ist mit geladenem Draftkopf zu
+            # optimistisch (Nachmessung 2026-08-29: k=7 brauchte ZWEI
+            # Uebernahme-Runden) — deshalb iterative Uebernahme.
+            for attempt in range(3):
+                spec_k = VllmSpec(
+                    **{**rung.spec.__dict__, "k": k, "mml": mml_k,
+                       "gmu": gmu_k, "block_size": meta.boot_block_size(k),
+                       "max_batched_tokens": mbt_k,
+                       "kv_cache_dtype": rung.spec.kv_cache_dtype,
+                       "capture_sizes": capture, "spec_attn_backend": spec_attn},
+                )
+                port = find_free_port()
+                gpu_slug = "-".join(str(i) for i in rung.spec.gpu_ids)
+                log = log_dir / (
+                    f"boot-{rung.spec.tp}x{rung.spec.pp}-gpu{gpu_slug}"
+                    f"-k{k}-try{oom_round}{attempt}.log"
+                )
+                if oom_round == 0 and attempt == 0:
+                    progress(f"🎲 Probing k={k} on {rung.label} (block {meta.boot_block_size(k)}, "
+                             f"capture {capture}, spec-attn {spec_attn or 'default'})...")
+                try:
+                    server = boot_vllm(spec_k, port, log, BOOT_TIMEOUT_S, cancel_check)
+                    break
+                except VllmBootError as e:
+                    if (attempt < 2 and e.required_batched_tokens
+                            and e.required_batched_tokens > mbt_k):
+                        mbt_k = e.required_batched_tokens
+                        progress(f"   ↳ k={k} needs a larger chunk: retry with "
+                                 f"{format_number(mbt_k)}")
+                        continue
+                    if (attempt < 2 and allow_ctx_reduction and e.parsed_max_len
+                            and MIN_USEFUL_CONTEXT <= e.parsed_max_len < mml_k):
+                        mml_k = e.parsed_max_len
+                        sweep_mml = min(sweep_mml, mml_k)
+                        progress(f"   ↳ k={k} needs smaller ctx: retry with {format_number(mml_k)}")
+                        continue
+                    if (attempt < 2 and not allow_ctx_reduction
+                            and oom_round == 0 and gmu_k < rung.spec.gmu
+                            and e.parsed_max_len and e.parsed_max_len < mml_k):
+                        # Die aus einem frueheren k uebernommene GMU traegt
+                        # den vollen Kontext nicht mehr — Kontext-Vorrang
+                        # schlaegt Zeitersparnis: zurueck auf die
+                        # Sprossen-GMU, dieses k bekommt seine faire Chance.
+                        gmu_k = rung.spec.gmu
+                        progress(f"   ↳ k={k} needs the full GMU for the "
+                                 f"native context: retry with GMU {gmu_k}")
+                        continue
+                    if attempt < 2 and e.oom:
+                        # Boot-OOM ist dieselbe Situation wie ein Sonden-OOM
+                        # (V100-Paar 2026-09-05: der Compile der Spekulations-
+                        # graphen laeuft NACH der KV-Zuteilung und fand fuer
+                        # sein Autotune-Scratch 1,19 GiB nicht mehr) — GMU
+                        # senken statt das k zu verwerfen, und die gelernte
+                        # GMU fuer die restlichen k behalten.
+                        gmu_k = round(gmu_k - 0.02, 2)
+                        sweep_gmu = gmu_k
+                        progress(f"   ↳ k={k} boot hit OOM: retry with GMU {gmu_k} "
+                                 f"(kept for the remaining k)")
+                        continue
+                    progress(f"   ↳ k={k} boot failed: {e.reason}")
+                    break
+            if server is None:
+                break
+            probe_oom = False
+            try:
+                ok_k, total_k, _ = probe_coherence(server)
+                sampling = probe_sampling(meta.generation_defaults, k)
+                long_metrics = (probe_long_context(server, mml_k, sampling=sampling)
+                                if ok_k == total_k else None)
+                need_short = VLLM_CALIBRATION_SHORT_PROBE or long_metrics is None
+                short = (probe_throughput(server, sampling=sampling)
+                         if (ok_k == total_k and need_short) else None)
+                tps = max(short.tps) if short else 0.0
+                short_tokens = short.prompt_tokens if short else 0
+                probe_failed = False
+            except Exception as probe_err:  # noqa: BLE001
+                full_log = (server.log_path.read_text(errors="replace")
+                            if server.log_path.exists() else "")
+                probe_oom = any(sig in full_log for sig in OOM_SIGNATURES)
+                if probe_oom and oom_round == 0:
+                    gmu_k = round(gmu_k - 0.02, 2)
+                    sweep_gmu = gmu_k  # gilt ab jetzt fuer alle weiteren k
+                    progress(f"   ↳ k={k} probe hit OOM: retry with GMU {gmu_k} "
+                             f"(kept for the remaining k)")
+                else:
+                    progress(f"   ↳ k={k} probe crashed "
+                             f"({type(probe_err).__name__}) — rejected")
+            finally:
+                server.shutdown()
+            if not probe_oom:
+                break
+        if probe_failed:
+            continue
+        if ok_k < total_k:
+            progress(f"   ↳ k={k} incoherent ({ok_k}/{total_k}) — rejected")
+            continue
+        if long_metrics:
+            lt = long_metrics["tokens"]
+            lp = long_metrics["prefill_tps"]
+            ld = long_metrics["decode_tps"]
+            acc = long_metrics["accept_rate"]
+        else:
+            lt, lp, ld, acc = 0, 0.0, 0.0, -1.0
+        metric = ld if lt else tps
+        sweep[k] = metric
+        acc_note = (f", accept {format_number(acc * 100, 0)} %" if acc >= 0 else "")
+        if lt:
+            progress(f"   ↳ k={k}: long {format_number(ld, 1)} tok/s "
+                     f"(prefill {format_number(lp, 0)}{acc_note})"
+                     + (f", short {format_number(tps, 1)} tok/s" if tps else ""))
+        else:
+            progress(f"   ↳ k={k}: short {format_number(tps, 1)} tok/s")
+        if matrix is not None:
+            if is_regrow:
+                matrix[:] = [r for r in matrix
+                             if not (r["label"] == rung.label and r["k"] == k)]
+            matrix.append({"label": rung.label, "k": k, "ctx": mml_k,
+                           "short": tps, "short_tokens": short_tokens,
+                           "long_tokens": lt,
+                           "long_prefill": lp, "long_decode": ld,
+                           "accept": acc})
+        # Der Nachschlag misst DENSELBEN Sieger bei groesserem Kontext —
+        # er wird uebernommen, ohne gegen sich selbst anzutreten
+        # (Kontext-Vorrang; die Rate faellt am laengeren Prompt naturgemaess
+        # etwas ab und ist dann der ehrliche Wert fuer den Betriebspunkt).
+        speed_k = _Speed(tps, short_tokens, ld, lt, lp)
+        if is_regrow or _beats(speed_k, best_speed, ratio, context_tokens):
+            best_k, best_speed, best_mml = k, speed_k, mml_k
+            # Der Proben-OOM-Retry misst mit gesenkter GMU — die MUSS in
+            # den Betriebspunkt (Ausfall 2026-08-30: mit 0,95 gemessen,
+            # 0,97 persistiert → QPN8-Workspace-OOM beim ersten Request).
+            best_gmu = gmu_k
+
+    if best_k:
+        best_spec = VllmSpec(
+            **{**rung.spec.__dict__, "k": best_k, "mml": best_mml,
+               "gmu": best_gmu,
+               "block_size": meta.boot_block_size(best_k),
+               "capture_sizes": _capture_sizes_for(best_k, runtime),
+               "spec_attn_backend": _spec_attn_for(rung.spec, gpus, smi, runtime)},
+        )
+    else:
+        best_spec = rung.spec
+    return best_spec, best_speed, best_k, sweep
+
+
+def _challenger_ab(
+    ratio: float,
+    context_tokens: int,
+    sampling: dict,
+    best_spec: VllmSpec,
+    best_speed: _Speed,
+    challenger: VllmSpec,
+    tag: str,
+    keep_note: str,
+    log_dir: Path,
+    progress,
+    cancel_check,
+    matrix: list[dict] | None,
+    label: str,
+    k: int,
+) -> tuple[VllmSpec, _Speed, dict | None]:
+    """Ein Gegen-Boot eines abgewandelten Sieger-Specs, gleiche Siegerregel.
+
+    Scheitert der Herausforderer (Boot, Kohaerenz, Probe), bleibt der
+    Amtsinhaber unveraendert — ein verlorener Boot ist der Preis der
+    Messung, nie ein Risiko fuer den Betriebspunkt.
+    """
+    port = find_free_port()
+    log = log_dir / f"boot-{tag}.log"
+    try:
+        server = boot_vllm(challenger, port, log, BOOT_TIMEOUT_S, cancel_check)
+    except VllmBootError as e:
+        progress(f"   ↳ {tag} boot failed ({e.reason}) — keeping {keep_note}")
+        return best_spec, best_speed, None
+    try:
+        ok, total, _ = probe_coherence(server)
+        long_metrics = (probe_long_context(server, challenger.mml,
+                                           sampling=sampling)
+                        if ok == total else None)
+        # Kurzpunkt wie im Sweep, damit der Herausforderer mit demselben
+        # Tripel antritt (nur wenn die Regel den Kurzpunkt ueberhaupt kennt).
+        short = (probe_throughput(server, sampling=sampling)
+                 if (ok == total and best_speed.short_tps > 0) else None)
+    except Exception as probe_err:  # noqa: BLE001
+        progress(f"   ↳ {tag} probe crashed ({type(probe_err).__name__}) "
+                 f"— keeping {keep_note}")
+        return best_spec, best_speed, None
+    finally:
+        server.shutdown()
+    if ok < total or not long_metrics or not long_metrics["tokens"]:
+        progress(f"   ↳ {tag} incoherent or unprobed — keeping {keep_note}")
+        return best_spec, best_speed, None
+    ld = long_metrics["decode_tps"]
+    lp = long_metrics["prefill_tps"]
+    tps = max(short.tps) if short else 0.0
+    speed = _Speed(tps, short.prompt_tokens if short else 0,
+                   ld, long_metrics["tokens"], lp)
+    row = {"label": f"{label} ({tag})", "k": k,
+           "ctx": challenger.mml, "short": tps,
+           "short_tokens": speed.short_tokens,
+           "long_tokens": long_metrics["tokens"], "long_prefill": lp,
+           "long_decode": ld, "accept": long_metrics["accept_rate"]}
+    if matrix is not None:
+        matrix.append(row)
+    if _beats(speed, best_speed, ratio, context_tokens):
+        progress(f"   ↳ {tag} wins: long {format_number(ld, 1)} tok/s "
+                 f"(prefill {format_number(lp, 0)}) — adopting")
+        return challenger, speed, row
+    progress(f"   ↳ {tag} loses (long {format_number(ld, 1)}, "
+             f"prefill {format_number(lp, 0)}) — keeping {keep_note}")
+    return best_spec, best_speed, None
+
+
+def _chunk_ab(ratio, context_tokens, sampling, best_spec, best_speed, log_dir,
+              progress, cancel_check, matrix, label, k):
+    """Chunk-Groesse ist modellspezifisch und nicht ableitbar (2026-08-30:
+    4096 = +2,7 % Prefill am 27B, -12 % am Flash-Next-Hybrid) — der eine
+    Messpunkt ersetzt die Formel."""
+    challenger = VllmSpec(**{
+        **best_spec.__dict__,
+        "max_batched_tokens": best_spec.max_batched_tokens * 2,
+    })
+    progress(f"⚖️ Chunk A/B: rebooting the winner with chunk "
+             f"{challenger.max_batched_tokens} "
+             f"(instead of {best_spec.max_batched_tokens})...")
+    return _challenger_ab(
+        ratio, context_tokens, sampling, best_spec, best_speed, challenger,
+        f"chunk {challenger.max_batched_tokens}",
+        f"chunk {best_spec.max_batched_tokens}",
+        log_dir, progress, cancel_check, matrix, label, k)
+
+
+def _gmu_ab(ratio, context_tokens, sampling, best_spec, best_speed, log_dir,
+            progress, cancel_check, matrix, label, k):
+    """Weiche Allokator-Druck-Erkennung: der Sieger einmal mit GMU-0,02.
+
+    Harte OOMs faengt der Sweep; weicher Druck wirft keinen Fehler,
+    sondern frisst still Durchsatz (Flash-Next 2026-08-30: GMU 0,95
+    halbierte den Long-Decode auf 12,6 tok/s, 0,93 = 28,3 — ohne jede
+    Meldung). Traegt die niedrigere GMU den Kontext nicht mehr,
+    scheitert ihr Boot und der Amtsinhaber bleibt (Kontext-Vorrang).
+    """
+    lower = round(best_spec.gmu - 0.02, 2)
+    challenger = VllmSpec(**{**best_spec.__dict__, "gmu": lower})
+    progress(f"⚖️ GMU A/B: rebooting the winner with GMU {lower} "
+             f"(instead of {best_spec.gmu}) to detect silent "
+             f"allocator pressure...")
+    return _challenger_ab(
+        ratio, context_tokens, sampling, best_spec, best_speed, challenger,
+        f"gmu {lower}", f"gmu {best_spec.gmu}",
+        log_dir, progress, cancel_check, matrix, label, k)
+
+
+def calibrate_vllm_checkpoint(
+    checkpoint: Path,
+    entry_name: str,
+    log_dir: Path,
+    progress: Callable[[str], None],
+    cancel_check: Callable[[], bool] | None = None,
+    reserve_side_channel: bool = True,
+    topologies: list[str] | None = None,
+    resweep: bool = False,
+    dry_run: bool = False,
+) -> VllmCalibrationResult:
+    """Kompletter Suchlauf. progress() bekommt englische Statuszeilen.
+
+    ``topologies`` (Leiter-Labels) beschraenkt den Lauf auf diese Sprossen —
+    der Nachmessmodus (Peuqui 2026-09-05): nach Aenderungen an Sonde,
+    Drafter oder Kernel ist nur der k-Sweep neu zu messen, die
+    Leiter-Entscheidung ist samplingunabhaengig. ``resweep`` ohne
+    ``topologies`` nimmt die Topologie des persistierten Betriebspunkts.
+    ``dry_run`` misst und schreibt die Matrix, persistiert aber keinen
+    Betriebspunkt.
+
+    Auswahlregel (Peuqui 2026-08-29): Kontext maximieren VOR Tempo.
+    Der k-Sweep laeuft auf ALLEN kohaerenten Voll-Kontext-Topologien
+    (der Spekulationsgewinn ist topologie-abhaengig — 27B: Gitter
+    Faktor 2,5 vs. TP2 Faktor 1,4); kontext-reduzierte Sprossen werden
+    gemessen und berichtet, gewinnen aber nur, wenn keine Sprosse den
+    nativen Kontext traegt.
+    """
+    runtime = load_vllm_runtime()  # frueh scheitern, wenn die Umgebung fehlt
+    gib = 1024 ** 3
+    freed, kept = prune_calibration_cache()
+    progress(
+        f"🧹 Compile cache for calibration boots pruned to "
+        f"{format_number(VLLM_CALIBRATION_CACHE_MAX_GIB)} GiB "
+        f"({VLLM_CALIBRATION_CACHE_ROOT}: {format_number(freed / gib, 1)} GiB freed, "
+        f"{format_number(kept / gib, 1)} GiB kept)"
+    )
+
+    progress(f"🔬 Analyzing checkpoint {_display_checkpoint_name(checkpoint)}...")
+    meta = analyze_checkpoint(checkpoint)
+    progress(
+        f"   {meta.architecture}, {meta.num_layers} layers, "
+        f"{format_number(meta.total_bytes / gib, 1)} GiB, "
+        f"native ctx {format_number(meta.native_context)}, "
+        f"multimodal={meta.multimodal}, giants={meta.giant_layers}"
+    )
+    if meta.mtp.present:
+        progress(
+            f"   MTP block: {format_number(meta.mtp.bytes_total / gib, 2)} GiB "
+            f"{meta.mtp.dominant_dtype}, worthwhile={_mtp_worthwhile(meta)}"
+        )
+    # Vor dem ersten Boot: ein unbekanntes Tool-Call-Format bricht hier ab,
+    # nicht nach einer Stunde Messung
+    parsers = template_parsers(meta.chat_template, runtime)
+    progress(
+        f"   chat template: tool-call parser {parsers.tool_call}, "
+        f"reasoning parser {parsers.reasoning or 'none'}"
+    )
+
+    # Reserviert wird nur, wenn im Picker auch ein Seitenkanal-Paar
+    # angehakt ist. Ist keines gewaehlt, laufen weder TTS noch VLM waehrend
+    # dieser Messung — die Karte dann freizuhalten kostet nur Speicher.
+    # Beim 284B-DeepSeek entscheidet das ueber Passen oder Nicht-Passen:
+    # 164,0 GiB Gewichte gegen 156,3 GiB auf vier Karten, 187,5 auf fuenf.
+    reserved = side_channel_uuids() if reserve_side_channel else set()
+    if not reserve_side_channel:
+        progress("🔓 No side-channel pair selected — all GPUs available")
+    gpus = eligible_gpus(reserved)
+    if not gpus:
+        raise RuntimeError("no eligible GPUs (all reserved for side channels)")
+    progress(f"🖥️ Eligible GPUs: {[f'{g.name}({g.total_mb}MB)' for g in gpus]}")
+
+    # Drain-Check (SSOT-Primitiv wie beim llamacpp-Lauf): geladene Modelle
+    # machen die Topologie-Leiter blind (belegte Karten liessen am
+    # 2026-08-30 nur das Gitter durch, dessen Boot dann starb). Der
+    # Aufrufer hat llama-swap bereits gestoppt — hier warten wir, bis die
+    # ELIGIBLE Karten prozessfrei sind (Side-Channels duerfen belegt
+    # bleiben); Readiness ist prozessbasiert, nicht speicherbasiert.
+    import time as _time
+
+    from ..config import LLAMACPP_CALIBRATION_DRAIN_TIMEOUT_S
+    from ..process_utils import gpu_compute_processes
+    eligible_uuids = {g.uuid for g in gpus}
+    drain_deadline = _time.monotonic() + LLAMACPP_CALIBRATION_DRAIN_TIMEOUT_S
+    procs = gpu_compute_processes(eligible_uuids)
+    while procs and _time.monotonic() < drain_deadline:
+        if cancel_check and cancel_check():
+            raise RuntimeError("cancelled")
+        progress(f"⏳ GPUs still busy ({'; '.join(procs)}) — waiting...")
+        _time.sleep(3.0)
+        procs = gpu_compute_processes(eligible_uuids)
+    if procs:
+        raise RuntimeError(
+            f"eligible GPUs still busy after drain timeout: {'; '.join(procs)} "
+            f"— free them and recalibrate"
+        )
+    # Nach dem Drain neu inventarisieren: die free_mb-Werte von oben
+    # stammen aus der Zeit VOR der VRAM-Freigabe, und die Topologie-
+    # Leiter entscheidet ueber free_mb.
+    gpus = eligible_gpus(reserved)
+
+    # --- Phase C/D: ALLE Topologie-Kandidaten booten und messen ----------
+    # Der erste bootende Kandidat ist selten der schnellste (27B: TP=1 auf
+    # einer RTX bootet, aber TP=2 ist Faktor 1,5 schneller) — deshalb wird
+    # jede Sprosse gemessen.
+    smi = _smi_index_by_uuid()
+    uuid_by_smi = {v: k for k, v in smi.items()}
+    rungs: list[_RungResult] = []
+    matrix: list[dict] = []
+    ladder = list(topology_ladder(meta, gpus, runtime))
+    if resweep and topologies is None:
+        topologies = resweep_topology_labels(entry_name, ladder)
+    candidates = _select_candidates(ladder, topologies)
+    if topologies is not None:
+        progress("🎯 Re-sweep: " + ", ".join(c.label for c in candidates)
+                 + " (rest of the topology ladder skipped)")
+    for cand in candidates:
+        if cancel_check and cancel_check():
+            raise RuntimeError("cancelled")
+        result = _measure_topology(cand, entry_name, meta, gpus, smi,
+                                   log_dir, progress, cancel_check, parsers=parsers)
+        if result is not None:
+            rungs.append(result)
+            matrix.append({"label": result.label, "k": 0,
+                           "ctx": result.spec.mml, "short": result.tps,
+                           "long_tokens": result.long_tokens,
+                           "long_prefill": result.long_prefill_tps,
+                           "long_decode": result.long_decode_tps,
+                           "accept": -1.0})
+
+    if not rungs:
+        raise RuntimeError("no topology candidate booted coherently")
+
+    # Kontext-Vorrang: nur Voll-Kontext-Sprossen konkurrieren um den Sieg.
+    # Traegt keine Sprosse den nativen Kontext (kleine Rechner), gilt dieselbe
+    # Regel eine Stufe tiefer: es konkurrieren die Sprossen mit dem groessten
+    # erreichten Kontext, die kleineren sind Speed-Kandidaten (Peuqui
+    # 2026-09-06: "Vollkontext ist auf kleinen Rechnern nicht immer erreichbar").
+    pool = [r for r in rungs if r.full_context]
+    fallback_pool = not pool
+    if fallback_pool:
+        top_ctx = max(r.spec.mml for r in rungs)
+        pool = [r for r in rungs if r.spec.mml == top_ctx]
+        progress(
+            f"⚠️ No topology carries the native context — competing on the "
+            f"largest reachable context ({format_number(top_ctx)} tokens): "
+            + ", ".join(r.label for r in pool)
+        )
+    # Sortierung und Berichte nach der Entscheidungsmetrik (Lang-Decode)
+    pool.sort(key=_rung_metric, reverse=True)
+    progress(
+        "📈 Topologies for k-sweep (by long-context decode): "
+        + ", ".join(f"{r.label} ({format_number(_rung_metric(r), 1)} tok/s)"
+                    for r in pool)
+    )
+
+    # Speed-Kandidat: die schnellste kontext-reduzierte Sprosse bekommt
+    # ihren Sweep ZUSAETZLICH (informativ — z.B. V100+XQA als moegliche
+    # Speed-Variante), konkurriert aber nicht um den Betriebspunkt.
+    reduced = [r for r in rungs if r not in pool]
+    speed_candidate = max(reduced, key=_rung_metric) if reduced else None
+    if speed_candidate is not None:
+        progress(
+            f"🏎️ Reduced-context speed candidate: {speed_candidate.label} "
+            f"(ctx {format_number(speed_candidate.spec.mml)}) — measured for info only"
+        )
+
+    # --- Phase E: k-Sweep auf JEDER Sieg-Kandidaten-Topologie ------------
+    # Sieger nach Lang-Decode; bei Quasi-Gleichstand bricht der hoehere
+    # Lang-Prefill das Patt (_beats).
+    best_spec: VllmSpec | None = None
+    best_speed: _Speed | None = None
+    best_k = 0
+    best_rung: _RungResult | None = None
+    best_sweep: dict[int, float] = {}
+    ratio, context_tokens = _workload_ratio(runtime), _workload_context(runtime)
+    # Sweep-Verzicht ohne Magic Number (Peuqui 2026-09-06): hat eine Sprosse
+    # derselben Spekulations-Klasse (Stufenzahl + Kartentypen) ihren Sweep
+    # schon hinter sich, ist deren Faktor die beste Schaetzung fuer diese
+    # Sprosse. Kann sie damit den Sieger nach der Gesamtzeit-Regel nicht
+    # schlagen, spart der Verzicht die Boots (27B: TP1 nach dem RTX-Paar,
+    # sieben Boots ~1 h). Mit einer einzigen Karte ist TP1 die erste Sprosse
+    # seiner Klasse und wird gesweept — die Regel ist hardwareagnostisch.
+    best_factor: dict[tuple, tuple[float, float, str]] = {}
+    for rung in pool:
+        rung_class = _rung_class(rung, gpus, smi)
+        base = _rung_speed(rung)
+        if best_speed is not None and rung_class in best_factor:
+            short_factor, long_factor, ref_label = best_factor[rung_class]
+            expected = base.scaled(short_factor, long_factor)
+            if not _beats(expected, best_speed, ratio, context_tokens):
+                progress(
+                    f"⏭️ {rung.label}: k-sweep skipped — same stage count and "
+                    f"card class as {ref_label} (spec factor "
+                    f"{format_number(long_factor, 2)}), expected at most "
+                    f"{format_number(expected.long_tps, 1)} tok/s vs "
+                    f"{format_number(best_speed.long_tps, 1)}"
+                )
+                continue
+        spec_r, speed_r, k_r, sweep_r = _sweep_k(
+            rung, meta, gpus, smi, runtime, log_dir, progress, cancel_check,
+            matrix=matrix)
+        progress(f"   ↳ {rung.label} best: k={k_r}, "
+                 f"{format_number(speed_r.long_tps, 1)} tok/s")
+        if base.long_tps > 0:
+            long_factor = speed_r.long_tps / base.long_tps
+            short_factor = (speed_r.short_tps / base.short_tps
+                            if base.short_tps > 0 else long_factor)
+            if long_factor > best_factor.get(rung_class, (0.0, 0.0, ""))[1]:
+                best_factor[rung_class] = (short_factor, long_factor, rung.label)
+        if best_speed is None or _beats(speed_r, best_speed, ratio, context_tokens):
+            best_spec, best_speed, best_k = spec_r, speed_r, k_r
+            best_rung, best_sweep = rung, sweep_r
+
+    sc_spec = None
+    sc_speed: _Speed | None = None
+    sc_k = 0
+    sc_sweep: dict[int, float] = {}
+    if speed_candidate is not None:
+        sc_spec, sc_speed, sc_k, sc_sweep = _sweep_k(
+            speed_candidate, meta, gpus, smi, runtime, log_dir,
+            progress, cancel_check, allow_ctx_reduction=True, matrix=matrix)
+        progress(
+            f"🏎️ Speed candidate result: {speed_candidate.label} k={sc_k}, "
+            f"{format_number(sc_speed.long_tps, 1)} tok/s at ctx "
+            f"{format_number(sc_spec.mml)} (info only — "
+            f"operating point stays full-context)"
+        )
+
+    assert best_spec is not None and best_rung is not None and best_speed is not None
+    ok, total = best_rung.coherence
+
+    # Aggregierte Ergebnistabelle: jede Konstellation mit Kurz- UND
+    # Langkontext-Werten (Peuqui 2026-08-29: informierte Architektur-
+    # Aussage braucht beide Enden).
+    progress("📊 Measurement matrix (short vs long context, tok/s):")
+    progress(f"   {'topology':<32} {'k':>2} {'ctx':>9} {'short':>7} "
+             f"{'prefill':>8} {'long':>7} {'accept':>7}")
+    for row in sorted(matrix, key=lambda r: (r["label"], r["k"])):
+        if row["long_tokens"]:
+            long_cols = (f"{format_number(row['long_prefill'], 0):>8} "
+                         f"{format_number(row['long_decode'], 1):>7}")
+        else:
+            long_cols = f"{'—':>8} {'—':>7}"
+        acc = row.get("accept", -1.0)
+        acc_col = (f"{format_number(acc * 100, 0) + ' %':>7}" if acc >= 0
+                   else f"{'—':>7}")
+        short_col = (f"{format_number(row['short'], 1):>7}"
+                     if row["short"] else f"{'—':>7}")
+        progress(f"   {row['label'][:32]:<32} {row['k']:>2} "
+                 f"{format_number(row['ctx']):>9} {short_col} {long_cols} {acc_col}")
+
+    progress(f"🏁 Best point (turn-time rule at {format_number(context_tokens)} "
+             f"tokens, {format_number(ratio, 1)} prompt/generated): {best_rung.label}, "
+             f"k={best_k}, long {format_number(best_speed.long_tps, 1)} tok/s, "
+             f"short {format_number(best_speed.short_tps, 1)} tok/s "
+             f"(TP{best_spec.tp}×PP{best_spec.pp}, ctx {format_number(best_spec.mml)})")
+
+    ab_row: dict | None = None
+    if VLLM_CALIBRATION_CHUNK_AB:
+        best_spec, best_speed, ab_row = _chunk_ab(
+            ratio, context_tokens, probe_sampling(meta.generation_defaults, best_k),
+            best_spec, best_speed, log_dir, progress,
+            cancel_check, matrix, best_rung.label, best_k)
+    if VLLM_CALIBRATION_GMU_AB:
+        best_spec, best_speed, gmu_row = _gmu_ab(
+            ratio, context_tokens, probe_sampling(meta.generation_defaults, best_k),
+            best_spec, best_speed, log_dir, progress,
+            cancel_check, matrix, best_rung.label, best_k)
+        ab_row = gmu_row or ab_row
+
+    # --- Phase F: Persistierung -----------------------------------------
+    def _matrix_row(label: str, k: int) -> dict | None:
+        return next((r for r in matrix
+                     if r["label"] == label and r["k"] == k), None)
+
+    matrix_path = _write_matrix(log_dir, entry_name, matrix)
+    progress(f"🗂️ Measurement matrix written: {matrix_path}")
+
+    profile_path: Path | None = None
+    if dry_run:
+        progress("🧪 Dry run: operating point NOT persisted, llama-swap entry unchanged")
+    else:
+        profile_path = persist_operating_point(
+            best_spec, best_speed.long_tps, best_sweep, meta,
+            long_ctx=ab_row or _matrix_row(best_rung.label, best_k))
+        progress(f"💾 Operating point saved: {profile_path}")
+
+    # Speed-Variante nur persistieren, wenn sie den Betriebspunkt schlaegt —
+    # ein "-speed"-Eintrag, der langsamer ist, waere sinnlos. Der Eintrag
+    # heisst <entry>-speed (GGUF-Konvention) und wird vom Speed-Toggle
+    # ueber has_speed_variant/resolve_effective_suffix gefunden.
+    # Die Speed-Variante sieht in AIfred dieselbe Last wie der
+    # Betriebspunkt (auch lange Kontexte, auch viel Prefill) — sie wird
+    # deshalb am GLEICHEN Massstab gemessen, der Gesamtzeit eines Turns.
+    # Der frueher hier stehende rohe Decode-Vergleich unterstellte einen
+    # Kurzprompt-Betrieb, den es nicht gibt.
+    if sc_spec is not None and sc_speed is not None and speed_candidate is not None and not dry_run:
+        gain = _speed_min_gain(runtime)
+        if not _beats(sc_speed, best_speed, ratio, context_tokens, margin=gain):
+            progress(
+                f"🏎️ No speed variant: {format_number(sc_speed.long_tps, 1)} tok/s does "
+                f"not beat the operating point by the required "
+                f"{format_number(gain * 100, 0)} %"
+            )
+        else:
+            speed_spec = VllmSpec(
+                **{**sc_spec.__dict__, "served_name": f"{entry_name}-speed"},
+            )
+            speed_path = persist_operating_point(
+                speed_spec, sc_speed.long_tps, sc_sweep, meta,
+                long_ctx=_matrix_row(speed_candidate.label, sc_k))
+            progress(
+                f"💾 Speed variant saved: {speed_path} "
+                f"({format_number(sc_speed.long_tps, 1)} tok/s, "
+                f"ctx {format_number(speed_spec.mml)})"
+            )
+
+    # Verwendete GPUs im Log dokumentieren (UUID-Rueckverfolgbarkeit)
+    used = [uuid_by_smi.get(i, str(i)) for i in best_spec.gpu_ids]
+    logger.info(f"vllm calibration done: {entry_name} on {used}")
+
+    return VllmCalibrationResult(
+        spec=best_spec, throughput_tok_s=best_speed.long_tps,
+        coherence=(ok, total), k_sweep=best_sweep, profile_path=profile_path,
+        speed_label=speed_candidate.label if speed_candidate else "",
+        speed_k=sc_k, speed_tps=(sc_speed.long_tps if sc_speed else 0.0),
+        speed_mml=sc_spec.mml if sc_spec else 0,
+        measurements=matrix,
+    )
+
+
+def _write_matrix(log_dir: Path, entry_name: str, matrix: list[dict]) -> Path:
+    """Alle Einzelmessungen des Laufs als JSON neben die Boot-Logs legen."""
+    import datetime
+    import json
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+    path = log_dir / "measurement-matrix.json"
+    path.write_text(json.dumps({
+        "entry": entry_name,
+        "measured": datetime.datetime.now().isoformat(timespec="seconds"),
+        "rows": matrix,
+    }, indent=1, ensure_ascii=False))
+    return path
+
+
+def render_llamaswap_entry(spec: VllmSpec, ttl: int = 3600) -> dict:
+    """Aus Spec + Runtime den llama-swap-Eintrag bauen (cmd mit ${PORT})."""
+    runtime = load_vllm_runtime()
+    cmd_parts = spec.build_cmd(runtime, port=0)
+    # Port-Platzhalter: das letzte "--port 0" durch ${PORT} ersetzen
+    port_idx = len(cmd_parts) - 1 - cmd_parts[::-1].index("--port")
+    cmd_parts[port_idx + 1] = "${PORT}"
+    # JSON-Argumente fuer llama-swaps shellwords-Parser quoten
+    quoted = [f"'{p}'" if p.startswith("{") else p for p in cmd_parts]
+    env_map = spec.build_env(runtime)
+    return {
+        "cmd": " ".join(quoted),
+        "cmdStop": f"{PROJECT_ROOT}/scripts/vllm-swap-stop ${{PID}}",
+        "ttl": ttl,
+        "env": [f"{k}={v}" for k, v in env_map.items()],
+    }
+
+
+def persist_operating_point(
+    spec: VllmSpec, tok_s: float, k_sweep: dict[int, float], meta: VllmModelMeta,
+    long_ctx: dict | None = None,
+) -> Path:
+    """Profil schreiben (mit Hardware-Fingerprint) und Eintrag anwenden."""
+    import datetime
+
+    import yaml
+
+    from ..config import OPERATING_POINTS_DIR
+    from ..operating_points import apply_operating_point, gpu_fingerprint
+
+    entry = render_llamaswap_entry(spec)
+    meta_block: dict = {
+        "source": "AIfred vLLM auto-calibration",
+        "measured": datetime.date.today().isoformat(),
+        "architecture": meta.architecture,
+        "throughput_tok_s": round(tok_s, 1),
+        "k_sweep": {str(k): round(v, 1) for k, v in k_sweep.items()},
+        "k_sweep_metric": "long_context_decode_tok_s",
+        "topology": topology_meta(spec.tp, spec.pp, spec.gpu_ids),
+    }
+    if long_ctx and long_ctx.get("long_tokens"):
+        meta_block["long_context"] = {
+            "tokens": long_ctx["long_tokens"],
+            "prefill_tok_s": round(long_ctx["long_prefill"], 0),
+            "decode_tok_s": round(long_ctx["long_decode"], 1),
+        }
+    profile = {
+        "llamaswap": entry,
+        "group": "main",
+        "hardware": gpu_fingerprint(),
+        "meta": meta_block,
+    }
+    OPERATING_POINTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = OPERATING_POINTS_DIR / f"{spec.served_name}.yaml"
+    path.write_text(yaml.safe_dump(profile, default_flow_style=False,
+                                   sort_keys=False, width=10000, allow_unicode=True))
+    apply_operating_point(spec.served_name)
+    logger.info(f"operating point persisted + applied: {path} "
+                f"({LLAMASWAP_CONFIG_PATH})")
+    return path

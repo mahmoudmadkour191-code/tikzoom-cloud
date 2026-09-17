@@ -1,0 +1,143 @@
+name: ksivpn
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  networks: [ksivpn]
+
+services:
+  ksivpn-tgbot:
+    <<: *service-defaults
+    container_name: ksivpn-tgbot
+    build:
+      context: .
+      dockerfile: ./build/microservice/Dockerfile
+    image: ${DOTENV_TGBOT_IMAGE}:${DOTENV_TGBOT_TAG}
+    environment:
+      TZ: ${DOTENV_TZ}
+      ENV_FOR_DYNACONF: ${DOTENV_TGBOT_ENV}
+      TGBOT_TZ: ${DOTENV_TZ}
+      TGBOT_BOT__TOKEN: ${DOTENV_TGBOT_BOT_TOKEN}
+      TGBOT_BOT__ADMIN_ID: ${DOTENV_TGBOT_ADMIN_ID}
+      TGBOT_LOCALIZATION__LANGUAGE: ${DOTENV_TGBOT_LOCALIZATION_LANGUAGE}
+      TGBOT_PROXY__ENABLED: ${DOTENV_TGBOT_PROXY_ENABLED}
+      TGBOT_PROXY__URL: ${DOTENV_TGBOT_PROXY_URL}
+      TGBOT_REMNAWAVE__BASE_URL: ${DOTENV_TGBOT_REMNAWAVE_BASE_URL}
+      TGBOT_REMNAWAVE__TOKEN: ${DOTENV_TGBOT_REMNAWAVE_TOKEN}
+      TGBOT_REMNAWAVE__CADDY_TOKEN: ${DOTENV_TGBOT_REMNAWAVE_CADDY_TOKEN}
+      TGBOT_REMNAWAVE__WEBHOOK_SECRET: ${DOTENV_TGBOT_REMNAWAVE_WEBHOOK_SECRET}
+      TGBOT_PAYMENTS__RETURN_URL: ${DOTENV_TGBOT_PAYMENTS_RETURN_URL}
+      TGBOT_PAYMENTS__TEST_USER_IDS: ${DOTENV_TGBOT_PAYMENTS_TEST_USER_IDS}
+      TGBOT_PAYMENTS__TEST_PRICE: ${DOTENV_TGBOT_PAYMENTS_TEST_PRICE}
+      TGBOT_PAYMENTS__FISCALIZATION__ENABLED: ${DOTENV_TGBOT_PAYMENTS_FISCALIZATION_ENABLED}
+      TGBOT_PAYMENTS__FISCALIZATION__PROVIDERS__YOOMONEY: ${DOTENV_TGBOT_PAYMENTS_FISCALIZATION_PROVIDERS_YOOMONEY}
+      TGBOT_PAYMENTS__FISCALIZATION__PROVIDERS__YOOKASSA: ${DOTENV_TGBOT_PAYMENTS_FISCALIZATION_PROVIDERS_YOOKASSA}
+      TGBOT_PAYMENTS__FISCALIZATION__SEND_RECEIPT: ${DOTENV_TGBOT_PAYMENTS_FISCALIZATION_SEND_RECEIPT}
+      TGBOT_PAYMENTS__FISCALIZATION__MOY_NALOG__INN: ${DOTENV_TGBOT_PAYMENTS_FISCALIZATION_MOY_NALOG_INN}
+      TGBOT_PAYMENTS__FISCALIZATION__MOY_NALOG__PASSWORD: ${DOTENV_TGBOT_PAYMENTS_FISCALIZATION_MOY_NALOG_PASSWORD}
+      TGBOT_PAYMENTS__YOOMONEY__ENABLED: ${DOTENV_TGBOT_PAYMENTS_YOOMONEY_ENABLED}
+      TGBOT_PAYMENTS__YOOMONEY__TOKEN: ${DOTENV_TGBOT_PAYMENTS_YOOMONEY_TOKEN}
+      TGBOT_PAYMENTS__YOOMONEY__NOTIFICATION_SECRET: ${DOTENV_TGBOT_PAYMENTS_YOOMONEY_NOTIFICATION_SECRET}
+      TGBOT_PAYMENTS__YOOKASSA__ENABLED: ${DOTENV_TGBOT_PAYMENTS_YOOKASSA_ENABLED}
+      TGBOT_PAYMENTS__YOOKASSA__SHOP_ID: ${DOTENV_TGBOT_PAYMENTS_YOOKASSA_SHOP_ID}
+      TGBOT_PAYMENTS__YOOKASSA__SECRET_KEY: ${DOTENV_TGBOT_PAYMENTS_YOOKASSA_SECRET_KEY}
+      TGBOT_WEBHOOK__PORT: ${DOTENV_TGBOT_WEBHOOK_PORT}
+      TGBOT_CONNECTIONS__POSTGRES__HOST: ksivpn-tgbot-postgres
+      TGBOT_CONNECTIONS__POSTGRES__USER: ${DOTENV_POSTGRES_USER}
+      TGBOT_CONNECTIONS__POSTGRES__PASSWORD: ${DOTENV_POSTGRES_PASSWORD}
+      TGBOT_CONNECTIONS__POSTGRES__DB: ${DOTENV_POSTGRES_DB}
+      TGBOT_CONNECTIONS__REDIS__HOST: ksivpn-tgbot-redis
+      TGBOT_CONNECTIONS__REDIS__PASSWORD: ${DOTENV_REDIS_PASSWORD}
+      TGBOT_CONNECTIONS__REDIS__FSM_PREFIX: ${DOTENV_TGBOT_REDIS_FSM_PREFIX}
+    ports:
+      - ${DOTENV_TGBOT_WEBHOOK_HOST_BIND}:${DOTENV_TGBOT_WEBHOOK_PORT}
+    volumes:
+      - ksivpn-tgbot-backups:/home/ksivpn-tgbot/backups
+      - ksivpn-tgbot-logs:/home/ksivpn-tgbot/logs
+    depends_on:
+      ksivpn-tgbot-postgres:
+        condition: service_healthy
+      ksivpn-tgbot-redis:
+        condition: service_healthy
+
+  ksivpn-tgbot-postgres:
+    <<: *service-defaults
+    container_name: ksivpn-tgbot-postgres
+    image: ${DOTENV_POSTGRES_IMAGE}:${DOTENV_POSTGRES_TAG}
+    environment:
+      TZ: ${DOTENV_TZ}
+      POSTGRES_USER: ${DOTENV_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${DOTENV_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${DOTENV_POSTGRES_DB}
+    ports: [ "${DOTENV_POSTGRES_PORT}:5432" ]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DOTENV_POSTGRES_USER} -d ${DOTENV_POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+      start_interval: 1s
+    volumes:
+      - ksivpn-tgbot-postgres-data:/var/lib/postgresql/data
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+
+  ksivpn-tgbot-redis:
+    <<: *service-defaults
+    container_name: ksivpn-tgbot-redis
+    image: redis:8.6.2-alpine3.23
+    command:
+      - redis-server
+      - --requirepass
+      - ${DOTENV_REDIS_PASSWORD}
+      - --appendonly
+      - "yes"
+      - --save
+      - "60"
+      - "1000"
+      - --loglevel
+      - warning
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --pass ${DOTENV_REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    volumes: [ ksivpn-tgbot-redis-data:/data ]
+
+  ksivpn-caddy:
+    <<: *service-defaults
+    container_name: ksivpn-caddy
+    image: caddy:2-alpine
+    profiles: [ with-reverse-proxy ]
+    environment:
+      CADDY_DOMAIN: ${DOTENV_CADDY_DOMAIN}
+      CADDY_ACME_EMAIL: ${DOTENV_CADDY_ACME_EMAIL}
+      TGBOT_WEBHOOK_PORT: ${DOTENV_TGBOT_WEBHOOK_PORT}
+    ports:
+      - 80:80
+      - 443:443
+      - 443:443/udp
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ksivpn-caddy-data:/data
+      - ksivpn-caddy-config:/config
+    depends_on:
+      ksivpn-tgbot:
+        condition: service_started
+
+networks:
+  ksivpn:
+    name: ksivpn
+
+volumes:
+  ksivpn-tgbot-backups:
+    name: ksivpn-tgbot-backups
+  ksivpn-tgbot-logs:
+    name: ksivpn-tgbot-logs
+  ksivpn-tgbot-postgres-data:
+    name: ksivpn-tgbot-postgres-data
+  ksivpn-tgbot-redis-data:
+    name: ksivpn-tgbot-redis-data
+  ksivpn-caddy-data:
+    name: ksivpn-caddy-data
+  ksivpn-caddy-config:
+    name: ksivpn-caddy-config

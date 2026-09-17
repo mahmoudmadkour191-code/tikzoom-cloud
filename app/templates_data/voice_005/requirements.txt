@@ -1,0 +1,7 @@
+# auto-added by TikZoom curator
+gTTS
+googletrans==4.0.0rc1
+openai
+
+# auto-added by TikZoom curator
+googletrans==4.0.0rc1

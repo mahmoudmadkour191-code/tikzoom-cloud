@@ -1,0 +1,46 @@
+BOT:
+  TOKEN: 55***88  # Get your bot token from @BotFater
+AI:
+  # Chat completions
+  CHAT_TOKEN: "your azure openai api key"
+  MODEL: "your azure openai chat deployment name"
+  CHAT_VERSION: "2024-05-01-preview"
+  CHAT_BASE: "https://your-resource.openai.azure.com/"
+  # Image generation
+  IMAGE_TOKEN: "your azure openai api key"
+  IMAGE_AUTH_TYPE: "auto"  # auto/api_key/bearer
+  IMAGE_BEARER_TOKEN: ""  # Optional. Required when IMAGE_AUTH_TYPE is bearer
+  IMAGE_MODEL: "your azure openai image deployment name"
+  IMAGE_VERSION: "2025-04-01-preview"  # API version required for gpt-image-1
+  IMAGE_BASE: "https://your-resource.openai.azure.com/"
+  TYPE: "azure"
+MYSQL:
+  DBHOST: 127.0.0.1
+  DBPORT: 3306
+  DBUSER: root
+  DBPWD: dbpassword
+  DBNAME: database_name
+  DBCHAR: utf8mb4
+
+RATE_LIMIT:
+  0: 10
+  1: 30
+  2: 300
+
+CONTEXT_COUNT:
+  0: 3
+  1: 5
+  2: 10
+
+MAX_TOKEN:
+  0: 256
+  1: 1024
+  2: 1024
+
+IMAGE_RATE_LIMIT:
+  0: 5  # Level 0 users can call 5 times per day
+  1: 10 # Level 1 users can call 10 times per day
+  2: 20 # Level 2 users can call 20 times per day
+
+TIME_SPAN: 3 #Minutes
+DEVELOPER_CHAT_ID: 467300857

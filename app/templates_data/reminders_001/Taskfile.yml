@@ -1,0 +1,73 @@
+version: '3'
+
+vars:
+  TAG: dev
+  IMAGE: pysergio/chibi
+
+tasks:
+  build:base:
+    desc: "Build base amd64 and arm64 images in cloud with specified tag"
+    cmds:
+      - docker buildx build
+          --builder cloud-builder
+          --platform linux/amd64,linux/arm64
+          --cache-to type=registry,ref={{.IMAGE}}:buildcache,mode=max
+          --cache-from type=registry,ref={{.IMAGE}}:buildcache
+          -t {{.IMAGE}}:{{.TAG}}
+          -f Dockerfile
+          --push .
+
+  build:agent:
+    desc: "Build agent amd64 and arm64 images in cloud with specified tag"
+    cmds:
+      - docker buildx build
+          --builder cloud-builder
+          --platform linux/amd64,linux/arm64
+          --cache-to type=registry,ref={{.IMAGE}}:buildcache,mode=max
+          --cache-from type=registry,ref={{.IMAGE}}:buildcache
+          -t {{.IMAGE}}:agent-{{.TAG}}
+          -f agent.Dockerfile
+          --push .
+
+  build:lbase:
+    desc: "Build base amd64 and arm64 images locally with specified tag"
+    cmds:
+      - docker buildx build
+          --platform linux/amd64,linux/arm64
+          -t {{.IMAGE}}:{{.TAG}}
+          -f Dockerfile
+          --push .
+
+  build:lagent:
+    desc: "Build agent amd64 and arm64 images locally with specified tag"
+    cmds:
+      - docker buildx build
+          --platform linux/amd64,linux/arm64
+          -t {{.IMAGE}}:agent-{{.TAG}}
+          -f agent.Dockerfile
+          --push .
+
+  lint:
+    desc: "Run linters: ruff format, ruff check --fix, and mypy"
+    cmds:
+      - ruff format .
+      - ruff check --fix .
+      - mypy .
+
+  test:
+    desc: "Run tests"
+    cmds:
+      - pytest -vv .
+
+  checks:
+    desc: "Run linters + tests"
+    cmds:
+      - task lint
+      - task test
+
+  update:
+    desc: "Update dependencies and export deps to the requirements.txt/requirements-dev.txt files"
+    cmds:
+      - poetry update
+      - poetry export -f requirements.txt --output requirements.txt --without-hashes
+      - poetry export --with dev -f requirements.txt --output requirements-dev.txt --without-hashes

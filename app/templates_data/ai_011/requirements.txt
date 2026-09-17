@@ -1,0 +1,11 @@
+# auto-added by TikZoom curator
+python-telegram-bot
+aiofiles
+discord.py
+fastapi
+matplotlib
+pandas
+psutil
+pycryptodome
+uvicorn
+websockets

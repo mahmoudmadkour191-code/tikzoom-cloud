@@ -1,0 +1,88 @@
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from aiogram import flags
+from aiogram.enums import ChatAction
+from aiogram.filters import Command
+
+from korone.args import ArgumentSchema, TextArg
+from korone.logger import get_logger
+from korone.modules.gsm_arena.utils.device import get_device_presentation, reply_with_device
+from korone.modules.gsm_arena.utils.errors import GSMArenaError
+from korone.modules.gsm_arena.utils.keyboard import create_pagination_layout
+from korone.modules.gsm_arena.utils.scraper import search_phone
+from korone.modules.gsm_arena.utils.session import create_search_session
+from korone.ui import Bold, Code, column, template
+from korone.utils.exception import KoroneError
+from korone.utils.handlers import KoroneMessageHandler
+from korone.utils.i18n import gettext as _
+from korone.utils.i18n import lazy_gettext as l_
+
+if TYPE_CHECKING:
+    from aiogram.dispatcher.event.handler import CallbackType
+
+    from korone.modules.gsm_arena.utils.types import PhoneSearchResult
+
+logger = get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceSearchArguments:
+    device: str
+
+
+@flags.help(description=l_("Search GSMArena for device specifications."))
+@flags.chat_action(action=ChatAction.TYPING, initial_sleep=0.7)
+@flags.disableable(name="device")
+class DeviceSearchHandler(KoroneMessageHandler[DeviceSearchArguments]):
+    arguments = ArgumentSchema(DeviceSearchArguments, device=TextArg(l_("Device")))
+
+    @classmethod
+    def filters(cls) -> tuple[CallbackType, ...]:
+        return (Command("device", "specs", "d"),)
+
+    async def _handle_search_results(self, query: str, devices: list[PhoneSearchResult]) -> None:
+        if not devices:
+            await self.answer(_("No devices found."))
+            return
+
+        if len(devices) == 1:
+            try:
+                presentation = await get_device_presentation(devices[0].url)
+            except GSMArenaError as exc:
+                await logger.awarning(
+                    "[GSM Arena] Device details request failed",
+                    device_url=devices[0].url,
+                    error_type=type(exc).__name__,
+                )
+                await self.answer(_("Error fetching device details. Please try again later."))
+                return
+
+            if presentation:
+                await reply_with_device(self.event, presentation)
+            else:
+                await self.answer(_("Error fetching device details. Please try again later."))
+            return
+
+        if not self.event.from_user:
+            raise KoroneError.user_context_unavailable()
+
+        session_token = await create_search_session(devices)
+        keyboard = create_pagination_layout(devices, session_token, 1, self.event.from_user.id)
+        text = column(
+            template(_("Search results for: {query}"), query=Bold(query)),
+            template(_("Found {count} devices. Select one from the list below."), count=Code(str(len(devices)))),
+        )
+        await self.answer(text, reply_markup=keyboard)
+
+    async def handle(self) -> None:
+        query = self.args.device
+
+        try:
+            devices = await search_phone(query)
+        except GSMArenaError as exc:
+            await logger.awarning("[GSM Arena] Search failed", query=query, error_type=type(exc).__name__)
+            await self.answer(_("Error searching GSMArena. Please try again later."))
+            return
+
+        await self._handle_search_results(query, devices)

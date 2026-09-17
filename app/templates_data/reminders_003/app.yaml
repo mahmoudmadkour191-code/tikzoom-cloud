@@ -1,0 +1,45 @@
+name: edusync
+services:
+- name: edusync
+  github:
+    branch: main
+    deploy_on_push: true
+    repo: erfnzdeh/quera-to-google-calendar-automation
+  build_command: pip install -r requirements.txt
+  run_command: python main.py
+  envs:
+  - key: TELEGRAM_BOT_TOKEN
+    type: SECRET
+    value: ${TELEGRAM_BOT_TOKEN}
+  - key: GOOGLE_CLIENT_ID
+    type: SECRET
+    value: ${GOOGLE_CLIENT_ID}
+  - key: GOOGLE_CLIENT_SECRET
+    type: SECRET
+    value: ${GOOGLE_CLIENT_SECRET}
+  - key: GOOGLE_REDIRECT_URI
+    type: SECRET
+    value: ${GOOGLE_REDIRECT_URI}
+  - key: PORT
+    value: "8080"
+  http_port: 8080
+  instance_count: 1
+  instance_size_slug: basic-xxs
+
+runtime: python
+env: flex
+
+runtime_config:
+  python_version: 3.11
+
+manual_scaling:
+  instances: 1
+
+health_check:
+  enable_health_check: true
+  check_interval_sec: 10
+  timeout_sec: 5
+  unhealthy_threshold: 3
+  healthy_threshold: 2
+  restart_threshold: 300
+  path: "/" 

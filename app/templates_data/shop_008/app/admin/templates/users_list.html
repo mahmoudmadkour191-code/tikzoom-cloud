@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3>Пользователи</h3>
+  <form method="get" action="/admin/users" class="row" style="gap:8px;margin-top:8px;align-items:center;">
+    <input type="text" name="q" placeholder="Поиск по TG ID" value="{{ query or '' }}" />
+    <button class="btn btn-primary" type="submit">Искать</button>
+  </form>
+  <table style="margin-top:12px;">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>TG ID</th>
+        <th>Username</th>
+        
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u.id }}</td>
+        <td>{{ u.tg_id }}</td>
+        <td>{{ u.username or '' }}</td>
+        
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="row" style="margin-top:12px;justify-content:space-between;">
+    <div>Всего: {{ total }}</div>
+    <div class="row" style="gap:6px;">
+      {% if page > 1 %}
+      <a class="btn" href="/admin/users?page={{ page-1 }}{% if query %}&q={{ query }}{% endif %}">Назад</a>
+      {% endif %}
+      {% if page * page_size < total %}
+      <a class="btn" href="/admin/users?page={{ page+1 }}{% if query %}&q={{ query }}{% endif %}">Вперёд</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+

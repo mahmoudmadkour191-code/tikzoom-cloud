@@ -1,0 +1,84 @@
+[project]
+authors = [{ name = "SSmJaE", email = "ssmjae327@gmail.com" }]
+classifiers = ["Programming Language :: Python"]
+dependencies = [
+    "Pyrogram>=2.0.102",
+    "TgCrypto>=1.2.5",
+    "apscheduler>=3",
+    "arrow>=1.2.3",
+    "better-exceptions>=0.3.3",
+    "devtools>=0.10.0",
+    "httpx>=0.23.3",
+    "loguru>=0.6.0",
+    "ormar[orjson,sqlite]>=0.12.1",
+    "pydantic>=1.10.4",
+    "python-dotenv>=1.0.0",
+    "rich>=13.3.2",
+    "sanic>=23",
+]
+# ormar对pydantic版本有严格要求，所以可以先安装ormar，再安装pydantic，避免resolve失败
+description = "An intuitive multi-platform bot framework, easily forward messages among platforms, support QQ, WeChat, Telegram. 一个符合直觉的跨社交平台机器人框架，轻松地在平台间传递消息，支持QQ、微信、Telegram"
+keywords = [
+    "Telegram",
+    "async",
+    "asyncio",
+    "bot",
+    "chinese",
+    "cqhttp",
+    "cross-platform",
+    "framework",
+    "keaimao",
+    "onebot",
+    "pydantic",
+    "pyrogram",
+    "python",
+    "qq",
+    "type-annotations",
+    "type-hint",
+    "wechat",
+]
+license = { text = "MIT" }
+name = "pepperbot"
+readme = "README.md"
+requires-python = ">=3.8"
+version = "0.3.7"
+
+# TODO 之后再优化这个问题，现在和逻辑嵌套过深
+# [project.optional-dependencies]
+# telegram = ["Pyrogram>=2.0.102", "TgCrypto>=1.2.5"]
+
+[project.urls]
+documentation = "https://SSmJaE.github.io/PepperBot"
+homepage      = "https://github.com/SSmJaE/PepperBot"
+repository    = "https://github.com/SSmJaE/PepperBot"
+# changelog = "https://github.com/me/spam/blob/master/CHANGELOG.md"
+
+# [project.scripts]
+# pepperbot = "cli:main"
+
+[build-system]
+build-backend = "pdm.backend"
+requires      = ["pdm-backend"]
+
+[tool.pdm.build]
+includes = ["cli", "pepperbot"]
+
+[tool.pdm]
+[tool.pdm.dev-dependencies]
+test = [
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "pytest-mock>=3.10.0",
+    "pytest>=7.2.2",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.pdm.scripts]
+badge = """\
+pytest --cov-report xml --cov-branch --cov=pepperbot ./tests -l -v \
+&& genbadge coverage -i ./coverage.xml -o ./archive/coverage-badge.svg \
+"""
+run = "python private/run.py"
+test = "pytest --cov-report html --cov-branch --cov=pepperbot ./tests -l -v" # 人类可读，xml没法看

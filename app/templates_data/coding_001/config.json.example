@@ -1,0 +1,61 @@
+{
+  "api_keys": {
+    "anthropic": {
+      "api_key": "sk-ant-xxx",
+      "base_url": "https://api.anthropic.com"
+    },
+    "openai": {
+      "api_key": "sk-xxx",
+      "base_url": "https://api.openai.com/v1"
+    },
+    "mistral": {
+      "api_key": "xxx",
+      "base_url": "https://api.mistral.ai"
+    },
+    "browser_use_cloud": {
+      "api_key": "bu_xxx"
+    }
+  },
+  "telegram": {
+    "bot_token": "xxx",
+    "chat_id": "xxx"
+  },
+  "database": {
+    "url": "sqlite:///data/pagefly.db"
+  },
+  "models": {
+    "classifier": "claude-sonnet-4-6",
+    "agent": "claude-sonnet-4-6",
+    "transcription": "gpt-4o-transcribe"
+  },
+  "watcher": {
+    "inbox_dir": "data/inbox",
+    "parallel_limit": 3
+  },
+  "scheduler": {
+    "daily_review": "0 22 * * *",
+    "weekly_review": "0 22 * * 0",
+    "monthly_review": "0 22 1 * *",
+    "compiler": "0 2 * * *",
+    "chat_archive": "55 23 * * *"
+  },
+  "notifications": {
+    "telegram": true
+  },
+  "api": {
+    "port": 8000,
+    "master_token": "your-master-token-change-this",
+    "max_upload_mb": 50
+  },
+  "auth": {
+    "account": "you@example.com",
+    "password_hash": "",
+    "totp_secret": "",
+    "resend_api_key": "",
+    "jwt_secret": "",
+    "jwt_expiry_hours": 24
+  },
+  "app": {
+    "log_level": "INFO"
+  }
+}

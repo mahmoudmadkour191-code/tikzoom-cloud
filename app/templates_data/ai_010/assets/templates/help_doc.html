@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="{{ locale.locale }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module Help</title>
+    <link rel="preconnect" href="{{ 'https://fonts.font.im' if use_font_mirror else 'https://fonts.googleapis.com' }}">
+    <link rel="preconnect" href="{{ 'https://fonts.font.im' if use_font_mirror else 'https://fonts.googleapis.com' }}" crossorigin>
+    <link
+        href="{{ 'https://fonts.font.im' if use_font_mirror else 'https://fonts.googleapis.com' }}/css2?family=Noto+Sans+HK&family=Noto+Sans+JP&family=Noto+Sans+KR&family=Noto+Sans+SC&family=Noto+Sans+TC&family=Noto+Mono&display=swap"
+        rel="stylesheet">
+    <link
+        href="{{ 'https://fonts.font.im' if use_font_mirror else 'https://fonts.googleapis.com' }}/css2?family=Consolas&family=Courier+New&display=swap"
+        rel="stylesheet">
+    <style>
+        html body {
+            margin-top: 0 !important;
+            font-family: 'Noto Sans SC', sans-serif;
+        }
+
+        :lang(ko) {
+            font-family: 'Noto Sans KR', 'Noto Sans JP', 'Noto Sans HK', 'Noto Sans TC', 'Noto Sans SC', sans-serif;
+        }
+
+        :lang(ja) {
+            font-family: 'Noto Sans JP', 'Noto Sans HK', 'Noto Sans TC', 'Noto Sans SC', 'Noto Sans KR', sans-serif;
+        }
+
+        :lang(zh-TW),
+        :lang(zh_TW) {
+            font-family: 'Noto Sans TC', 'Noto Sans HK', 'Noto Sans JP', 'Noto Sans SC', 'Noto Sans KR', sans-serif;
+        }
+
+        :lang(zh-HK) {
+            font-family: 'Noto Sans HK', 'Noto Sans TC', 'Noto Sans JP', 'Noto Sans SC', 'Noto Sans KR', sans-serif;
+        }
+
+        :lang(zh-Hans),
+        :lang(zh-CN),
+        :lang(zh),
+        :lang(zh_CN) {
+            font-family: 'Noto Sans SC', 'Noto Sans HK', 'Noto Sans TC', 'Noto Sans JP', 'Noto Sans KR', sans-serif;
+        }
+
+        {% if module.base %}
+        body {
+            background-color: white;
+            --theme-color-title: #9f430b;
+            --theme-color-main: #e1996d;
+            --theme-color-main-2: #e9af8b;
+            --theme-color-main-3: #f5d9c5;
+            --theme-color-secondary: #fae0de;
+            --theme-color-tertiary: #f8f4fc;
+            --theme-color-highlight: #d6804a;
+        }
+        {% elif module.rss %}
+        body {
+            background-color: white;
+            --theme-color-title: #2d5a27;
+            --theme-color-main: #7dab78;
+            --theme-color-main-2: #96be92;
+            --theme-color-main-3: #cddfc9;
+            --theme-color-secondary: #e8f5e9;
+            --theme-color-tertiary: #f8faf6;
+            --theme-color-highlight: #5a8f55;
+        }
+        {% else %}
+        body {
+            background-color: white;
+            --theme-color-title: #305e7a;
+            --theme-color-main: #8aaec4;
+            --theme-color-main-2: #a2bfd1;
+            --theme-color-main-3: #d1dfe9;
+            --theme-color-secondary: #e5f2f3;
+            --theme-color-tertiary: #f8faf6;
+            --theme-color-highlight: #6d98b3;
+        }
+        {% endif %}
+
+
+        h4 {
+            background-color: var(--theme-color-main-2);
+            padding: .3em 1em;
+            color: white;
+            margin: 0;
+            border-top: 1px solid var(--theme-color-highlight);
+        }
+
+        h5 {
+            background-color: var(--theme-color-secondary);
+            border-top: .5px solid var(--theme-color-highlight);
+            border-bottom: .5px solid #cecece;
+            padding: 5px 10px;
+            color: var(--theme-color-highlight);
+            margin: 0;
+            font-weight: bold;
+        }
+
+        hr {
+        border: 0;
+        border-top: 1px dashed var(--theme-color-main-2);
+        margin: 5px 0;
+        }
+
+        .help-module-name {
+            font-size: 1.6em;
+            margin: .1em 0;
+            padding: .2em .5em;
+            {#color: #ffffff;#}
+            color: var(--theme-color-title);
+            font-family: 'Consolas', 'Noto Sans Mono', 'Courier New', Courier, monospace;
+            font-weight: bolder;
+        }
+
+        .help-module-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1em;
+        }
+
+        .module-type-label {
+            display: inline-flex;
+            align-items: center;
+            gap: .4em;
+            margin-right: .8em;
+            color: var(--theme-color-title);
+            font-size: .9em;
+            white-space: nowrap;
+        }
+
+        .module-type-swatch {
+            width: 1em;
+            height: 1em;
+            box-sizing: border-box;
+            border: 1px solid var(--theme-color-highlight);
+            border-radius: 3px;
+            background-color: var(--theme-color-main);
+        }
+
+        .botbox {
+            width: fit-content;
+            padding: 10px;
+        }
+
+        .help-desc {
+            padding: 0.5em 1em;
+            background-color: var(--theme-color-secondary);
+            border-bottom: 1px solid var(--theme-color-highlight);
+            border-top: 4px solid var(--theme-color-highlight);
+        }
+
+        .help-shard {
+            position: relative;
+            border-bottom: 4px solid var(--theme-color-highlight);
+        }
+
+        .help-commands {
+            width: min-content;
+            display: flex;
+            flex-direction: row;
+            align-items: stretch;
+        }
+
+        .help-shard:nth-child(2n) {
+            background-color: #f7f7f7;
+            border-radius: 5px;
+        }
+
+        .help-sidebar {
+            border-left: 1px solid var(--theme-color-highlight);
+        }
+
+        .authors {
+            padding: .2em .8em;
+            font-size: 0.9em;
+            background-color: var(--theme-color-main);
+            color: white;
+            border-top: 2px solid var(--theme-color-highlight);
+        }
+        {% if module.base %}
+        
+        .authors {
+            display: none;
+        }
+        {% endif %}
+
+        .help-contents {
+            background-color: var(--theme-color-tertiary);
+        }
+
+        .help-detail {
+            border-bottom: .5px solid var(--theme-color-highlight);
+            background-color: var(--theme-color-secondary);
+            white-space: nowrap;
+            padding: 0 1em;
+        }
+
+        .help-note {
+            padding: .2em 1em;
+            color: var(--theme-color-highlight);
+            background-color: var(--theme-color-main-3);
+            border-bottom: 1px solid var(--theme-color-highlight);
+            font-size: 14px;
+        }
+
+        .help-detail:nth-child(2n) {
+            background-color: var(--theme-color-tertiary);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="botbox">
+        <h2>{{ locale.t("core.help.header") }}</h2>
+        <hr>
+        <div class="help-shard">
+            {% set module_type_key = "core.message.help.table.base" if module.base else
+                ("core.message.help.table.subscription" if module.rss else "core.message.help.table.external") %}
+            <div class="help-module-heading">
+                <h3 class="help-module-name"> {{ help_name }} </h3>
+                <div class="module-type-label">
+                    <span class="module-type-swatch" aria-hidden="true"></span>
+                    <span>{{ locale.t(module_type_key) }}</span>
+                </div>
+            </div>
+            {% if module.desc %}
+            <div class="help-desc">{{ locale.t_str(module.desc) }}</div>
+            {%- endif %}
+            <div class="help-contents">
+                <div class="help-commands">
+                    {% set command_doc = help.return_formatted_help_doc().split('\n') %}
+                    {%if help.args %}
+                    <div class="help-command-body">
+                        <h4>{{ locale.t("core.help.commands") }}</h4>
+                        {% for doc in command_doc %}
+                        {% if doc == locale.t("core.help.options") %}
+                        <h5>{{ locale.t("core.help.options") }}</h5>
+                        {% else %}
+                        <div class="help-detail">{{ escape(doc) | safe }}</div>
+                        {% endif %}
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    {% if module.alias %}
+                    <div class="help-sidebar">
+                        <h4>{{ locale.t("core.help.alias") }}</h4>
+                        {% for alias in module.alias %}
+                        <div class="help-detail">{{ alias }} -> {{ module.alias[alias] }}</div>
+                        {%- endfor %}
+                    </div>
+                    {%- endif %}
+                </div>
+                {% if regex_list %}
+                <div class="help-regex">
+                    <h4>{{ locale.t("core.help.regex") }}</h4>
+                    <div class="help-note">{{ locale.t("core.help.regex.note") }}</div>
+                    {% for regex in regex_list %}
+                    {% set pattern = regex.pattern if isinstance(regex.pattern, str) else
+                    (regex.pattern.pattern if isinstance(regex.pattern, repattern) else None) %}
+                    {% if pattern %}
+                    <div class="help-detail">{{ escape(pattern) | safe }} {{
+                        locale.t("core.message.help.regex.detail",
+                        msg=locale.t_str(regex.desc)) if regex.desc else
+                        locale.t("core.message.help.regex.no_information") }}</div>
+                    {%- endif %}
+                    {%- endfor %}
+                    {% if regex_disable_prefixes %}
+                    <div class="help-note">{{ locale.t("core.help.regex.disable_tip",
+                        prefixes=regex_disable_prefixes[0]) }}</div>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+            {% if module.developers %}
+            <div class="authors">
+                {{ locale.t("core.help.author") }}{{ locale.t('message.delimiter').join(module.developers)
+                }}</div>
+            {%- endif %}
+        </div>
+    </div>
+    <script>
+
+        window.onload = function () {
+            const layout = document.querySelector('.content-layout');
+            if (layout.getBoundingClientRect().width >= 1280) {
+                layout.style.setProperty('width', 'min-content')
+                const help_contents_layout = document.querySelector('.help-contents-layout')
+                help_contents_layout.style.setProperty('flex-wrap', 'wrap')
+                const help_alias_layout = document.querySelector('.help-alias-layout')
+                help_alias_layout.style.setProperty('border', 'none')
+                help_alias_layout.style.setProperty('margin', '0')
+                help_alias_layout.style.setProperty('padding', '0')
+                const help_commands = document.querySelector('.help-commands')
+                help_alias_layout.style.setProperty('width', help_commands.getBoundingClientRect().width + 'px')
+
+            }
+            if (layout.getBoundingClientRect().width <= 500) {
+                console.log(layout.getBoundingClientRect().width)
+                const authors = document.querySelector('.help-shard .authors')
+                authors.style.position = 'static'
+            }
+        }
+    </script>
+</body>
+
+</html>

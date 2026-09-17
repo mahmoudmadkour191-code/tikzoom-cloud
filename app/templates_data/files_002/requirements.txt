@@ -1,0 +1,8 @@
+# auto-added by TikZoom curator
+aiofiles
+motor
+mutagen
+psutil
+
+# auto-added by TikZoom curator
+pyrogram

@@ -1,0 +1,86 @@
+
+# All rights reserved.
+#
+
+from pykeyboard import InlineKeyboard
+from pyrogram import filters
+from pyrogram.enums import ButtonStyle
+from pyrogram.types import Message
+
+from config import BANNED_USERS
+from strings import get_string, languages_present, command
+from VenomX import app
+from VenomX.utils.database import get_lang, set_lang
+from VenomX.utils.decorators import ActualAdminCB, language, languageCB
+from VenomX.utils.premium import back_btn, close_btn, custom_btn
+
+# One unique premium emoji per language button
+_LANG_EMOJIS = ["🌟", "🔥", "🚀", "⭐", "💫", "✨", "🎵", "🎶", "🎧", "🎤"]
+
+
+def lanuages_keyboard(_):
+    keyboard = InlineKeyboard(row_width=2)
+    lang_buttons = []
+    for i, lang_key in enumerate(languages_present):
+        lang_buttons.append(
+            custom_btn(
+                languages_present[lang_key],
+                callback_data=f"languages:{lang_key}",
+                style=ButtonStyle.PRIMARY,
+                emoji=_LANG_EMOJIS[i % len(_LANG_EMOJIS)],
+            )
+        )
+    keyboard.add(*lang_buttons)
+    keyboard.row(
+        back_btn(
+            _["BACK_BUTTON"],
+            callback_data=f"settingsback_helper",
+        ),
+        close_btn(_["CLOSE_BUTTON"], callback_data=f"close"),
+    )
+    return keyboard
+
+
+@app.on_message(command("LANGUAGE_COMMAND") & filters.group & ~BANNED_USERS)
+@language
+async def langs_command(client, message: Message, _):
+    keyboard = lanuages_keyboard(_)
+    await message.reply_text(
+        _["setting_1"].format(message.chat.title, message.chat.id),
+        reply_markup=keyboard,
+    )
+
+
+@app.on_callback_query(filters.regex("LG") & ~BANNED_USERS)
+@languageCB
+async def lanuagecb(client, CallbackQuery, _):
+    try:
+        await CallbackQuery.answer()
+    except Exception:
+        pass
+    keyboard = lanuages_keyboard(_)
+    return await CallbackQuery.edit_message_reply_markup(reply_markup=keyboard)
+
+
+@app.on_callback_query(filters.regex(r"languages:(.*?)") & ~BANNED_USERS)
+@ActualAdminCB
+async def language_markup(client, CallbackQuery, _):
+    langauge = (CallbackQuery.data).split(":")[1]
+    old = await get_lang(CallbackQuery.message.chat.id)
+    if str(old) == str(langauge):
+        return await CallbackQuery.answer(
+            "You are already using same language", show_alert=True
+        )
+    try:
+        _ = get_string(langauge)
+        await CallbackQuery.answer(
+            "Your language changed successfully..", show_alert=True
+        )
+    except Exception:
+        return await CallbackQuery.answer(
+            "Failed to change language or language in under Upadte",
+            show_alert=True,
+        )
+    await set_lang(CallbackQuery.message.chat.id, langauge)
+    keyboard = lanuages_keyboard(_)
+    return await CallbackQuery.edit_message_reply_markup(reply_markup=keyboard)

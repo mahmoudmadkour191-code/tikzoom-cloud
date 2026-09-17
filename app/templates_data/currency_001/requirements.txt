@@ -1,0 +1,4 @@
+# auto-added by TikZoom curator
+python-telegram-bot
+SQLAlchemy
+sentry-sdk

@@ -1,0 +1,9 @@
+name: jshunter
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.8
+  - pip
+  - pip:
+    - jshunter>=2.0.0

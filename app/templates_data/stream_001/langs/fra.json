@@ -1,0 +1,99 @@
+{
+    "language_name": "🇫🇷 Français",
+    "language_icon": "🇫🇷",
+    "language_select_error": "❌ Erreur de sélection de language!\n\n{error_text}",
+    "language_select": "Veillez sélectionner la langue de l'interface",
+    "language_changed": "🇫🇷 Vous avez choisi le Français\n\nVous pouvez changer de langue a tout moment en écrivant la commande /lang",
+    "start_message": "Salut, 👋 choomba! 👋\n\n📄 GPT-Telegramus version {version}\n\n💜 Author: Fern (F3RNI)\n💻 Contributeurs:\n🤍 Keepalove (Azarell) (Sprav04ka)\n🤍 Hanssen\n🤍 https://github.com/F33RNI/GPT-Telegramus#-contributors\n\n😺 Page GitHub: https://github.com/F33RNI/GPT-Telegramus\n\n🎵 Soutenir le projet en achetant ma musique: https://f3rni.bandcamp.com",
+    "help_message": "📄 /start - Message de bienvenue et version du bot\n❓ /help - Afficher ce message\n↕️ /module - Modifier le module de chat avec\n🧹 /clear - Effacer l'historique du chat\n🌎 /lang - Changer de langue\n🆔 /chatid - Afficher votre chat_id\n\nMaintenant, Pour commencer, envoyez-moi un message 💬",
+    "help_message_admin": "Commandes de l'administrateur:\n\n💬 /queue - Afficher la file d'attente des requêtes\n🔃 /restart [module, optionnel] - Redémarrer le module (ou tous les modules), recharger la configuration, les langues et les commandes\n👤 /users - Afficher la liste de tous les utilisateurs\n🔨 /ban <id> [reason] - Bloquer un utilisateur par son id avec une raison (facultatif)\n🔓 /unban <id> - Debloquer un utilisateur par son id\n📢 /broadcast <message> - Envoyer un message à tous les utilisateurs, à l'exception des utilisateurs bloqués",
+    "empty_request_module_changed": "✅ Votre module a été modifié en {module_name}\nEnvoyez-moi maintenant votre requête par message",
+    "media_group_response": "Images générées pour la requête \"{request_text}\"",
+    "permissions_deny": "❌ Vous n'avez pas la permission d'utiliser cette commande!",
+    "queue_overflow": "File d'attente est saturée. Réessayer plus tard ⏳",
+    "queue_empty": "🗑 File d'attente est vide",
+    "queue_accepted": "✅ Requête au {module_name} module ajoutée à la file d'attente.\nPosition: {queue_size}/{queue_max} ⏳",
+    "response_error": "❌ Erreur: {error_text}\n\nEffacer l'historique et faire une autre requête ou réessayer plus tard",
+    "empty_message": "⚠️ Message vide! Voir les logs pour plus de détails",
+    "regenerate_error_not_last": "❌ Erreur! Seule la dernière demande peut être re-générée!",
+    "regenerate_error_empty": "❌ Erreur! Requête vide!",
+    "continue_error_not_last": "❌ Erreur! On peut continuer la derniere requête!",
+    "stop_error_not_last": "❌ Erreur! On ne peut interrompre que la dernière requête!",
+    "stop_error": "❌ Erreur! Impossible d'arrêter la génération!",
+    "response_link_format": "\n📄 {source_name}: {link}",
+    "suggestion_format": "💡 {suggestion}",
+    "suggestion_error": "❌ Il est possible d'utiliser uniquement la requête suggérée dans le dernier message!",
+    "users_read_error": "❌ Erreur de lecture ou d'analyse de la liste des utilisateurs!",
+    "users_admin": "Banni? Admin? Nom du language du Module ID - requête\n\n{users_data}",
+    "users_total_stats": "Utilisateurs: {users_num}, bloqués: {banned_num}, Administrateurs: {admins_num}",
+    "restarting": "🙏 Un redémarrage en cours...\nVeuillez patienter",
+    "restarting_done": "{reload_logs}\n✅ Redémarrage terminé",
+    "chat_cleared": "✅ L'historique du chat a été effacé pour {module_name}",
+    "clear_error": "❌ Erreur d'effacement de l'historique du chat!\n\n{error_text}",
+    "clear_select_module": "Sélectionnez le module dont vous souhaitez effacer l'historique du chat\nOu ignorer ce message",
+    "module_select_module": "Module actuel: {current_module}\nSélectionner un module pour le chat\nOu ignorer ce message",
+    "user_cooldown_error": "❌ Veuillez patienter {time_formatted}, avant d'envoyer une requête à {module_name}",
+    "hours": "h",
+    "minutes": "m",
+    "seconds": "s",
+    "ban_message_admin": "✅ Utilisateur bloqué: {banned_user}\n\nRaison: {ban_reason}",
+    "ban_no_user_id": "❌ Erreur! Veuillez préciser user_id",
+    "ban_message_user": "❌ Vous n'êtes pas sur la liste blanche ou vous avez été bloqué!\n\nRaison: {ban_reason}",
+    "ban_reason_default": "Raison non précisée",
+    "unban_message_admin": "✅ Utilisateur débloqué: {unbanned_user}",
+    "broadcast_no_message": "❌ Pas de message à charger!",
+    "broadcast": "📢 {message}",
+    "broadcast_initiated": "⏳ Chargement en cours... Veuillez patienter et ne pas envoyer de nouveaux messages!",
+    "broadcast_done": "✅ Le chargement est terminée ! Messages envoyés aux utilisateurs:\n{broadcast_ok_users}",
+    "style_changed": "✅ Le style de conversation est passé à {changed_style}",
+    "style_change_error": "❌ Erreur changement de style de conversation!\n\n{error_text}",
+    "style_select": "Votre style de conversion: {current_style}\nChoisir un nouveau style de conversation Bing,\nOu ignorer ce message",
+    "style_precise": "📏 Précision",
+    "style_balanced": "⚖️ Équilibré",
+    "style_creative": "🎨 Créative",
+    "model_changed": "✅ Le modèle du module {module_name} a été changé en {changed_model}",
+    "model_select": "Votre modèle du module {module_name} : {current_model}\nSélectionnez le nouveau modèle du module {module_name},\nou ignorez ce message",
+    "model_change_error": "❌ Erreur lors du changement de modèle !\n\n{error_text}",
+    "model_no_models": "❌ Vous ne pouvez pas changer le modèle du module actuel !",
+    "button_model_change": "⚙️ Changer de modèle",
+    "button_stop_generating": "🛑 Arrêter de générer",
+    "button_continue": "⏩ Continuer",
+    "button_regenerate": "🔄 Régénérer",
+    "button_clear": "🧹 Effacer l'historique",
+    "button_module": "↕️ Change de module",
+    "button_style_change": "⚙️ Changer de style",
+    "modules": {
+        "lmao_chatgpt": {
+            "icon": "💬",
+            "name": "ChatGPT (LMAO API)"
+        },
+        "lmao_ms_copilot": {
+            "icon": "🟦",
+            "name": "MS Copilot (LMAO API)"
+        },
+        "chatgpt": {
+            "icon": "💬",
+            "name": "ChatGPT"
+        },
+        "dalle": {
+            "icon": "🖼",
+            "name": "DALL-E"
+        },
+        "ms_copilot": {
+            "icon": "🔵",
+            "name": "MS Copilot"
+        },
+        "ms_copilot_designer": {
+            "icon": "🎨",
+            "name": "MS Copilot designer"
+        },
+        "gemini": {
+            "icon": "♊",
+            "name": "Gemini"
+        },
+        "groq": {
+            "icon": "🔴",
+            "name": "Groq"
+        }
+    }
+}

@@ -1,0 +1,32 @@
+[FORMAT]
+max-line-length = 120
+extension-pkg-whitelist=PyQt5,talib
+
+[DESIGN]
+good-names=f,df,e,x,y,k,v
+max-attributes=40  # TODO: refactor classes as needed to have default at 7
+max-locals=20  # TODO: refactor so it's 15 by default.
+max-public-methods=100  # TODO: Refactor classes into smaller classes as needed.
+
+[MASTER]
+ignore=assets.py
+jobs=4
+
+[MESSAGES CONTROL]
+disable=
+    no-else-return,
+    wrong-import-position,
+    ungrouped-imports,
+    too-few-public-methods,
+    too-many-branches,
+    duplicate-code,
+    arguments-differ,
+    too-many-arguments,
+    broad-except,
+    import-error,
+    fixme,
+    super-with-arguments,
+    inconsistent-return-statements,
+    unused-argument,
+    unnecessary-pass,
+    too-many-lines

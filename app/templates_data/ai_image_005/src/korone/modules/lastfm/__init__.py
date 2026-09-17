@@ -1,0 +1,55 @@
+from aiogram import Router
+from aiogram.utils.chat_action import ChatActionMiddleware
+
+from korone.modules.metadata import ModuleExport, ModuleInlineQuery, ModuleManifest, ModulePackage, ModuleScripts
+from korone.ui import column
+from korone.utils.i18n import LazyProxy
+from korone.utils.i18n import lazy_gettext as l_
+
+from .export import export_lastfm
+from .handlers.album import LastFMAlbumCallbackHandler, LastFMAlbumHandler
+from .handlers.artist import LastFMArtistCallbackHandler, LastFMArtistHandler
+from .handlers.collage import LastFMCollageCallbackHandler, LastFMCollageHandler
+from .handlers.compat import LastFMCompatHandler
+from .handlers.lfm import LastFMStatusCallbackHandler, LastFMStatusHandler
+from .handlers.set import LastFMSetHandler
+from .inline import matches_lastfm_inline, provide_lastfm_inline, shutdown_lastfm_inline
+from .stats import lastfm_stats
+
+router = Router(name="lastfm")
+
+
+def pre_setup() -> None:
+    router.message.middleware(ChatActionMiddleware())
+    router.shutdown.register(shutdown_lastfm_inline)
+
+
+manifest = ModuleManifest(
+    package=ModulePackage(
+        name=l_("Last.fm"),
+        icon="🎵",
+        summary=l_("Last.fm now-playing and profile tools"),
+        description=LazyProxy(
+            lambda: column(l_("Show current scrobbles and fetch album, artist, compatibility, and collage views."))
+        ),
+    ),
+    router=router,
+    handlers=(
+        LastFMSetHandler,
+        LastFMStatusHandler,
+        LastFMStatusCallbackHandler,
+        LastFMAlbumHandler,
+        LastFMAlbumCallbackHandler,
+        LastFMArtistHandler,
+        LastFMArtistCallbackHandler,
+        LastFMCompatHandler,
+        LastFMCollageHandler,
+        LastFMCollageCallbackHandler,
+    ),
+    scripts=ModuleScripts(pre_setup=pre_setup),
+    stats=lastfm_stats,
+    export=ModuleExport(export_lastfm, private_only=True),
+    inline_query=ModuleInlineQuery(
+        provide_lastfm_inline, matcher=matches_lastfm_inline, priority=100, timeout_seconds=5.0
+    ),
+)

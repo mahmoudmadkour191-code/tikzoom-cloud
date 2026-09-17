@@ -1,0 +1,86 @@
+#Italiano - Italia
+it-it: 
+  Start: Inizia
+  Stop: Ferma
+  Movie: Film
+  MovieWithArticle: Film
+  Series: Serie
+  SeriesWithArticle: Serie
+  Start chatting: Inizia a chattare con Addarr su Telegram. La prima volta che usi "start" dovrai inserire la password.
+  End: L'aggiunta/eliminazione di film o serie è terminata.
+  Title: "Inserisci il titolo:"
+  What is this?: È un film o una serie?
+  New: Inizia una nuova ricerca
+  Next result: No, mostra il prossimo risultato
+  Add: Sì, aggiungilo
+  Delete: Sì, eliminare questo
+  StopDelete: No, non voglio cancellarlo
+  Select: Sì, seleziona questo
+  Select a path: Per favore scegli una cartella per il film o per la serie
+  Select a quality: Per favore seleziona un profilo di qualità per il film o la serie
+  Select from which season: Da quale stagione?
+  Selected and future seasons: Stagioni selezionate e future 
+  Season: Stagione
+  Select all seasons: Seleziona tutte le stagioni
+  Deselect all seasons: Deseleziona tutte le stagioni
+  Authorize: Devi prima autenticare questa chat. Qual'è la password?
+  Wrong password: La password è sbagliata. Riprova...
+  Chatid added: "Questa chat è stata aggiunta alla lista delle chat autorizzate. Ora puoi utilizzare il bot. \nSe avevi inviato un comando, dovrai inviarlo di nuovo."
+  NotAdmin: "Devi essere un amministratore per eseguire questo comando."
+  Chatid already allowed: "Chat già autorizzata"
+  Help: "Per leggere questo messaggio, usa /%{help}.
+    \n• Per autenticarti usa /%{authenticate}.
+    \n• Per aggiungere un film o una serie usa /%{add}.
+    \n• Per cancellare una serie o un film usa /%{delete}.
+    \n• Per aggiungere velocemente un film o una serie usa /%{movie} o /%{serie}.
+    \n• Per vedere quali serie sono presenti in Sonarr usa /%{allSeries}.
+    \n• Per vedere quali film sono presenti in Radarr usa /%{allMovies}.
+    \n• Per cambiare la velocità di download di Transmission usa /%{transmission}.
+    \n• To change the up- and download speed of Sabnzbd use /%{sabnzbd}."
+  Missing config: "You are missing the following configkeys in your config.yaml-file: %{missingKeys}.
+    \nAdd these before restarting the bot."
+  Wrong values: "The following configkeys has a wrong value in your config.yaml-file: %{wrongValues}.
+    \nChange these before restarting the bot."
+
+  messages:
+    Add: Si, aggiungi %{subject}
+    This: Vuoi aggiungere questa/o %{subjectWithArticle}?
+    ThisDelete: È questo %{subjectWithArticle} che si vuole cancellare?
+    AddFailed: Oops, non sono riuscito ad aggiungere la/il %{subjectWithArticle}. Riprova.
+    DeleteFailed: Oops, non è riuscito a eliminare %{subjectWithArticle}. Riprova.
+    AddSuccess: "%{subjectWithArticle} aggiunta/o correttamente 🙂"
+    DeleteSuccess: "%{subjectWithArticle} è stato rimosso con successo 🙂 "
+    Exist: "%{subjectWithArticle} già esistente 😉"
+    NoExist: "%{subjectWithArticle} non esiste."
+  
+  searchresults:
+    zero: Nessun risultato
+    one: Un solo risultato
+    other: "%{count} risultati"
+
+  Transmission:
+    NotEnabled: "Le funzioni per Transmission non sono attivate"
+    Speed: "Che limiti di velocità vuoi applicare a Transmission?"
+    TSL: Limiti di velocità alternativi
+    Normal: Velocità normale
+    ChangedToTSL: "Limiti di velocità alternativi attivati."
+    ChangedToNormal: "Limiti di velocità alternativi disattivati."
+
+  Sabnzbd:
+    NotEnabled: "Le funzioni per Sabnzbd non sono attivate"
+    Speed: "Che limiti di velocità vuoi applicare a Sabnzbd?"
+    Limit25: 25%
+    Limit50: 50%
+    Limit100: Nessun limite
+    ChangedTo50: Limite impostato al 50%
+    ChangedTo25: Limite impostato al 25%
+    ChangedTo100: Limite disattivato
+    Error: Errore nell'impostazione della velocità
+
+  Notifications:
+    Stop: l'utente %{first_name} con chat_id %{chat_id} ha interrotto il processo.
+    Start: L'utente %{first_name} con chat_id %{chat_id} ha avviato una nuova richiesta.
+    AddSuccess: Il %{subjectWithArticle} %{title} dell'utente %{first_name} con chat_id %{chat_id} è stato aggiunto.
+    AddFailed: Errore nell'aggiunta del %{subjectWithArticle} %{title} dell'utente %{first_name} con chat_id %{chat_id}.
+    Exist: Il %{subjectWithArticle} %{title} che l'utente %{first_name} con chat_id %{chat_id} voleva aggiungere esiste già.
+    Delete: l'utente %{first_name} con chat_id %{chat_id} ha avviato una nuova eliminazione.

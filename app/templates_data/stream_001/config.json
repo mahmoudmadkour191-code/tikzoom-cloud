@@ -1,0 +1,148 @@
+{
+    "__comment01__": "Version of config file. Please don't change it",
+    "config_version": 8,
+
+    "__comment02__": "General config of enabled modules",
+    "__comment03__": "Available modules: lmao_chatgpt, lmao_ms_copilot, ms_copilot, ms_copilot_designer, gemini, groq",
+    "__comment04__": "NOTE: ms_copilot and ms_copilot_designer modules are DEPRECATED and will be removed soon",
+    "modules": {
+        "__comment01__": "Enabled modules",
+        "enabled": [
+            "lmao_chatgpt",
+            "lmao_ms_copilot",
+            "gemini",
+            "groq"
+        ],
+
+        "__comment02__": "Default (initial) module for handling user messages",
+        "default": "lmao_chatgpt",
+
+        "__comment03__": "Specify modules for which to use web API instead of python package. ex: ['lmao_chatgpt']",
+        "lmao_web_for_modules": [],
+
+        "__comment04__": "LMAO web API URL (without tailing slash)",
+        "lmao_web_api_url": "http://localhost:1312/api",
+
+        "__comment05__": "If needed, specify LMAO API token (from --tokens-manage) argument",
+        "__comment06__": "See <https://github.com/F33RNI/LlM-Api-Open> for more info",
+        "lmao_token_manage": "",
+
+        "__comment07__": "If needed, specify proxy in http://ip:port format (specify http even if it's https proxy)",
+        "__comment08__": "Use http://username:password@ip:port format in case of proxy with authorization",
+        "lmao_web_proxy": ""
+    },
+
+    "__comment05__": "Paths to files and directories",
+    "files": {
+        "module_configs_dir": "module_configs",
+        "users_database": "users.json",
+        "user_images_dir": "user_images",
+        "conversations_dir": "conversations",
+        "data_collecting_dir": "data",
+        "messages_dir": "langs"
+    },
+
+    "__comment06__": "Telegram bot config",
+    "telegram": {
+        "__comment01__": "Provide your bot api key from <https://t.me/BotFather>",
+        "api_key": "",
+
+        "__comment02__": "IDs of users who can use admin commands (to get id, you can use /chatid command)",
+        "admin_ids": [],
+
+        "__comment03__": "Set to true to block new users by default (whitelist)",
+        "ban_by_default": false,
+
+        "__comment04__": "Size of the request queue (other messages will be rejected)",
+        "queue_max": 10,
+
+        "__comment05__": "In how many seconds (can be float) to edit messages (stream responses)",
+        "edit_message_every_seconds_num": 1,
+
+        "__comment06__": "Add cursor character to the end of the message during stream response",
+        "add_cursor_symbol": true,
+        "cursor_symbol": "▯",
+        
+        "__comment07__": "Symbols for /users",
+        "admin_symbol": "🐈‍⬛",
+        "non_admin_symbol": "🐈",
+        "banned_symbol": "🟥",
+        "non_banned_symbol": "🟩",
+
+        "__comment08__": "First message that will be sent to user while module is loading. Leave empty to disable it",
+        "response_initial_message": "⌛️",
+
+        "__comment09__": "If response is larger than this number (in chars), it will be split into multiple messages",
+        "one_message_limit": 3000,
+
+        "__comment10__": "If caption is larger than this number (in chars), it will be split into multiple messages",
+        "one_caption_limit": 1000,
+
+        "__comment11__": "Set to true for the bot to reply to messages as well as direct module commands",
+        "reply_to_messages": true,
+
+        "__comment12__": "How many seconds (can be float) to wait between each message while broadcasting",
+        "broadcast_delay_per_user_seconds": 0.5,
+
+        "__comment13__": "Bot commands description (will be automatically added to the bot) Set",
+        "__comment14__": "commands_description_enabled to false to disable it (you can do it manually via BotFather)",
+        "commands_description_enabled": true,
+        "commands_description": [
+            {
+                "command": "start",
+                "description": "📄 Welcome message and bot version"
+            },
+            {
+                "command": "help",
+                "description": "❓ Show help message"
+            },
+            {
+                "command": "module",
+                "description": "↕ Change module to chat with"
+            },
+            {
+                "command": "model",
+                "description": "⚙️ Change model of module (ex. For 🔴 Groq module)"
+            },
+            {
+                "command": "clear",
+                "description": "🧹 Clear chat history"
+            },
+            {
+                "command": "lang",
+                "description": "🌎 Change the language"
+            },
+            {
+                "command": "chatid",
+                "description": "🆔 Show your chat_id"
+            }
+        ],
+
+        "__comment15__": "If needed, specify proxy in http://ip:port format (specify http even if it's https proxy)",
+        "__comment16__": "Use http://username:password@ip:port format in case of proxy with authorization",
+        "proxy": ""
+    },
+
+    "__comment07__": "Save all requests and responses to the files",
+    "data_collecting": {
+        "__comment01__": "Set true to automatically save all user's requests and responses into data_collecting_dir",
+        "__comment02__": "NOTE: You should notify users if it's enabled!",
+        "enabled": false,
+
+        "__comment03__": "Maximum file size (bytes). If the file exceed this value, a new file will be created",
+        "max_size": 33554432,
+
+        "__comment04__": "Name of each file",
+        "filename_timestamp_format": "%Y_%m_%d_%H_%M_%S",
+        "filename_extension": ".log",
+
+        "__comment05__": "Request log entry format",
+        "request_format": "{timestamp} Request ({container_id}) from {user_name} ({user_id}) to {module_name}: {request}\n\n",
+
+        "__comment06__": "Response log entry format",
+        "response_format": "{timestamp} Response ({container_id}) from {module_name} to {user_name} ({user_id}): {response}\n\n",
+
+        "__comment07__": "Timestamp format",
+        "timestamp_format": "%Y-%m-%d %H:%M:%S"
+    }
+}

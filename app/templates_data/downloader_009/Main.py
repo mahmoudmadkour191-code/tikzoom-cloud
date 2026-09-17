@@ -1,0 +1,101 @@
+import asyncio
+import logging
+import signal
+from contextlib import suppress
+
+from aiogram import Dispatcher
+from aiogram.types import BotCommand
+
+from App.bot import create_bot
+from App.config import load_settings
+from DataBase.mongo import Database
+from Handlers import setup_routers
+from Services.bootstrap import ensure_tools
+from Services.converter import ApksConverter
+from Services.downloader import PlayDownloader
+from Services.jobs import JobRunner
+from Services.nixfile import NixfileUploader
+from Services.rubika import RubikaUploader
+from Services.sweeper import downloads_sweeper, nixfile_link_checker
+
+logger = logging.getLogger(__name__)
+
+
+async def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+
+    logger.info("PlayDL starting")
+    settings = load_settings()
+    logger.info("Settings loaded")
+    await ensure_tools(settings)
+
+    logger.info("Connecting to MongoDB: %s", settings.mongodb_uri)
+    db = Database(settings.mongodb_uri, settings.mongodb_db_name)
+    await db.connect()
+    await db.migrate()
+    logger.info("MongoDB ready: %s", settings.mongodb_db_name)
+
+    bot = create_bot(settings)
+    dp = Dispatcher()
+    dp.include_router(setup_routers())
+
+    nixfile_uploader = NixfileUploader(settings)
+    rubika_uploader = RubikaUploader(settings)
+    if rubika_uploader.enabled:
+        try:
+            await rubika_uploader.connect()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Rubika uploader connect failed at boot (non-fatal): %s", exc)
+    else:
+        logger.info("Rubika uploader disabled — no session file at %s", rubika_uploader.session_path)
+
+    dp["settings"] = settings
+    dp["db"] = db
+    dp["downloader"] = PlayDownloader(settings)
+    dp["converter"] = ApksConverter(settings)
+    dp["job_runner"] = JobRunner(settings.max_parallel_jobs)
+    dp["nixfile_uploader"] = nixfile_uploader
+    dp["rubika_uploader"] = rubika_uploader
+
+    loop = asyncio.get_running_loop()
+
+    def _on_signal() -> None:
+        logger.warning("Shutdown signal received; force-killing chromedriver and stopping polling")
+        nixfile_uploader.force_shutdown()
+        asyncio.create_task(dp.stop_polling())
+
+    for sig_name in ("SIGINT", "SIGTERM"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
+        try:
+            loop.add_signal_handler(sig, _on_signal)
+        except NotImplementedError:
+            signal.signal(sig, lambda *_: _on_signal())
+
+    await bot.set_my_commands([BotCommand(command="start", description="شروع")])
+
+    sweeper_task = asyncio.create_task(downloads_sweeper(settings))
+    link_checker_task = asyncio.create_task(nixfile_link_checker(settings, db))
+
+    try:
+        logger.info("Starting Telegram polling")
+        await dp.start_polling(bot)
+    finally:
+        for task in (sweeper_task, link_checker_task):
+            task.cancel()
+        for task in (sweeper_task, link_checker_task):
+            with suppress(asyncio.CancelledError, Exception):
+                await task
+        nixfile_uploader.force_shutdown()
+        with suppress(Exception):
+            await rubika_uploader.close()
+        await bot.session.close()
+        await db.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

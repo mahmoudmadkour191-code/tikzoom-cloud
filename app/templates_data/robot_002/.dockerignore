@@ -1,0 +1,16 @@
+.env
+test
+run.log
+docs
+.git
+/data/
+/dist/
+/mongodb/
+/rabbitmq
+/redis/
+/llmkira/redis/
+/llmkira/mongodb/
+/docs/test/
+/jobs.sqlite
+/config_dir/*.pem
+/config_dir/*.secret/

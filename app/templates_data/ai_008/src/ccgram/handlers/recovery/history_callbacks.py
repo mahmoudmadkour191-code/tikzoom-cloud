@@ -1,0 +1,98 @@
+"""History pagination callback handler.
+
+Handles inline keyboard callbacks for navigating through message history pages.
+Dispatches CB_HISTORY_PREV and CB_HISTORY_NEXT callbacks to page through
+history results.
+
+Key function: handle_history_callback (uniform callback handler signature).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+import structlog
+
+from telegram import CallbackQuery, Update
+from ...multiplexer import multiplexer as tmux_manager
+from ..callback_data import CB_HISTORY_NEXT, CB_HISTORY_PREV
+from ..callback_helpers import user_owns_window
+from ..callback_tokens import resolve_callback_data
+from ..callback_registry import register
+from ..messaging_pipeline.message_sender import safe_edit
+from .history import send_history
+
+if TYPE_CHECKING:
+    from telegram.ext import ContextTypes
+
+logger = structlog.get_logger()
+
+
+async def handle_history_callback(
+    query: CallbackQuery,
+    _user_id: int,
+    data: str,
+    _update: Update,
+    _context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Handle history pagination callbacks (CB_HISTORY_PREV / CB_HISTORY_NEXT).
+
+    Callback data format: hp:<page>:<window_id>:<start>:<end>
+    or hn:<page>:<window_id>:<start>:<end>.
+    Old format (no byte range): hp:<page>:<window_id>.
+    """
+    prefix_len = len(CB_HISTORY_PREV)  # same length for both
+    rest = data[prefix_len:]
+    try:
+        offset_str, window_payload = rest.split(":", 1)
+        offset = int(offset_str)
+        # A colon-containing legacy ID is still legacy unless its *final two*
+        # fields are integer offsets. Do not infer the new format from field
+        # count alone.
+        try:
+            window_id, start_raw, end_raw = window_payload.rsplit(":", 2)
+            start_byte, end_byte = int(start_raw), int(end_raw)
+            if not window_id:
+                raise ValueError
+        except ValueError:
+            window_id = window_payload
+            start_byte, end_byte = 0, 0
+    except ValueError:  # fmt: skip
+        await query.answer("Invalid data")
+        return
+
+    # Raw callbacks and compact token callbacks both reach this public seam;
+    # enforce ownership here before any multiplexer lookup or history output.
+    if not user_owns_window(_user_id, window_id):
+        await query.answer("Not your session", show_alert=True)
+        return
+
+    w = await tmux_manager.find_window_by_id(window_id)
+    if w:
+        await send_history(
+            query,
+            window_id,
+            offset=offset,
+            edit=True,
+            start_byte=start_byte,
+            end_byte=end_byte,
+            # Don't pass user_id for pagination - offset update only on initial view
+            # This prevents offset from going backwards if new messages arrive while paging
+        )
+    else:
+        await safe_edit(query, "Window no longer exists.")
+    await query.answer("Page updated")
+
+
+# --- Registry dispatch entry point ---
+
+
+@register(CB_HISTORY_PREV, CB_HISTORY_NEXT)
+async def _dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    assert query is not None and query.data is not None and user is not None
+    data = resolve_callback_data(query.data, user.id, user_owns_window)
+    if data is None:
+        await query.answer("This button has expired", show_alert=True)
+        return
+    await handle_history_callback(query, user.id, data, update, context)

@@ -1,0 +1,35 @@
+{
+  "categories": [
+    {
+      "id": "research",
+      "name": "Research",
+      "subcategories": [
+        "semiconductor",
+        "ai",
+        "quant",
+        "macro"
+      ]
+    },
+    {
+      "id": "tech",
+      "name": "Technology",
+      "subcategories": [
+        "frontend",
+        "backend",
+        "ai-engineering",
+        "devops",
+        "tools"
+      ]
+    },
+    {
+      "id": "ideas",
+      "name": "Ideas",
+      "subcategories": []
+    },
+    {
+      "id": "memo",
+      "name": "Memo",
+      "subcategories": []
+    }
+  ]
+}

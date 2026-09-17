@@ -1,0 +1,13 @@
+# dev environment
+.env
+venv
+.venv
+.mega/
+*.session
+NexaBots
+tests
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class

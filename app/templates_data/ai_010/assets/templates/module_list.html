@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="{{ locale.locale }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/mdui@2/mdui.css">
+    <script src="https://unpkg.com/mdui@2/mdui.global.js"></script>
+    <title>Module Help</title>
+    <link rel="preconnect" href="{{ 'https://fonts.font.im' if use_font_mirror else 'https://fonts.googleapis.com' }}">
+    <link rel="preconnect" href="{{ 'https://fonts.font.im' if use_font_mirror else 'https://fonts.googleapis.com' }}" crossorigin>
+    <link
+        href="{{ 'https://fonts.font.im' if use_font_mirror else 'https://fonts.googleapis.com' }}/css2?family=Noto+Sans+HK&family=Noto+Sans+JP&family=Noto+Sans+KR&family=Noto+Sans+SC&family=Noto+Sans+TC&family=Noto+Mono&display=swap"
+        rel="stylesheet">
+    <link
+        href="{{ 'https://fonts.font.im' if use_font_mirror else 'https://fonts.googleapis.com' }}/css2?family=Consolas&family=Courier+New&display=swap"
+        rel="stylesheet">
+    <style>
+        html body {
+            margin-top: 0 !important;
+            font-family: 'Noto Sans SC', sans-serif;
+        }
+
+        :lang(ko) {
+            font-family: 'Noto Sans KR', 'Noto Sans JP', 'Noto Sans HK', 'Noto Sans TC', 'Noto Sans SC', sans-serif;
+        }
+
+        :lang(ja) {
+            font-family: 'Noto Sans JP', 'Noto Sans HK', 'Noto Sans TC', 'Noto Sans SC', 'Noto Sans KR', sans-serif;
+        }
+
+        :lang(zh-TW), :lang(zh_TW) {
+            font-family: 'Noto Sans TC', 'Noto Sans HK', 'Noto Sans JP', 'Noto Sans SC', 'Noto Sans KR', sans-serif;
+        }
+
+        :lang(zh-HK) {
+            font-family: 'Noto Sans HK', 'Noto Sans TC', 'Noto Sans JP', 'Noto Sans SC', 'Noto Sans KR', sans-serif;
+        }
+
+        :lang(zh-Hans), :lang(zh-CN), :lang(zh), :lang(zh_CN) {
+            font-family: 'Noto Sans SC', 'Noto Sans HK', 'Noto Sans TC', 'Noto Sans JP', 'Noto Sans KR', sans-serif;
+        }
+    
+        .content-layout {
+            padding: 10px;
+        }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(5, 120px);
+            justify-content: start;
+            gap: 12px;
+        }
+
+        .grid-item {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 3px;
+            border-radius: 16px;
+            height: 90px;
+            width: 120px;
+            text-align: center;
+            overflow: hidden;
+            justify-content: center;
+            font-weight: bolder;
+            font-size: 10px;
+            margin: 5px 0;
+            word-wrap: break-word;
+            word-break: break-all;
+            white-space: normal;
+            background-color: transparent;
+            }
+
+        .base {
+            background-color: #ffe0cc;
+            color: #8c3a00;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+        }
+
+        .external {
+            background-color: #cce5ff;
+            color: #003d66;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+        }
+
+        .subscription {
+            background-color: #e8f5e9;
+            color: #1b5e20;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+        }
+
+        .disabled {
+            background-color: #d5d5d5;
+            color: #1c1c1c;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+        }
+
+        .dev {
+            font-style: italic;
+            border: 1px solid #74777f;
+        }
+
+        .admin {
+            font-style: italic;
+        }
+
+        .module-name {
+            font-family: 'Consolas', 'Noto Sans Mono', 'Courier New', Courier, monospace;
+            font-size: 12px;
+        }
+
+        .footer {
+            text-align: left;
+            font-size: 16px;
+            white-space: pre-line;
+            line-height: 1.5;
+        }
+
+        .module-type-legend {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px 18px;
+            margin: 8px 0;
+            font-size: 14px;
+        }
+
+        .module-type-legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+        }
+
+        .module-type-legend-swatch {
+            width: 14px;
+            height: 14px;
+            box-sizing: border-box;
+            border: 1px solid rgba(0, 0, 0, 0.25);
+            border-radius: 3px;
+        }
+
+        .module-type-legend-base {
+            background-color: #ffe0cc;
+        }
+
+        .module-type-legend-external {
+            background-color: #cce5ff;
+        }
+
+        .module-type-legend-subscription {
+            background-color: #e8f5e9;
+        }
+
+        .module-type-legend-disabled {
+            background-color: #d5d5d5;
+        }
+
+        .mdui-prose :first-child {
+            margin-top: 5px;
+        }
+        .mdui-prose hr {
+            margin-top: 10px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="botbox mdui-prose">
+        <div class="content-layout">
+        <h2>{{ locale.t("core.message.module.list.header") }}</h2>
+        <hr>
+        {% for title_key, group_class, group_modules in module_groups %}
+        {% if group_modules %}
+        <section class="module-group {{ group_class }}-group">
+            <h3 class="module-group-title">{{ locale.t(title_key) }}</h3>
+            <div class="grid-container">
+            {% for key, value in group_modules.items() %}
+            <div class="grid-item {{ group_class }}{{ ' dev' if value.required_superuser or value.required_base_superuser else '' }}{{ ' disabled' if show_disabled_modules and key not in target_enabled_list and not (value.base or value.required_superuser or value.required_base_superuser) else '' }}">
+                <div class="{% if not (value.required_superuser or value.required_base_superuser) %}{{ 'admin' if value.required_admin else '' }}{% endif %}">
+                    {% set help_=CommandParser(value, msg=msg, module_name=value.module_name,
+                                  command_prefixes=msg.session_info.prefixes, is_superuser=is_superuser) %}
+                    {% set regex_list=value.regex_list.get(msg.session_info.target_from, show_required_superuser=is_superuser, show_required_base_superuser=is_base_superuser) %}
+                    <div class="module-name">{{ value.module_name | e }}</div>
+                    {% if len(help_.args) > 0 %}
+                    <div>{{ locale.t('core.message.help.command_count', count=len(help_.args)) }}</div>
+                    {%- endif %}
+                    {% if len(regex_list) > 0 %}
+                    <div>{{ locale.t('core.message.help.regex_count', count=len(regex_list)) }}</div>
+                    {%- endif %}
+                </div>
+            </div>
+            {%- endfor %}
+            </div>
+        </section>
+        {% endif %}
+        {% endfor %}
+        <hr>
+            <div class="module-type-legend">
+                <span class="module-type-legend-item">
+                    <span class="module-type-legend-swatch module-type-legend-base" aria-hidden="true"></span>
+                    {{ locale.t('core.message.help.table.base') }}
+                </span>
+                <span class="module-type-legend-item">
+                    <span class="module-type-legend-swatch module-type-legend-external" aria-hidden="true"></span>
+                    {{ locale.t('core.message.help.table.external') }}
+                </span>
+                <span class="module-type-legend-item">
+                    <span class="module-type-legend-swatch module-type-legend-subscription" aria-hidden="true"></span>
+                    {{ locale.t('core.message.help.table.subscription') }}
+                </span>
+                {% if show_disabled_modules %}
+                <span class="module-type-legend-item">
+                    <span class="module-type-legend-swatch module-type-legend-disabled" aria-hidden="true"></span>
+                    {{ locale.t('core.message.help.table.disabled') }}
+                </span>
+                {% endif %}
+            </div>
+            <div class="footer">
+                {{ locale.t('core.message.help.prompt', prefix=msg.session_info.prefixes[0]) }}
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,90 @@
+from typing import TYPE_CHECKING, cast
+
+from aiogram import flags
+from aiogram.enums import ButtonStyle
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+from korone.config import CONFIG
+from korone.db.repositories.language import LanguageRepository
+from korone.filters.admin_rights import UserRestricting
+from korone.modules.language.callbacks import SetLangCallback
+from korone.modules.utils_.callbacks import GoToStartCallback
+from korone.ui import UIExpression, column, template
+from korone.utils.handlers import KoroneCallbackQueryHandler
+from korone.utils.i18n import get_i18n
+from korone.utils.i18n import gettext as _
+
+if TYPE_CHECKING:
+    from aiogram.dispatcher.event.handler import CallbackType
+
+    from korone.utils.i18n import I18nNew
+
+
+def build_language_changed_message(language: str, i18n: I18nNew) -> UIExpression:
+    locale = i18n.babels.get(language) or i18n.babel(language)
+    locale_display = i18n.locale_display(locale)
+
+    parts: list[UIExpression | str] = [template(_("Language changed to {new_lang}."), new_lang=locale_display)]
+
+    if language in CONFIG.devs_managed_languages:
+        parts.extend((
+            _("This is the bot's native language."),
+            _("If you find any errors, please file an issue in the GitHub Repository."),
+        ))
+    elif stats := i18n.get_locale_stats(locale_code=language):
+        percent = stats.percent_translated()
+        parts.append(template(_("The language is {percent}% translated."), percent=percent))
+
+        if percent > 99:
+            parts.append(_("In case you find any errors, please file an issue in the GitHub Repository."))
+        else:
+            parts.append(_("Please help us translate this language by completing it on our translations platform."))
+
+    return column(*parts)
+
+
+def build_keyboard(language: str, i18n: I18nNew, *, back_to_start: bool = False) -> InlineKeyboardBuilder:
+    keyboard = InlineKeyboardBuilder()
+
+    if language in CONFIG.devs_managed_languages or (
+        (stats := i18n.get_locale_stats(locale_code=language)) and stats.percent_translated() > 99
+    ):
+        keyboard.button(text=_("🐞 Open GitHub Issues"), url=f"{CONFIG.github_issues}")
+    else:
+        keyboard.button(text=_("🌍 Help Translate"), url=CONFIG.translation_url)
+
+    if back_to_start:
+        keyboard.button(text=_("⬅️ Back"), style=ButtonStyle.PRIMARY, callback_data=GoToStartCallback())
+
+    keyboard.adjust(1)
+
+    return keyboard
+
+
+@flags.help(exclude=True)
+class ApplyLanguageHandler(KoroneCallbackQueryHandler):
+    @classmethod
+    def filters(cls) -> tuple[CallbackType, ...]:
+        return (SetLangCallback.filter(), UserRestricting(admin=True))
+
+    async def handle(self) -> None:
+        if not self.event.data:
+            await self.event.answer(_("Something went wrong."))
+            return
+
+        callback_data = cast("SetLangCallback", self.callback_data)
+        language = callback_data.lang
+        back_to_start = callback_data.back_to_start
+
+        await self.check_for_message()
+        message = self.message
+
+        chat_id = message.chat.id
+
+        await LanguageRepository.set_locale(chat_id, language)
+
+        i18n = get_i18n()
+        text = build_language_changed_message(language, i18n)
+        keyboard = build_keyboard(language, i18n, back_to_start=back_to_start)
+
+        await self.edit_text(text, reply_markup=keyboard.as_markup(), disable_web_page_preview=True)

@@ -1,0 +1,8 @@
+env/
+__pycache__/
+.env
+notes.txt
+sessions/
+build/
+dist/
+*.egg-info/

@@ -1,0 +1,1157 @@
+"""Audio Player plugin — playback control with resume support.
+
+Plays local audio files (folders mounted via NAS or local) and HTTP
+streams (Internet radio). Tracks position in audio_state.json so users
+can resume long audiobooks across pauses, restarts, and other media.
+
+The LLM never sees raw paths or URLs — only labels from settings.json.
+This is by design: see docs/de/architecture/audio-pipeline.md for the
+SSRF/path-traversal threat model.
+
+Phase 1.0: local playback only. Browser/FreeEcho.2 output adapters land in
+later phases.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from ....lib.audio_player_settings import (
+    build_configured_source_map,
+    load_audio_player_settings,
+)
+from ....lib.function_calling import Tool
+from ....lib.logging_utils import log_message
+from ....lib.plugin_base import PluginContext, load_tool_description
+from ....lib.security import TIER_READONLY, TIER_WRITE_DATA
+
+
+def _finite_seconds(value: Any, field_name: str) -> tuple[float, str | None]:
+    """Coerce an LLM-supplied seconds value to a finite float.
+
+    ``json.loads`` accepts ``NaN``/``Infinity`` by default and a non-numeric
+    string raises — both would reach mpv's seek unchecked. Returns (value, None)
+    on success or (0.0, error_message) on invalid/non-finite input.
+    """
+    import math
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return 0.0, f"Invalid {field_name}: {value!r}"
+    if not math.isfinite(f):
+        return 0.0, f"{field_name} must be a finite number"
+    return f, None
+
+
+# Settings-Lektüre und Source-Map leben als lib-SSOT in
+# lib/audio_player_settings.py (weitere Konsumenten: UI-Mixin,
+# TTS-Listen-Filter, FreeEcho2-Voice-Resume).
+
+
+def _make_resolver():  # type: ignore[no-untyped-def]
+    """Build a fresh SourceResolver: filesystem-discovery + http_streams."""
+    from ....lib.audio_sources import SourceResolver
+    return SourceResolver(build_configured_source_map())
+
+
+def _natural_key(p: str) -> list:
+    """Natural-Order-Sortierschlüssel: 'CD 2' < 'CD 10' (ASCII: 10 < 2).
+    Genutzt von _play_folder und dem audio_list-FS-Fallback."""
+    import re as _re
+    return [
+        int(part) if part.isdigit() else part.lower()
+        for part in _re.split(r"(\d+)", p)
+    ]
+
+
+def _resolve_target(ctx: PluginContext, requested: str | None) -> str:
+    """Determine output target.
+
+    Priority:
+      1. Explicit `requested` from the LLM ('local', 'browser:<id>', ...)
+      2. Plugin config default if not 'auto'
+      3. Auto from PluginContext.source
+    """
+    cfg = load_audio_player_settings()
+    default = str(cfg.get("targets", {}).get("default", "auto"))
+
+    if requested:
+        return requested
+
+    if default != "auto":
+        return default
+
+    # Auto-routing from request origin. session_id/metadata sind
+    # Pflichtfelder des PluginContext — keine getattr-Defensive.
+    if ctx.source == "browser":
+        return f"browser:{ctx.session_id}"
+    if ctx.source == "freeecho2":
+        # Room aus PluginContext.metadata (set by freeecho2_channel
+        # process_inbound).
+        room = str(ctx.metadata.get("room", ""))
+        if room:
+            return f"freeecho2:{room}"
+        # Sollte nicht vorkommen (Channel setzt room immer) — sichtbar
+        # machen statt still am Server-mpv zu landen.
+        log_message("audio_player: freeecho2 request without room metadata — routing to 'local'", "warning")
+        return "local"
+    if ctx.source in ("discord", "email", "telegram"):
+        # Text channels — server-side mpv is the only option
+        return "local"
+    return "local"
+
+
+@dataclass
+class AudioPlayerPlugin:
+    name: str = "audio_player"
+    display_name: str = "Audio Player"
+    description: str = (
+        "Spielt lokale Audio-Dateien und Internet-Streams (Musik, Hörbücher, "
+        "Radio) mit Pause/Resume und Positions-Speicherung ab."
+    )
+    # Triggers a custom settings modal (vs. credential_fields-based):
+    # the Plugin-Tab gear icon dispatches this state event name.
+    settings_event_name: str = "open_audio_settings"
+
+    def is_available(self) -> bool:
+        return True
+
+    # Quellen, die Audio STEUERN dürfen: User am Bildschirm + Voice-Puck
+    # (Kern-Use-Case "spiel Musik im Wohnzimmer"). Externe Message-Kanäle
+    # (email/telegram/discord) und unbeaufsichtigte Trigger (scheduler/
+    # webhook/cron) bekommen die Steuer-Tools gar nicht erst gelistet —
+    # eine Prompt-Injection aus einer Mail darf kein nächtliches
+    # Audio-Blasting oder Stop-all auf beliebigen Speakern auslösen (A7).
+    # Die Tools bleiben bewusst TIER_READONLY (sonst wäre der Puck auf
+    # TIER_COMMUNICATE raus) — das Gate läuft über die Source, wie bei den
+    # EPIM-Passwort-Writes (A8). Lese-Tools (status/list/search/targets)
+    # bleiben für alle Quellen verfügbar.
+    _CONTROL_SOURCES = ("browser", "freeecho2")
+
+    def get_tools(self, ctx: PluginContext) -> list[Tool]:
+        read_tools = [
+            self._tool_status(ctx),
+            self._tool_list(),
+            self._tool_list_unfinished(),
+            self._tool_targets(ctx),
+            self._tool_search(),
+        ]
+        if ctx.source not in self._CONTROL_SOURCES:
+            return read_tools
+        return [
+            self._tool_play(ctx),
+            self._tool_play_folder(ctx),
+            self._tool_pause(ctx),
+            self._tool_resume(ctx),
+            self._tool_stop(ctx),
+            self._tool_seek(ctx),
+            self._tool_skip(ctx),
+            self._tool_speed(ctx),
+            self._tool_index_rebuild(),
+        ] + read_tools
+
+    # ── Tool factories ───────────────────────────────────
+
+    async def _route_play(
+        self,
+        ctx: PluginContext,
+        src,  # ResolvedSource
+        target: str | None,
+        start_pos_sec: float | None,
+    ) -> dict[str, Any]:
+        """Route a resolved audio source via the AudioOutputChannel registry.
+
+        Picks the channel that ``can_handle()`` the resolved target_id and
+        delegates ``play()`` to it. Single source of truth shared by
+        audio_play and audio_resume.
+        """
+        from ....lib import audio_channels
+        target_id = _resolve_target(ctx, target)
+        channel = audio_channels.resolve(target_id)
+        if channel is None:
+            return {
+                "success": False,
+                "target": target_id,
+                "error": (
+                    f"No output channel can handle target '{target_id}'. "
+                    f"Available channels: {[c.name for c in audio_channels.all_channels()]}"
+                ),
+            }
+
+        # mpv-Save-Interval beim Local-Channel synchronisieren — die anderen
+        # Channels haben keinen mpv-State.
+        if channel.name == "local":
+            from ....lib.audio_manager import audio_manager
+            settings = load_audio_player_settings()
+            interval = settings.get("resume", {}).get("position_save_interval_sec", 60)
+            audio_manager.configure_save_interval(int(interval))
+
+        return await channel.play(src, target_id, start_pos_sec, ctx)
+
+    def _tool_play(self, ctx: PluginContext) -> Tool:
+        async def _play(item: str, target: str | None = None, restart: bool = True) -> str:
+            from ....lib.audio_state import audio_state
+            try:
+                resolver = _make_resolver()
+                src = resolver.resolve(item)
+            except ValueError as exc:
+                return json.dumps({"success": False, "error": str(exc)})
+
+            # Determine start position from saved state (unless restart).
+            # Default for ``restart`` is True — Smart-Speaker convention:
+            # "play X" starts from the beginning. For continue-from-saved-
+            # position, the LLM either calls audio_resume() or sets
+            # restart=False explicitly.
+            start_pos: float | None = None
+            if not restart and not src.is_stream:
+                existing = audio_state.get(src.state_key)
+                if existing and not existing.get("completed"):
+                    start_pos = float(existing.get("pos_sec", 0)) or None
+
+            result = await self._route_play(ctx, src, target, start_pos)
+            # Audio startet — keine Sprach-Bestaetigung noetig (Smart-Speaker-
+            # UX: User sagt "Spiele X" → X laeuft direkt, ohne dass der
+            # Butler erklaert was er tut). send_reply respektiert das Flag
+            # via outbound.metadata und skippt TTS-Render+Send.
+            if isinstance(result, dict) and result.get("success"):
+                result["silent_reply"] = True
+            return json.dumps(result)
+
+        return Tool(
+            name="audio_play",
+            # READONLY: Audio-Wiedergabe ist operativ, nicht destruktiv —
+            # ändert keine User-Daten, nur Player-State + Position-Save.
+            # Ohne diesen Tier kann der freeecho2-Channel (TIER_COMMUNICATE=1)
+            # das Tool nicht aufrufen → Voice-Steuerung wäre kaputt.
+            tier=TIER_READONLY,
+            description=(
+                load_tool_description(__file__, "audio_play")
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "item": {
+                        "type": "string",
+                        "description": "Source label or label/relative-path (e.g. 'swr3', 'hoerbuecher/foo.mp3')",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Output destination. Omit to route to the request's origin. Use audio_targets() to list options.",
+                    },
+                    "restart": {
+                        "type": "boolean",
+                        "description": "Default: true (start from beginning). Set false to resume from saved position — equivalent to calling audio_resume.",
+                        "default": True,
+                    },
+                },
+                "required": ["item"],
+            },
+            executor=_play,
+        )
+
+    def _tool_play_folder(self, ctx: PluginContext) -> Tool:  # noqa: PLR0915
+        """Sequential playback of all audio files in a folder, alphabetically."""
+
+        async def _play_folder(
+            folder: str,
+            target: str | None = None,
+            shuffle: bool = False,
+        ) -> str:
+            from ....lib.audio_sources import ALLOWED_EXTENSIONS
+
+            # Parse "label" or "label/sub/path"
+            if "/" in folder:
+                label, sub = folder.split("/", 1)
+                sub = sub.strip("/")
+            else:
+                label, sub = folder, ""
+
+            # Resolve source — must be a local_folder, not an http_stream.
+            sources = build_configured_source_map()
+            cfg = sources.get(label)
+            if cfg is None:
+                available = list(sources.keys())
+                return json.dumps({
+                    "success": False,
+                    "error": f"Unknown source label: '{label}'. Available: {available}",
+                })
+            if cfg.get("type") != "local_folder":
+                return json.dumps({
+                    "success": False,
+                    "error": f"Source '{label}' is not a local folder (type={cfg.get('type')!r})",
+                })
+
+            root = Path(str(cfg.get("path", ""))).expanduser().resolve()
+            if not root.is_dir():
+                return json.dumps({
+                    "success": False,
+                    "error": f"Source path does not exist: {root}",
+                })
+
+            # Path-traversal guard (lib-SSOT, gleiches Muster wie der Resolver)
+            from ....lib.audio_sources import safe_subpath
+            target_dir = safe_subpath(root, sub)
+            if target_dir is None:
+                return json.dumps({"success": False, "error": f"Path '{sub}' escapes source folder"})
+            if not target_dir.is_dir():
+                return json.dumps({
+                    "success": False,
+                    "error": f"Folder not found in '{label}': {sub or '(root)'}",
+                })
+
+            # Recursively gather audio files; sort with natural-order so
+            # 'CD 1' < 'CD 2' < 'CD 10' (ASCII would order 1<10<2).
+            files: list[str] = []
+            for f in target_dir.rglob("*"):
+                if not f.is_file():
+                    continue
+                if f.suffix.lower() not in ALLOWED_EXTENSIONS:
+                    continue
+                try:
+                    rel = f.relative_to(root)
+                except ValueError:
+                    continue
+                files.append(str(rel))
+
+            files.sort(key=_natural_key)
+
+            if shuffle:
+                import random as _random
+                _random.shuffle(files)
+
+            if not files:
+                return json.dumps({
+                    "success": False,
+                    "error": f"No audio files found in '{label}/{sub}'",
+                })
+
+            target_id = _resolve_target(ctx, target)
+
+            # Build channel-agnostic queue items. ``uri`` is the LOCAL
+            # filesystem path — what mpv-based channels (FreeEcho.2, local)
+            # need directly. The browser channel transforms ``state_key``
+            # to its REST endpoint internally (``/api/audio/file?key=…``).
+            # Centralising the URL-form choice in each channel avoids the
+            # earlier bug where the tool baked the browser-form URL for
+            # every target (mpv saw "/api/..." as malformed URL → Connection
+            # refused).
+            queue_items: list[dict[str, str]] = []
+            for rel_path in files:
+                state_key = f"{label}/{rel_path}"
+                local_uri = str(root / rel_path)
+                queue_items.append({"state_key": state_key, "uri": local_uri})
+
+            # audio_type fuer die ganze Queue aus dem Source ableiten
+            # statt hartkodiert "music". Hoerbuecher-Folder soll als
+            # "speech" laufen (richtige VU-Anzeige am Puck), Wecker-
+            # Folder als "alarm" usw. Erste Datei bestimmt die Klasse —
+            # ein Folder ist typisch homogen.
+            from ....lib.audio_sources import resolve_audio_type
+            source_default = str(cfg.get("audio_type", "music"))
+            queue_audio_type = resolve_audio_type(
+                label, files[0] if files else "",
+                source_default=source_default,
+            )
+
+            from ....lib import audio_channels
+            channel = audio_channels.resolve(target_id)
+            if channel is None:
+                return json.dumps({
+                    "success": False,
+                    "target": target_id,
+                    "error": f"No output channel can handle target '{target_id}'",
+                })
+
+            try:
+                # shuffle=False: die Liste ist oben bereits (einmal) gemischt —
+                # ein zweites Channel-Shuffle würde die zurückgegebene
+                # files-Preview von der echten Abspielreihenfolge entkoppeln.
+                result = await channel.play_queue(
+                    queue_items, target_id, ctx,
+                    audio_type=queue_audio_type,
+                    shuffle=False,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return json.dumps({
+                    "success": False,
+                    "target": target_id,
+                    "error": f"play_queue failed: {exc}",
+                })
+
+            if not result.get("success"):
+                return json.dumps({**result, "label": label, "folder": sub or "(root)"})
+
+            return json.dumps({
+                **result,
+                "label": label,
+                "folder": sub or "(root)",
+                "files": files[:10] + (["..."] if len(files) > 10 else []),
+                "silent_reply": True,
+            })
+
+        return Tool(
+            name="audio_play_folder",
+            tier=TIER_READONLY,
+            description=(
+                load_tool_description(__file__, "audio_play_folder")
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "folder": {
+                        "type": "string",
+                        "description": "Source label or label/sub/path (e.g. 'hoerbuecher', 'hoerbuecher/Tolkien_HdR').",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Output destination. Omit to auto-route to where the request came from (FreeEcho.2 wake → that FreeEcho.2; browser input → that tab).",
+                    },
+                    "shuffle": {
+                        "type": "boolean",
+                        "description": "Play tracks in random order. Default: false (natural alphabetical).",
+                        "default": False,
+                    },
+                },
+                "required": ["folder"],
+            },
+            executor=_play_folder,
+        )
+
+    async def _dispatch_action(
+        self,
+        ctx: PluginContext,
+        action: str,
+        target: str | None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Apply a Channel-method to one or many targets.
+
+        ``action`` ist der Methoden-Name auf ``AudioOutputChannel`` (z.B.
+        ``"pause"``, ``"stop"``, ``"set_speed"``).
+
+        Target-Resolution (konsistent mit ``audio_play``):
+
+        * ``None`` / ``""`` / ``"default"`` / ``"auto"`` → Auto-Target via
+          ``_resolve_target(ctx, None)``. Das ist das gleiche Target dem
+          die Anfrage gilt (FreeEcho.2-Wake → freeecho2:<room>; Browser-Tippeingabe
+          → browser:<session>; CLI/Cron → local).
+        * ``"all"`` → iteriert **alle** Channels' aktive Targets. Für
+          „Stoppe alles" / „Mute everything".
+        * ``"<channel>:<id>"`` (z.B. ``"freeecho2:wohnzimmer"``) → spezifisches
+          Target. Channel wird per Registry resolved.
+        """
+        from ....lib import audio_channels
+
+        # Normalisiere Target-Strings
+        if target is not None and not isinstance(target, str):
+            target = str(target)
+        if target is not None:
+            target = target.strip()
+
+        # "all" → alle Channels iterieren
+        if target == "all":
+            results: list[dict[str, Any]] = []
+            for ch in audio_channels.all_channels():
+                for tinfo in ch.list_targets(ctx):
+                    method = getattr(ch, action)
+                    try:
+                        ok = await method(tinfo.id, **kwargs, ctx=ctx)
+                    except Exception as exc:  # noqa: BLE001
+                        results.append({"target": tinfo.id, "ok": False, "error": str(exc)})
+                        continue
+                    # Auch Falsy-Ergebnisse listen ("nichts lief auf diesem
+                    # Target") — vorher verschwanden sie kommentarlos und
+                    # "actions": [] las sich wie Erfolg.
+                    results.append({"target": tinfo.id, "ok": bool(ok)})
+            return {"success": True, "mode": "all", "actions": results}
+
+        # Auto-Target — None, leer, "default", "auto" → resolve aus ctx
+        if target in (None, "", "default", "auto"):
+            target = _resolve_target(ctx, None)
+
+        channel = audio_channels.resolve(target) if target else None
+        if channel is None:
+            return {
+                "success": False,
+                "target": target,
+                "error": (
+                    f"No output channel for target '{target}'. "
+                    f"Use audio_targets() to see valid IDs, or 'all' to "
+                    f"affect every active stream."
+                ),
+            }
+        method = getattr(channel, action)
+        try:
+            ok = await method(target, **kwargs, ctx=ctx)
+        except Exception as exc:  # noqa: BLE001
+            return {"success": False, "target": target, "error": str(exc)}
+        return {"success": True, "target": target, "ok": bool(ok)}
+
+    def _tool_pause(self, ctx: PluginContext) -> Tool:
+        async def _pause(target: str | None = None) -> str:
+            return json.dumps(await self._dispatch_action(ctx, "pause", target))
+
+        return Tool(
+            name="audio_pause",
+            tier=TIER_READONLY,
+            description=(
+                load_tool_description(__file__, "audio_pause")
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "Optional. Omit for auto-target (request origin). "
+                            "Use 'all' for every active stream, or a specific "
+                            "id like 'freeecho2:wohnzimmer' / 'browser:abc123' / "
+                            "'local'. Use audio_targets() to list available."
+                        ),
+                    },
+                },
+            },
+            executor=_pause,
+        )
+
+    def _tool_resume(self, ctx: PluginContext) -> Tool:
+        async def _resume(item: str | None = None, target: str | None = None) -> str:
+            """Smart resume — handles three cases with one call:
+
+            1. item explicitly passed → load that specific state_key from
+               saved position (with pre-roll for audiobooks) on the routed
+               output target.
+            2. Some channel has a paused stream (and no item passed) →
+               unpause that one. Fast path, no fresh I/O.
+            3. Player stopped/idle → fall back to the most recently played
+               unfinished item from audio_state, with pre-roll, routed to
+               the appropriate target.
+            """
+            from ....lib import audio_channels
+            from ....lib.audio_state import audio_state
+
+            # Case 2: fast path for paused stream unpause. Only when caller
+            # didn't ask for a specific item. Explicit item always means
+            # "load this from saved pos" — even if something else is paused,
+            # that something is to be replaced.
+            if not item:
+                if target:
+                    ch = audio_channels.resolve(target)
+                    if ch is not None:
+                        ok = await ch.resume(target, ctx=ctx)
+                        if ok:
+                            return json.dumps({
+                                "success": True, "resumed": True,
+                                "method": "unpause", "target": target,
+                                "silent_reply": True,
+                            })
+                else:
+                    # Iterate all channels, unpause the first that has a paused stream
+                    for ch in audio_channels.all_channels():
+                        for tinfo in ch.list_targets(ctx):
+                            try:
+                                ok = await ch.resume(tinfo.id, ctx=ctx)
+                            except Exception as exc:  # noqa: BLE001
+                                # Nicht still verschlucken — der nächste
+                                # Kandidat wird trotzdem probiert.
+                                log_message(
+                                    f"audio_resume: {tinfo.id} failed: {exc}",
+                                    "warning",
+                                )
+                                continue
+                            if ok:
+                                return json.dumps({
+                                    "success": True, "resumed": True,
+                                    "method": "unpause", "target": tinfo.id,
+                                    "silent_reply": True,
+                                })
+
+            # Case 1 + 3: load from saved position with pre-roll, routed
+            # to the appropriate output (browser/local/freeecho2).
+            settings = load_audio_player_settings()
+            resume_cfg = settings.get("resume", {})
+            pre_roll = float(resume_cfg.get("pre_roll_sec", 7))
+            pre_roll_streams = bool(resume_cfg.get("pre_roll_for_streams", False))
+            min_dur_for_pre_roll = float(resume_cfg.get("min_audio_duration_for_pre_roll_sec", 60))
+
+            key = item or audio_state.last_played_key()
+            if not key:
+                return json.dumps({
+                    "success": False,
+                    "error": "no paused playback and no unfinished audio in state",
+                })
+
+            entry = audio_state.get(key)
+            if not entry:
+                return json.dumps({"success": False, "error": f"no saved position for '{key}'"})
+
+            saved_pos = float(entry.get("pos_sec", 0))
+            duration = entry.get("duration_sec")
+
+            # Resolve the state_key against the source registry so we get a
+            # proper ResolvedSource (with label, is_stream, uri, …) — same
+            # path audio_play takes. This is what makes browser routing work.
+            try:
+                resolver = _make_resolver()
+                src = resolver.resolve(key)
+            except ValueError as exc:
+                return json.dumps({"success": False, "error": f"cannot resolve '{key}': {exc}"})
+
+            apply_pre_roll = pre_roll > 0 and not (src.is_stream and not pre_roll_streams)
+            if apply_pre_roll and duration is not None and duration < min_dur_for_pre_roll:
+                apply_pre_roll = False
+            start_pos = max(0.0, saved_pos - pre_roll) if apply_pre_roll else saved_pos
+
+            result = await self._route_play(ctx, src, target, start_pos)
+            if not result.get("success"):
+                return json.dumps(result)
+
+            # Augment the play-result with resume-specific bookkeeping
+            started_pos = float(result.get("resumed_at_sec", 0.0))
+            result.update({
+                "method": "saved-position",
+                "saved_pos_sec": saved_pos,
+                "started_pos_sec": started_pos,
+                "pre_roll_applied_sec": max(0.0, saved_pos - started_pos),
+                "silent_reply": True,
+            })
+            return json.dumps(result)
+
+        return Tool(
+            name="audio_resume",
+            # Audio-Wiedergabe ist operativ, nicht destruktiv. Ohne dies
+            # kann der freeecho2-Channel das Tool nicht nutzen.
+            tier=TIER_READONLY,
+            description=(
+                load_tool_description(__file__, "audio_resume")
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "item": {
+                        "type": "string",
+                        "description": "Optional state_key from audio_list_unfinished() to resume a specific audio. Omit to unpause the current player or resume the most recent unfinished item.",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Output destination ('browser:<id>', 'local', 'freeecho2:<room>'). Omit to auto-route.",
+                    },
+                },
+            },
+            executor=_resume,
+        )
+
+    def _tool_stop(self, ctx: PluginContext) -> Tool:
+        async def _stop(target: str | None = None) -> str:
+            return json.dumps(await self._dispatch_action(ctx, "stop", target))
+
+        return Tool(
+            name="audio_stop",
+            tier=TIER_READONLY,
+            description=(
+                load_tool_description(__file__, "audio_stop")
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "Optional. Omit for auto-target (request origin). "
+                            "Use 'all' for every active stream, or a specific "
+                            "id like 'freeecho2:wohnzimmer'. Use audio_targets() "
+                            "to list available."
+                        ),
+                    },
+                },
+            },
+            executor=_stop,
+        )
+
+    def _tool_seek(self, ctx: PluginContext) -> Tool:
+        async def _seek(position_sec: float, target: str | None = None) -> str:
+            pos, err = _finite_seconds(position_sec, "position_sec")
+            if err:
+                return json.dumps({"success": False, "error": err})
+            result = await self._dispatch_action(
+                ctx, "seek", target, position_sec=pos, relative=False,
+            )
+            result["position_sec"] = pos
+            return json.dumps(result)
+
+        return Tool(
+            name="audio_seek",
+            tier=TIER_READONLY,
+            description=load_tool_description(__file__, "audio_seek"),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "position_sec": {
+                        "type": "number",
+                        "description": "Target position in seconds from start.",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Optional target id. Omit to seek the auto-resolved target.",
+                    },
+                },
+                "required": ["position_sec"],
+            },
+            executor=_seek,
+        )
+
+    def _tool_skip(self, ctx: PluginContext) -> Tool:
+        async def _skip(delta_sec: float, target: str | None = None) -> str:
+            delta, err = _finite_seconds(delta_sec, "delta_sec")
+            if err:
+                return json.dumps({"success": False, "error": err})
+            result = await self._dispatch_action(
+                ctx, "seek", target, position_sec=delta, relative=True,
+            )
+            result["delta_sec"] = delta
+            return json.dumps(result)
+
+        return Tool(
+            name="audio_skip",
+            tier=TIER_READONLY,
+            description=load_tool_description(__file__, "audio_skip"),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "delta_sec": {
+                        "type": "number",
+                        "description": "Seconds to skip. Positive = forward, negative = backward.",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Optional target id. Omit to skip on the auto-resolved target.",
+                    },
+                },
+                "required": ["delta_sec"],
+            },
+            executor=_skip,
+        )
+
+    def _tool_speed(self, ctx: PluginContext) -> Tool:
+        async def _speed(factor: float, target: str | None = None) -> str:
+            # Gleiche Lücke wie bei seek/skip: json.loads akzeptiert
+            # NaN/Infinity, freeecho2 reicht roh an mpv-IPC durch.
+            value, err = _finite_seconds(factor, "factor")
+            if err:
+                return json.dumps({"success": False, "error": err})
+            result = await self._dispatch_action(
+                ctx, "set_speed", target, factor=value,
+            )
+            result["speed"] = value
+            return json.dumps(result)
+
+        return Tool(
+            name="audio_speed",
+            tier=TIER_READONLY,
+            description=load_tool_description(__file__, "audio_speed"),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "factor": {
+                        "type": "number",
+                        "description": "Speed multiplier (0.25 to 4.0).",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Optional target id. Omit to apply on the auto-resolved target.",
+                    },
+                },
+                "required": ["factor"],
+            },
+            executor=_speed,
+        )
+
+    def _tool_status(self, ctx: PluginContext) -> Tool:
+        async def _status(target: str | None = None) -> str:
+            from ....lib import audio_channels
+            if target:
+                ch = audio_channels.resolve(target)
+                if ch is None:
+                    return json.dumps({"error": f"unknown target: {target}"})
+                return json.dumps(await ch.status(target, ctx=ctx))
+            # Sammle Status aller Channels' Targets
+            statuses: list[dict[str, Any]] = []
+            for ch in audio_channels.all_channels():
+                for tinfo in ch.list_targets(ctx):
+                    try:
+                        st = await ch.status(tinfo.id, ctx=ctx)
+                    except Exception as exc:  # noqa: BLE001
+                        st = {"error": str(exc)}
+                    st["target"] = tinfo.id
+                    statuses.append(st)
+            return json.dumps({"targets": statuses})
+
+        return Tool(
+            name="audio_status",
+            tier=TIER_READONLY,
+            description=(
+                load_tool_description(__file__, "audio_status")
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Optional target id. Omit to get all targets.",
+                    },
+                },
+            },
+            executor=_status,
+        )
+
+    def _tool_list(self) -> Tool:
+        async def _list(
+            source: str | None = None,
+            subdir: str | None = None,
+            limit: int | None = None,
+        ) -> str:
+            # limit=None (default) → return ALL files. The token-budget cap
+            # in tool_output_cap.py protects the context if the result is huge.
+            # Caller can pass an explicit limit to cap earlier.
+            resolver = _make_resolver()
+            if source is None:
+                # Top-level: just list configured sources + per-source counts
+                from ....lib.audio_index import audio_index
+                stats = audio_index.stats()
+                sources = resolver.list_sources()
+                for s in sources:
+                    s["indexed"] = stats["per_source"].get(s["label"], 0)
+                return json.dumps({"sources": sources})
+
+            # Prefer index lookup (fast, scales to 100k+ files); fall back
+            # to filesystem rglob when index is empty for this source.
+            from ....lib.audio_index import audio_index
+            from ....lib.audio_sources import ALLOWED_EXTENSIONS
+            stats = audio_index.stats()
+            if stats["per_source"].get(source, 0) > 0:
+                rows = audio_index.list_subdir(source, subdir or "", limit=limit)
+                items = [r["rel_path"] for r in rows]
+                return json.dumps({
+                    "source": source,
+                    "subdir": subdir or "",
+                    "items": items,
+                    "count": len(items),
+                    "indexed": stats["per_source"][source],
+                    "via": "index",
+                })
+
+            # Fallback: live filesystem walk (bounded by subdir if given).
+            # Use the resolver (filesystem-discovery + http_streams) instead
+            # of just settings.json, so we can give precise error messages:
+            # - source unknown → list available sources
+            # - source is http_stream → tell user it's not browsable
+            available = [s["label"] for s in resolver.list_sources()]
+            if source not in available:
+                return json.dumps({
+                    "source": source, "items": [], "count": 0,
+                    "error": (
+                        f"Unknown source: '{source}'. "
+                        f"Available top-level sources: {available} "
+                        f"(case-sensitive!). For a free-text search across "
+                        f"ID3-tags (artist/album/title), filenames and "
+                        f"sub-folders use audio_search(query='{source}') — "
+                        f"that's case-insensitive and matches what the user "
+                        f"actually meant. '{source}' may live as a sub-folder "
+                        f"or genre tag inside one of the available sources."
+                    ),
+                })
+            src_info: dict = next(
+                (s for s in resolver.list_sources() if s["label"] == source),
+                {},
+            )
+            if src_info.get("type") != "local_folder":
+                return json.dumps({
+                    "source": source, "items": [], "count": 0,
+                    "error": (
+                        f"Source '{source}' is an http_stream, not a folder. "
+                        f"Use audio_play(item='{source}') to play it directly."
+                    ),
+                })
+            from ....lib.audio_sources import safe_subpath
+            source_root = Path(str(src_info["target"])).expanduser().resolve()
+            # Traversal-Guard über die lib-SSOT (gleiches Muster wie Resolver
+            # und _play_folder — dieser FS-Fallback rglob'te früher überall hin)
+            root = safe_subpath(source_root, subdir or "")
+            if root is None:
+                return json.dumps({
+                    "source": source, "items": [], "count": 0,
+                    "error": f"Path '{subdir}' escapes source folder",
+                })
+            if not root.is_dir():
+                return json.dumps({
+                    "source": source, "items": [], "count": 0,
+                    "error": f"path not found: {root}",
+                })
+            items = [
+                str(p.relative_to(root))
+                for p in root.rglob("*")
+                if p.is_file() and p.suffix.lower() in ALLOWED_EXTENSIONS
+            ]
+            # Erst sortieren (Natural-Order wie _play_folder: 'CD 2' vor
+            # 'CD 10'), DANN limitieren — vorher brach der Walk mitten in
+            # Dateisystem-Reihenfolge ab und lieferte eine willkürliche
+            # Teilmenge statt der ersten N.
+            items.sort(key=_natural_key)
+            truncated = limit is not None and limit > 0 and len(items) > limit
+            if truncated:
+                items = items[:limit]
+            return json.dumps({
+                "source": source,
+                "subdir": subdir or "",
+                "items": items,
+                "count": len(items),
+                "truncated": truncated,
+                "via": "filesystem (no index)",
+            })
+
+        return Tool(
+            name="audio_list",
+            tier=TIER_READONLY,
+            description=(
+                load_tool_description(__file__, "audio_list")
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "Source label. Omit to list all sources with item counts.",
+                    },
+                    "subdir": {
+                        "type": "string",
+                        "description": "Optional sub-path inside the source (e.g. 'Klassik/Mozart') to narrow listing.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Optional cap on returned items. Omit (default) to return ALL — the token-budget cap protects context if the result is huge.",
+                    },
+                },
+            },
+            executor=_list,
+        )
+
+    def _tool_search(self) -> Tool:
+        async def _search(query: str, source: str | None = None, limit: int | None = None) -> str:
+            from ....lib.audio_index import audio_index
+            # limit=None → all matches. Token-budget cap in tool_output_cap.py
+            # protects the context if a query yields very many hits.
+            rows = audio_index.search(query=query, source=source, limit=limit)
+            results = [
+                {
+                    "state_key": f"{r['source']}/{r['rel_path']}",
+                    "source": r["source"],
+                    "rel_path": r["rel_path"],
+                    "filename": r["filename"],
+                    "artist": r.get("artist"),
+                    "album": r.get("album"),
+                    "title": r.get("title"),
+                    "year": r.get("year"),
+                    "genre": r.get("genre"),
+                    "duration_sec": r.get("duration"),
+                }
+                for r in rows
+            ]
+            return json.dumps({
+                "query": query,
+                "source": source,
+                "count": len(results),
+                "results": results,
+            })
+
+        return Tool(
+            name="audio_search",
+            tier=TIER_READONLY,
+            description=(
+                load_tool_description(__file__, "audio_search")
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search terms. Will be AND-combined as prefix match.",
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Optional source label to limit search scope.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Optional cap on returned hits. Omit (default) to return ALL matches — the token-budget cap protects context if a query yields very many.",
+                    },
+                },
+                "required": ["query"],
+            },
+            executor=_search,
+        )
+
+    def _tool_index_rebuild(self) -> Tool:
+        async def _rebuild(source: str | None = None, force: bool = False) -> str:
+            import functools
+            from ....lib.audio_index import audio_index
+            from ....lib.audio_sources import build_source_map
+            from ....lib.config import MEDIA_AUDIO_DIR
+            # Local folders are auto-discovered from MEDIA_AUDIO_DIR — the
+            # settings.json "sources" block only holds http_streams (not
+            # indexable). Same source map the UI rebuild uses.
+            local = {
+                k: v for k, v in build_source_map(MEDIA_AUDIO_DIR, {}).items()
+                if v.get("type") == "local_folder"
+            }
+            if source is not None and source not in local:
+                return json.dumps({
+                    "error": f"Unknown local source: {source}",
+                    "available": sorted(local),
+                })
+            targets = {source: local[source]} if source else local
+            results = []
+            for label, src_cfg in targets.items():
+                path = src_cfg.get("path", "")
+                if not path:
+                    continue
+                # Run scan in thread to avoid blocking the event loop
+                # (NFS scan can take minutes for large mounts)
+                loop = asyncio.get_running_loop()
+                stats = await loop.run_in_executor(
+                    None,
+                    functools.partial(audio_index.scan_source, label, path, force=force),
+                )
+                results.append({
+                    "source": label,
+                    "scanned": stats.scanned,
+                    "inserted": stats.inserted,
+                    "updated": stats.updated,
+                    "deleted": stats.deleted,
+                    "errors": stats.errors,
+                    "elapsed_sec": round(stats.elapsed_sec, 1),
+                    "force": force,
+                })
+            return json.dumps({"results": results, "total_sources": len(results)})
+
+        return Tool(
+            name="audio_index_rebuild",
+            tier=TIER_WRITE_DATA,
+            description=(
+                load_tool_description(__file__, "audio_index_rebuild")
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "Source label. Omit to rebuild all local_folder sources.",
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "If true, ignore mtime and re-read tags for every file.",
+                        "default": False,
+                    },
+                },
+            },
+            executor=_rebuild,
+        )
+
+    def _tool_list_unfinished(self) -> Tool:
+        async def _list_unfinished() -> str:
+            from ....lib.audio_state import audio_state
+            return json.dumps({"items": audio_state.list_unfinished()})
+
+        return Tool(
+            name="audio_list_unfinished",
+            tier=TIER_READONLY,
+            description=(
+                load_tool_description(__file__, "audio_list_unfinished")
+            ),
+            parameters={"type": "object", "properties": {}},
+            executor=_list_unfinished,
+        )
+
+    def _tool_targets(self, ctx: PluginContext) -> Tool:
+        async def _targets() -> str:
+            from ....lib import audio_channels
+            targets = audio_channels.all_targets(ctx)
+            # Browser-Target unterdrücken wenn die Anfrage nicht von einem
+            # Browser kommt (sonst meldet jeder Channel-Listener das mit).
+            if ctx.source != "browser":
+                targets = [t for t in targets if not t.id.startswith("browser")]
+            available = [
+                {"id": t.id, "label": t.label, "ready": t.ready} for t in targets
+            ]
+            default = _resolve_target(ctx, None)
+            return json.dumps({"available": available, "default": default})
+
+        return Tool(
+            name="audio_targets",
+            tier=TIER_READONLY,
+            description=load_tool_description(__file__, "audio_targets"),
+            parameters={"type": "object", "properties": {}},
+            executor=_targets,
+        )
+
+    # ── ToolPlugin Protocol ──────────────────────────────
+
+    def get_prompt_instructions(self, lang: str, granted_tools: "set[str] | None" = None) -> str:
+        # Kein Hardcoding — atomare Fragmente in prompts/<de|en>/ beim Plugin.
+        from ....lib.plugin_base import load_plugin_instructions
+        return load_plugin_instructions(self, lang, granted_tools)
+
+    def get_ui_status(self, tool_name: str, tool_args: dict[str, Any], lang: str) -> str:
+        from ....lib.formatting import format_number
+        from ....lib.i18n import t
+
+        def _num(value: Any, decimals: int = 0) -> str:
+            # LLM-Args können Nicht-Zahlen sein; Status-Rendering darf nie werfen.
+            try:
+                return format_number(float(value), decimals, locale=lang)
+            except (TypeError, ValueError):
+                return str(value)
+
+        if tool_name == "audio_play":
+            return t("tool_audio_play", lang=lang, item=tool_args.get("item", "?"))
+        if tool_name == "audio_play_folder":
+            return t("tool_audio_play_folder", lang=lang, folder=tool_args.get("folder", "?"))
+        if tool_name == "audio_pause":
+            return t("tool_audio_pause", lang=lang)
+        if tool_name == "audio_resume":
+            it = tool_args.get("item")
+            if it:
+                return t("tool_audio_resume_item", lang=lang, item=it)
+            return t("tool_audio_resume", lang=lang)
+        if tool_name == "audio_stop":
+            return t("tool_audio_stop", lang=lang)
+        if tool_name == "audio_seek":
+            return t("tool_audio_seek", lang=lang, position=_num(tool_args.get("position_sec", 0)))
+        if tool_name == "audio_skip":
+            d = tool_args.get("delta_sec", 0)
+            try:
+                sign = "+" if float(d) >= 0 else ""
+            except (TypeError, ValueError):
+                sign = ""
+            return t("tool_audio_skip", lang=lang, delta=f"{sign}{_num(d)}")
+        if tool_name == "audio_speed":
+            return t("tool_audio_speed", lang=lang, factor=_num(tool_args.get("factor", 1), 2))
+        if tool_name == "audio_status":
+            return t("tool_audio_status", lang=lang)
+        if tool_name == "audio_list":
+            return t("tool_audio_list", lang=lang)
+        if tool_name == "audio_search":
+            return t("tool_audio_search", lang=lang, query=str(tool_args.get("query", ""))[:50])
+        if tool_name == "audio_list_unfinished":
+            return t("tool_audio_list_unfinished", lang=lang)
+        if tool_name == "audio_targets":
+            return t("tool_audio_targets", lang=lang)
+        if tool_name == "audio_index_rebuild":
+            return t("tool_audio_index_rebuild", lang=lang)
+        return ""
+
+
+plugin = AudioPlayerPlugin()

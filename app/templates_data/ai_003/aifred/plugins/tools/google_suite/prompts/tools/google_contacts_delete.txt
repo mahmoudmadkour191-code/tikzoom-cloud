@@ -1,0 +1,1 @@
+Delete a contact. resource_name comes from google_contacts_search.

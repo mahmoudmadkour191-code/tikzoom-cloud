@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3>{{ 'Новый товар' if not item else ('Товар #' ~ item.id) }}</h3>
+  <form action="{{ '/admin/items/new' if not item else ('/admin/items/' ~ item.id) }}" method="post" enctype="multipart/form-data" class="grid" style="margin-top:12px;">
+    <!-- Тип товара (первым) -->
+    <div>
+      <label>Тип товара *</label>
+      <select name="item_type" id="itemType" required onchange="updateFormFields()">
+        {% for t in ItemType %}
+        {% if t.value == 'service' or t.value == 'digital' %}
+        <option value="{{ t.value }}" {% if item and item.item_type==t %}selected{% endif %}>
+          {{ {'service': 'Услуга', 'digital': 'Цифровой товар'}[t.value] }}
+        </option>
+        {% endif %}
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Общие поля -->
+    <div class="grid" style="grid-template-columns: 1fr; gap:16px;">
+      <div>
+        <label>Название *</label>
+        <input name="title" value="{{ item.title if item else '' }}" required />
+      </div>
+      <div>
+        <label>Описание *</label>
+        <div class="editor-toolbar">
+          <button type="button" onclick="insertMarkdown('**', '**')" title="Жирный">B</button>
+          <button type="button" onclick="insertMarkdown('*', '*')" title="Курсив">I</button>
+          <button type="button" onclick="insertMarkdown('`', '`')" title="Код">Code</button>
+          <button type="button" onclick="insertHeading()" title="Заголовок">H3</button>
+          <button type="button" onclick="insertLink()" title="Ссылка">Link</button>
+          <button type="button" onclick="insertList()" title="Список">List</button>
+        </div>
+        <textarea name="description" id="description" rows="8" required placeholder="Поддерживается Markdown (жирный, курсив, списки, заголовки, ссылки)">{{ item.description if item else '' }}</textarea>
+      </div>
+      <div>
+        <label>Цена (в рублях) *</label>
+        <input name="price_minor" type="number" min="0" step="1" 
+               value="{{ (item.price_minor / 100) if item else 0 }}" required 
+               onchange="this.value=Math.round(this.value)" />
+      </div>
+      <div>
+        <label>Изображение карточки товара</label>
+        <input type="file" name="image" accept="image/*" />
+      </div>
+    </div>
+
+    <!-- Поля для услуг -->
+    <div id="serviceFields" style="display:none;" class="grid">
+      <div>
+        <label>Способ оплаты *</label>
+        <select name="pricing_type">
+          <option value="per_hour" {% if item and item.pricing_type=='per_hour' %}selected{% endif %}>За час</option>
+          <option value="per_service" {% if item and item.pricing_type=='per_service' %}selected{% endif %}>За услугу</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Поля для цифровых товаров -->
+    <div id="digitalFields" style="display:none;" class="grid">
+      <div>
+        <label>Способ доставки *</label>
+        <select name="delivery_type" onchange="updateDeliveryFields()">
+          <option value="file" {% if item and item.delivery_type=='file' %}selected{% endif %}>Файл</option>
+          <option value="github" {% if item and item.delivery_type=='github' %}selected{% endif %}>GitHub репозиторий</option>
+          <option value="codes" {% if item and item.delivery_type=='codes' %}selected{% endif %}>TXT коды</option>
+        </select>
+      </div>
+      <div id="fileDelivery">
+        <label>Файл товара{% if not item %} *{% endif %}</label>
+        <input type="file" name="digital_file" />
+        {% if item and item.digital_file_path %}
+          <div style="color:#9aa4b2; font-size:12px; margin-top:4px;">Текущий файл: {{ item.digital_file_path }}</div>
+        {% endif %}
+      </div>
+      <div id="githubDelivery" style="display:none;">
+        <label>GitHub репозиторий (формат: owner/repo) *</label>
+        <input name="github_repo_read_grant" value="{{ item.github_repo_read_grant if item else '' }}" 
+               placeholder="например: username/repo-name" />
+      </div>
+      <div id="codesDelivery" style="display:none;">
+        <label>TXT с позициями (по одной в строке) *</label>
+        <input type="file" name="codes_file" accept=".txt" />
+      </div>
+    </div>
+
+    <!-- Поля для модулей удалены -->
+    </div>
+    <div class="row" style="justify-content:flex-end;">
+      <button type="submit" class="btn btn-primary">Сохранить</button>
+    </div>
+  </form>
+</div>
+
+<script>
+function setEnabled(container, enabled){
+  const nodes = container.querySelectorAll('input, select, textarea, button');
+  nodes.forEach(n => {
+    if(enabled){
+      n.removeAttribute('disabled');
+    }else{
+      n.setAttribute('disabled','disabled');
+    }
+  });
+}
+
+function updateFormFields() {
+  const itemType = document.getElementById('itemType').value;
+  
+  // Скрываем все специфичные поля
+  const serviceEl = document.getElementById('serviceFields');
+  const digitalEl = document.getElementById('digitalFields');
+  serviceEl.style.display = 'none'; setEnabled(serviceEl, false);
+  digitalEl.style.display = 'none'; setEnabled(digitalEl, false);
+  
+  // Показываем поля в зависимости от типа
+  if (itemType === 'service') {
+    serviceEl.style.display = 'grid'; setEnabled(serviceEl, true);
+  } else if (itemType === 'digital') {
+    digitalEl.style.display = 'grid'; setEnabled(digitalEl, true);
+    updateDeliveryFields();
+  }
+}
+
+function updateDeliveryFields() {
+  const deliveryType = document.querySelector('select[name="delivery_type"]').value;
+  const fileDel = document.getElementById('fileDelivery');
+  const ghDel = document.getElementById('githubDelivery');
+  const codesDel = document.getElementById('codesDelivery');
+  const isFile = deliveryType === 'file';
+  const isCodes = deliveryType === 'codes';
+  fileDel.style.display = isFile ? 'block' : 'none';
+  ghDel.style.display = (deliveryType === 'github') ? 'block' : 'none';
+  codesDel.style.display = isCodes ? 'block' : 'none';
+  setEnabled(fileDel, isFile);
+  setEnabled(ghDel, (!isFile && !isCodes));
+  setEnabled(codesDel, isCodes);
+}
+
+function insertMarkdown(prefix, suffix) {
+  const textarea = document.getElementById('description');
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const text = textarea.value;
+  
+  const selectedText = text.substring(start, end);
+  const replacement = prefix + selectedText + suffix;
+  
+  textarea.value = text.substring(0, start) + replacement + text.substring(end);
+  textarea.focus();
+  textarea.selectionStart = start + prefix.length;
+  textarea.selectionEnd = end + prefix.length;
+}
+
+function insertList() {
+  const textarea = document.getElementById('description');
+  const start = textarea.selectionStart;
+  const text = textarea.value;
+  
+  const newList = "\n- Пункт 1\n- Пункт 2\n- Пункт 3\n";
+  
+  textarea.value = text.substring(0, start) + newList + text.substring(start);
+  textarea.focus();
+  textarea.selectionStart = start + newList.length;
+  textarea.selectionEnd = start + newList.length;
+}
+
+function insertHeading(){
+  insertAtStart("\n### Заголовок\n");
+}
+
+function insertLink(){
+  const textarea = document.getElementById('description');
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const text = textarea.value;
+  const sel = text.substring(start, end) || 'текст ссылки';
+  const link = `[${sel}](https://example.com)`;
+  textarea.value = text.substring(0, start) + link + text.substring(end);
+  textarea.focus();
+  textarea.selectionStart = start + 1;
+  textarea.selectionEnd = start + 1 + sel.length;
+}
+
+function insertAtStart(snippet){
+  const textarea = document.getElementById('description');
+  const start = textarea.selectionStart;
+  const text = textarea.value;
+  textarea.value = text.substring(0, start) + snippet + text.substring(start);
+  textarea.focus();
+  textarea.selectionStart = start + snippet.length;
+  textarea.selectionEnd = start + snippet.length;
+}
+
+// Инициализация при загрузке
+document.addEventListener('DOMContentLoaded', function() {
+  updateFormFields();
+});
+</script>
+
+<style>
+.editor-toolbar {
+  margin-bottom: 8px;
+  display: flex;
+  gap: 4px;
+}
+.editor-toolbar button {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+</style>
+{% endblock %}

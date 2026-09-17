@@ -1,0 +1,16 @@
+__pycache__
+.idea
+.vscode
+.venv
+data
+*.json
+!sample.json
+.stignore
+*.js
+*.db
+*.db-shm
+*.db-wal
+*.log*
+
+dist/
+.tmp/

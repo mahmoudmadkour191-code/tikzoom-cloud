@@ -1,0 +1,351 @@
+import os
+from typing import Any, Unpack
+
+from loguru import logger
+from openai.types.chat import ChatCompletionToolParam
+from openai.types.shared_params import FunctionDefinition
+
+from chibi.config import application_settings, gpt_settings
+from chibi.memory.chroma import memory
+from chibi.services.providers.tools.exceptions import ToolException
+from chibi.services.providers.tools.tool import ChibiTool
+from chibi.services.providers.tools.utils import AdditionalOptions, resolve_session_context
+from chibi.services.user import (
+    activate_llm_skill,
+    deactivate_llm_skill,
+    drop_tool_call_history,
+    get_chibi_user,
+    reset_chat_history,
+    set_info,
+    set_thread_working_dir,
+)
+
+
+class SetUserInfoTool(ChibiTool):
+    register = True
+    definition = ChatCompletionToolParam(
+        type="function",
+        function=FunctionDefinition(
+            name="set_user_info",
+            description=(
+                "Set user info that is important for YOU and YOUR job."
+                "Important: this function will override the current user info!"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "new_user_info": {"type": "string", "description": "New user info."},
+                },
+                "required": ["new_user_info"],
+            },
+        ),
+    )
+    name = "set_user_info"
+
+    @classmethod
+    async def function(cls, new_user_info: str, **kwargs: Unpack[AdditionalOptions]) -> dict[str, str]:
+        user_id = kwargs.get("user_id")
+        if not user_id:
+            raise ValueError("This function requires user_id to be automatically provided.")
+        caller_model = kwargs.get("caller_model", "unknown model")
+        logger.log(
+            "TOOL",
+            f"[{caller_model}] Setting new user info about user #{user_id}: {new_user_info}",
+        )
+        await set_info(user_id=user_id, new_info=new_user_info)
+        return {"status": "ok"}
+
+
+class SetWorkingDirTool(ChibiTool):
+    register = gpt_settings.filesystem_access
+    definition = ChatCompletionToolParam(
+        type="function",
+        function=FunctionDefinition(
+            name="set_working_dir",
+            description=(
+                "Set a directory as a default CWD for 'run_command_in_terminal' tool. "
+                "The override is scoped to the CURRENT thread/conversation only: other threads "
+                "and conversations are not affected and keep using the global default from settings."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "new_wd": {"type": "string", "description": "Absolute path of the new working directory"},
+                },
+                "required": ["new_wd"],
+            },
+        ),
+    )
+    name = "set_working_dir"
+
+    @classmethod
+    async def function(cls, new_wd: str, **kwargs: Unpack[AdditionalOptions]) -> dict[str, str]:
+        user_id = kwargs.get("user_id")
+        if not user_id:
+            raise ValueError("This function requires user_id to be automatically provided.")
+        _, thread_id = resolve_session_context(**kwargs)
+        logger.log(
+            "TOOL",
+            f"[{kwargs.get('caller_model', 'unknown model')}] Setting new working DIR for user #{user_id}, "
+            f"thread #{thread_id}: {new_wd}",
+        )
+        await set_thread_working_dir(user_id=user_id, thread_id=thread_id, new_wd=new_wd)
+        return {"status": "ok"}
+
+
+class GetCurrentWorkingDirTool(ChibiTool):
+    register = gpt_settings.filesystem_access
+    definition = ChatCompletionToolParam(
+        type="function",
+        function=FunctionDefinition(
+            name="get_current_working_dir",
+            description=(
+                "Get the effective CWD for the current user in the CURRENT thread/conversation: "
+                "a thread-level override wins over the global default from settings."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        ),
+    )
+    name = "get_current_working_dir"
+
+    @classmethod
+    async def function(cls, **kwargs: Unpack[AdditionalOptions]) -> dict[str, str]:
+        user_id = kwargs.get("user_id")
+        if not user_id:
+            raise ValueError("This function requires user_id to be automatically provided.")
+        _, thread_id = resolve_session_context(**kwargs)
+        user = await get_chibi_user(user_id=user_id)
+        cwd = user.get_effective_working_dir(thread_id=thread_id)
+        logger.log(
+            "TOOL",
+            f"[{kwargs.get('caller_model', 'unknown model')}] Getting CWD for user #{user_id}, "
+            f"thread #{thread_id}: {cwd}",
+        )
+        return {"cwd": cwd}
+
+
+class ClearToolCallHistoryTool(ChibiTool):
+    register = True
+    definition = ChatCompletionToolParam(
+        type="function",
+        function=FunctionDefinition(
+            name="clear_tool_call_history",
+            description=(
+                "Clear the tool call history, replacing it with summary provided. "
+                "Use this tool fully independently and autonomously. "
+                "All tool call history excluding THIS one (call & result) will be dropped. "
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": (
+                            "Provide a proper summary that you want to use to replace all the "
+                            "information obtained as a result of the tool calls."
+                        ),
+                    },
+                },
+                "required": ["summary"],
+            },
+        ),
+    )
+    name = "clear_tool_call_history"
+
+    @classmethod
+    async def function(cls, **kwargs: Unpack[AdditionalOptions]) -> dict[str, str]:
+        user_id = kwargs.get("user_id")
+        if not user_id:
+            raise ToolException("This function requires user_id to be automatically provided.")
+        interface = cls.get_interface(kwargs=kwargs)
+
+        logger.log("TOOL", f"[{kwargs.get('caller_model', 'unknown model')}] Clearing tool call history")
+        await drop_tool_call_history(storage_id=user_id, thread_id=interface.thread_id)
+        return {"status": "ok"}
+
+
+class SummarizeHistoryTool(ChibiTool):
+    register = True
+    definition = ChatCompletionToolParam(
+        type="function",
+        function=FunctionDefinition(
+            name="summarize_history",
+            description=(
+                "Clear the whole chat history, replacing it with summary provided. Provide "
+                "EXHAUSTIVE summary. Use this tool fully independently and autonomously."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "Provide a proper summary that you want to use to replace ALL the dialog.",
+                    },
+                },
+                "required": ["summary"],
+            },
+        ),
+    )
+    name = "summarize_history"
+
+    @classmethod
+    async def function(cls, summary: str, **kwargs: Unpack[AdditionalOptions]) -> dict[str, str]:
+        user_id = kwargs.get("user_id")
+        if not user_id:
+            raise ToolException("This function requires user_id to be automatically provided.")
+        interface = cls.get_interface(kwargs=kwargs)
+
+        logger.log("TOOL", f"[{kwargs.get('caller_model', 'unknown model')}] Summarizing chat...")
+        await reset_chat_history(storage_id=user_id, thread_id=interface.thread_id)
+        # await drop_history(storage_id=user_id, thread_id=interface.thread_id)
+        if application_settings.log_prompt_data:
+            logger.log("TOOL", f"[{kwargs.get('caller_model', 'unknown model')}] Summary: {summary}")
+        return {"status": "ok"}
+
+
+class LoadBuiltinSkillTool(ChibiTool):
+    register = True
+    definition = ChatCompletionToolParam(
+        type="function",
+        function=FunctionDefinition(
+            name="load_builtin_skill",
+            description="Load built-in skill to system prompt.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "skill_name": {"type": "string", "description": "Skill name including file extension if provided"},
+                },
+                "required": ["skill_name"],
+            },
+        ),
+    )
+    name = "load_builtin_skill"
+
+    @classmethod
+    async def function(cls, skill_name: str, **kwargs: Unpack[AdditionalOptions]) -> dict[str, str]:
+        user_id = kwargs.get("user_id")
+        if not user_id:
+            raise ValueError("This function requires user_id to be automatically provided.")
+        logger.log(
+            "TOOL",
+            f"[{kwargs.get('caller_model', 'unknown model')}] Loading '{skill_name}' skill for user {user_id}...",
+        )
+        skill_path = os.path.join(application_settings.skills_dir, skill_name)
+        if not os.path.exists(skill_path):
+            raise ToolException(f"Skill '{skill_name}' does not exist.")
+
+        with open(skill_path, "rt", encoding="utf-8") as skill_file:
+            skill_payload = skill_file.read()
+            await activate_llm_skill(user_id=user_id, skill_name=skill_name, skill_payload=skill_payload)
+        return {"status": "ok"}
+
+
+class UnloadSkillTool(ChibiTool):
+    register = True
+    definition = ChatCompletionToolParam(
+        type="function",
+        function=FunctionDefinition(
+            name="unload_skill",
+            description="Unload activated but unused skill from system prompt.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "skill_name": {"type": "string", "description": "Skill name how it defined"},
+                },
+                "required": ["skill_name"],
+            },
+        ),
+    )
+    name = "unload_skill"
+
+    @classmethod
+    async def function(cls, skill_name: str, **kwargs: Unpack[AdditionalOptions]) -> dict[str, str]:
+        user_id = kwargs.get("user_id")
+        if not user_id:
+            raise ValueError("This function requires user_id to be automatically provided.")
+        logger.log(
+            "TOOL",
+            f"[{kwargs.get('caller_model', 'unknown model')}] Unloading '{skill_name}' skill for user {user_id}...",
+        )
+        await deactivate_llm_skill(user_id=user_id, skill_name=skill_name)
+        return {"status": "ok"}
+
+
+class SearchInConversationHistoryTool(ChibiTool):
+    """Tool to search through conversation history using semantic search.
+
+    This tool allows the AI agent to search through past conversations
+    using natural language queries. Requires ChromaDB to be configured.
+
+    Attributes:
+        register: Whether to register this tool (requires memory to be configured).
+        name: Tool name.
+        definition: Tool definition for OpenAI API.
+    """
+
+    register = bool(memory)
+    name = "search_in_conversation_history"
+
+    definition = ChatCompletionToolParam(
+        type="function",
+        function=FunctionDefinition(
+            name="search_in_conversation_history",
+            description="Search through your conversation history using semantic search.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Natural language search query"},
+                    "limit": {
+                        "type": "integer",
+                        "description": ("Maximum number of results to return"),
+                        "default": application_settings.memory_search_limit,
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
+    )
+
+    @classmethod
+    async def function(
+        cls, query: str, limit: int | None = None, **kwargs: Unpack[AdditionalOptions]
+    ) -> dict[str, Any]:
+        """Search through conversation history.
+
+        Args:
+            query: Natural language search query.
+            limit: Maximum number of results (default from settings).
+            kwargs: Additional options including user_id.
+
+        Returns:
+            Dictionary with search results and count.
+
+        Raises:
+            ToolException: If memory is not configured.
+            ValueError: If user_id is not provided.
+        """
+        if memory is None:
+            raise ToolException("Semantic memory is not configured.")
+
+        user_id = kwargs.get("user_id")
+        if not user_id:
+            raise ValueError("This function requires user_id to be automatically provided.")
+
+        interface = cls.get_interface(kwargs=kwargs)
+        thread_id = interface.thread_id
+
+        results = await memory.search(
+            user_id=user_id,
+            query=query,
+            n_results=limit or application_settings.memory_search_limit,
+            thread_id=thread_id,
+        )
+
+        if not results:
+            return {"message": "No matching conversations found"}
+
+        return {"results": results, "count": len(results)}

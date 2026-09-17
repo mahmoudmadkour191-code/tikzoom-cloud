@@ -1,0 +1,9 @@
+client_name = "Discord"
+
+sender_prefix = f"{client_name}|Client"
+sender_prefix_list = [sender_prefix]
+
+target_channel_prefix = f"{client_name}|Channel"
+target_dm_channel_prefix = f"{client_name}|DM|Channel"
+target_guild_prefix = f"{client_name}|Guild"
+target_prefix_list = [target_channel_prefix, target_dm_channel_prefix, target_guild_prefix]

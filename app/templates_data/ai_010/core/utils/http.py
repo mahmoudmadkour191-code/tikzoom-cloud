@@ -1,0 +1,474 @@
+"""基于 `httpx` 的互联网请求工具，用于让机器人请求外部网站。
+
+请勿在本项目中导入并使用 `request`，否则可能会导致阻塞问题。
+"""
+
+import asyncio
+import ipaddress
+import re
+import socket
+import urllib.parse
+import uuid
+from http.cookies import SimpleCookie
+from pathlib import Path
+from typing import Any
+
+import filetype as ft
+import httpx
+from aiofile import async_open
+from tenacity import retry, wait_fixed, stop_after_attempt
+
+from core.config.base import CoreConfig, CoreSecretConfig
+from core.constants.exceptions import ExternalException
+from core.constants.path import cache_path
+from core.constants.info import Info
+from core.logger import Logger
+
+debug = CoreConfig.debug
+proxy = CoreSecretConfig.proxy if CoreSecretConfig.proxy else None
+repo_url = CoreConfig.repo_url
+
+url_pattern = re.compile(
+    r"\b(?:http[s]?:\/\/)?(?:[a-zA-Z0-9\-\:_@]+\.)+[a-zA-Z]{2,}(?:\/[a-zA-Z0-9-._~:\/?#[\]@!$&\'()*+,;=%]*)?\b"
+)
+
+
+async def _resolve_hostname(hostname: str, port: int) -> set[str]:
+    """异步解析主机名并返回解析到的全部地址。"""
+    loop = asyncio.get_running_loop()
+    addr_info = await loop.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    return {entry[4][0] for entry in addr_info}
+
+
+def _is_global_unicast(address: str) -> bool:
+    ip = ipaddress.ip_address(address)
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return ip.is_global and not ip.is_multicast
+
+
+async def private_ip_check(url: str):
+    """检查 URL 是否只会解析到公网单播 IP 地址。
+
+    :param url: 需要检查的 URL。
+    :raise ValueError: URL 无有效主机名，或解析到了非公网单播 IP 地址。
+    """
+    parsed_url = urllib.parse.urlparse(url)
+    hostname = parsed_url.hostname
+    if not hostname:
+        raise ValueError(f"Unable to determine hostname from URL: {url}")
+
+    try:
+        addresses = {str(ipaddress.ip_address(hostname))}
+    except ValueError:
+        port = parsed_url.port or (443 if parsed_url.scheme == "https" else 80)
+        addresses = await _resolve_hostname(hostname, port)
+
+    if not addresses:
+        raise ValueError(f"Unable to resolve hostname to any IP address: {hostname}")
+
+    for address in addresses:
+        if not _is_global_unicast(address):
+            raise ValueError(
+                f"Attempt of requesting non-public IP addresses is not allowed, requesting {hostname} ({address})."
+            )
+
+
+async def _validate_public_request(request: httpx.Request) -> None:
+    """在 httpx 发送首跳及每个重定向请求前验证目标地址。"""
+    await private_ip_check(str(request.url))
+
+
+async def request_url(
+    url: str,
+    method: str,
+    data: Any = None,
+    status_code: int | None = 200,
+    headers: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+    fmt: str | None = None,
+    timeout: float | None = 20,
+    attempt: int = 3,
+    request_private_ip: bool = False,
+    logging_err_resp: bool = True,
+    cookies: dict[str, Any] | None = None,
+) -> Any:
+    """请求指定 URL 的内容。
+
+    :param method: HTTP 方法（GET, POST, PATCH, PUT, DELETE）。
+    :param url: 请求的 URL。
+    :param data: 请求数据（适用于 POST, PATCH, PUT）。
+    :param status_code: 预期的 HTTP 状态码，若不符则抛出 ValueError。
+    :param headers: 请求时使用的 HTTP 头。
+    :param params: 请求时使用的参数。
+    :param fmt: 指定返回的格式。
+    :param timeout: 超时时间。
+    :param attempt: 指定请求尝试次数。
+    :param request_private_ip: 是否允许请求私有 IP。
+    :param logging_err_resp: 是否记录错误响应。
+    :param cookies: 使用的 cookies。
+    :returns: 相应结果。
+    :raise ValueError: 异常可能来自于内部规则不符合响应。
+    :raise ExternalException: 异常可能来自于外部服务器。
+    """
+    if not headers:
+        headers = {}
+    # Default User-Agent
+    if "User-Agent" not in headers:
+        headers["User-Agent"] = f"AkariBot/1.0 (+{repo_url})"
+
+    # HTTPMock: check for cached mock response before making real request
+    if Info.http_mock_enabled:
+        from core.tester.mock.http import HTTPMock
+
+        mock_resp = HTTPMock.get_response(url, method=method, data=data)
+        if mock_resp is not None:
+            if status_code and mock_resp.status_code != status_code:
+                error_fmt = (
+                    f"{str(mock_resp.status_code)}[KE:Image,path=https://http.cat/{str(mock_resp.status_code)}.jpg]"
+                )
+                if 500 <= mock_resp.status_code < 600:
+                    raise ExternalException(error_fmt)
+                raise ValueError(error_fmt)
+            if fmt:
+                if hasattr(mock_resp, fmt):
+                    attr = getattr(mock_resp, fmt)
+                    if callable(attr):
+                        return attr()
+                    return attr
+                raise ValueError(f"No such method: {fmt}")
+            return mock_resp.text
+        if Info.http_mock_strict:
+            raise ExternalException(f"No HTTP fixture recorded for [{method}] {url}")
+
+    @retry(stop=stop_after_attempt(attempt), wait=wait_fixed(3), reraise=True)
+    async def _request():
+        Logger.debug(f"[{method}] {url}")
+
+        event_hooks = None
+        if not CoreConfig.allow_request_private_ip and not request_private_ip:
+            event_hooks = {"request": [_validate_public_request]}
+
+        async with httpx.AsyncClient(headers=headers, proxy=proxy, verify=not debug, event_hooks=event_hooks) as client:
+            if cookies:
+                ck = SimpleCookie()
+                ck.load(cookies)
+                cookies_dict = {key: morsel.value for key, morsel in ck.items()}
+                client.cookies.update(cookies_dict)
+                Logger.debug(f"Using cookies: {cookies_dict}")
+            try:
+                resp = await client.request(
+                    method=method,
+                    url=url,
+                    data=data,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                    follow_redirects=True,
+                )
+                Logger.debug(f"[{resp.status_code}] {url}")
+                Logger.trace(resp.text)
+                if status_code and resp.status_code != status_code:
+                    if logging_err_resp:
+                        Logger.error(resp.text)
+                    error_fmt = f"{str(resp.status_code)}[KE:Image,path=https://http.cat/{str(resp.status_code)}.jpg]"
+                    if 500 <= resp.status_code < 600:
+                        raise ExternalException(error_fmt)
+                    raise ValueError(error_fmt)
+                if fmt:
+                    if hasattr(resp, fmt):
+                        attr = getattr(resp, fmt)
+                        if callable(attr):
+                            return attr()
+                        return attr
+                    raise ValueError(f"No such method: {fmt}")
+                return resp.text
+            except (httpx.ConnectError, httpx.TimeoutException):
+                raise ExternalException("Request timeout")
+            except Exception as e:
+                if logging_err_resp:
+                    Logger.error(f"Error while requesting {url}: {e}")
+                raise e
+
+    return await _request()
+
+
+async def get_url(
+    url: str,
+    status_code: int | None = 200,
+    headers: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+    fmt: str | None = None,
+    timeout: float | None = 20,
+    attempt: int = 3,
+    request_private_ip: bool = False,
+    logging_err_resp: bool = True,
+    cookies: dict[str, Any] | None = None,
+) -> Any:
+    """发送 GET 请求。
+
+    :param url: 需要获取的 URL。
+    :param status_code: 指定请求到的状态码，若不符则抛出 ValueError。
+    :param headers: 请求时使用的 HTTP 头。
+    :param params: 请求时使用的参数。
+    :param fmt: 指定返回的格式。
+    :param timeout: 超时时间。
+    :param attempt: 指定请求尝试次数。
+    :param request_private_ip: 是否允许请求私有 IP。
+    :param logging_err_resp: 是否记录错误响应。
+    :param cookies: 使用的 cookies。
+    :returns: 相应结果。
+    :raise ValueError: 异常可能来自于预期规则不符合响应结果。
+    :raise ExternalException: 异常可能来自于外部服务器。
+    """
+
+    return await request_url(
+        method="GET",
+        url=url,
+        status_code=status_code,
+        headers=headers,
+        params=params,
+        fmt=fmt,
+        timeout=timeout,
+        attempt=attempt,
+        request_private_ip=request_private_ip,
+        logging_err_resp=logging_err_resp,
+        cookies=cookies,
+    )
+
+
+async def post_url(
+    url: str,
+    data: Any = None,
+    status_code: int | None = 200,
+    headers: dict[str, Any] | None = None,
+    fmt: str | None = None,
+    timeout: float | None = 20,
+    attempt: int = 3,
+    request_private_ip: bool = False,
+    logging_err_resp: bool = True,
+    cookies: dict[str, Any] | None = None,
+) -> Any:
+    """发送 POST 请求。
+
+    :param url: 需要发送的 URL。
+    :param data: 需要发送的数据。
+    :param status_code: 指定请求到的状态码，若不符则抛出 ValueError。
+    :param headers: 请求时使用的 HTTP 头。
+    :param fmt: 指定返回的格式。
+    :param timeout: 超时时间。
+    :param attempt: 指定请求尝试次数。
+    :param request_private_ip: 是否允许请求私有 IP。
+    :param logging_err_resp: 是否记录错误响应。
+    :param cookies: 使用的 cookies。
+    :returns: 相应结果。
+    :raise ValueError: 异常可能来自于预期规则不符合响应结果。
+    :raise ExternalException: 异常可能来自于外部服务器。
+    """
+
+    return await request_url(
+        method="POST",
+        url=url,
+        data=data,
+        status_code=status_code,
+        headers=headers,
+        fmt=fmt,
+        timeout=timeout,
+        attempt=attempt,
+        request_private_ip=request_private_ip,
+        logging_err_resp=logging_err_resp,
+        cookies=cookies,
+    )
+
+
+async def patch_url(
+    url: str,
+    data: Any = None,
+    status_code: int | None = 200,
+    headers: dict[str, Any] | None = None,
+    fmt: str | None = None,
+    timeout: float | None = 20,
+    attempt: int = 3,
+    request_private_ip: bool = False,
+    logging_err_resp: bool = True,
+    cookies: dict[str, Any] | None = None,
+) -> Any:
+    """发送 PATCH 请求。
+
+    :param url: 需要发送的 URL。
+    :param data: 需要发送的数据。
+    :param status_code: 指定请求到的状态码，若不符则抛出 ValueError。
+    :param headers: 请求时使用的 HTTP 头。
+    :param fmt: 指定返回的格式。
+    :param timeout: 超时时间。
+    :param attempt: 指定请求尝试次数。
+    :param request_private_ip: 是否允许请求私有 IP。
+    :param logging_err_resp: 是否记录错误响应。
+    :param cookies: 使用的 cookies。
+    :returns: 相应结果。
+    :raise ValueError: 异常可能来自于内部规则不符合响应。
+    :raise ExternalException: 异常可能来自于外部服务器。
+    """
+
+    return await request_url(
+        method="PATCH",
+        url=url,
+        data=data,
+        status_code=status_code,
+        headers=headers,
+        fmt=fmt,
+        timeout=timeout,
+        attempt=attempt,
+        request_private_ip=request_private_ip,
+        logging_err_resp=logging_err_resp,
+        cookies=cookies,
+    )
+
+
+async def put_url(
+    url: str,
+    data: Any = None,
+    status_code: int | None = 200,
+    headers: dict[str, Any] | None = None,
+    fmt: str | None = None,
+    timeout: float | None = 20,
+    attempt: int = 3,
+    request_private_ip: bool = False,
+    logging_err_resp: bool = True,
+    cookies: dict[str, Any] | None = None,
+) -> Any:
+    """发送 PUT 请求。
+
+    :param url: 需要发送的 URL。
+    :param data: 需要发送的数据。
+    :param status_code: 指定请求到的状态码，若不符则抛出 ValueError。
+    :param headers: 请求时使用的 HTTP 头。
+    :param fmt: 指定返回的格式。
+    :param timeout: 超时时间。
+    :param attempt: 指定请求尝试次数。
+    :param request_private_ip: 是否允许请求私有 IP。
+    :param logging_err_resp: 是否记录错误响应。
+    :param cookies: 使用的 cookies。
+    :returns: 相应结果。
+    :raise ValueError: 异常可能来自于内部规则不符合响应。
+    :raise ExternalException: 异常可能来自于外部服务器。
+    """
+
+    return await request_url(
+        method="PUT",
+        url=url,
+        data=data,
+        status_code=status_code,
+        headers=headers,
+        fmt=fmt,
+        timeout=timeout,
+        attempt=attempt,
+        request_private_ip=request_private_ip,
+        logging_err_resp=logging_err_resp,
+        cookies=cookies,
+    )
+
+
+async def delete_url(
+    url: str,
+    status_code: int | None = 200,
+    headers: dict[str, Any] | None = None,
+    fmt: str | None = None,
+    timeout: float | None = 20,
+    attempt: int = 3,
+    request_private_ip: bool = False,
+    logging_err_resp: bool = True,
+    cookies: dict[str, Any] | None = None,
+) -> Any:
+    """发送 DELETE 请求。
+
+    :param url: 需要发送的 URL。
+    :param status_code: 指定请求到的状态码，若不符则抛出 ValueError。
+    :param headers: 请求时使用的 HTTP 头。
+    :param fmt: 指定返回的格式。
+    :param timeout: 超时时间。
+    :param attempt: 指定请求尝试次数。
+    :param request_private_ip: 是否允许请求私有 IP。
+    :param logging_err_resp: 是否记录错误响应。
+    :param cookies: 使用的 cookies。
+    :returns: 相应结果。
+    :raise ValueError: 异常可能来自于内部规则不符合响应。
+    :raise ExternalException: 异常可能来自于外部服务器。
+    """
+
+    return await request_url(
+        method="DELETE",
+        url=url,
+        status_code=status_code,
+        headers=headers,
+        fmt=fmt,
+        timeout=timeout,
+        attempt=attempt,
+        request_private_ip=request_private_ip,
+        logging_err_resp=logging_err_resp,
+        cookies=cookies,
+    )
+
+
+async def download(
+    url: str,
+    filename: str | None = None,
+    path: str | Path | None = None,
+    method: str = "GET",
+    status_code: int | None = 200,
+    post_data: Any = None,
+    headers: dict[str, Any] | None = None,
+    timeout: float | None = 20,
+    attempt: int = 3,
+    request_private_ip: bool = False,
+    logging_err_resp: bool = True,
+) -> Path | None:
+    """下载指定 URL 的内容，并保存到指定目录。
+
+    :param url: 需要获取的 URL。
+    :param filename: 指定保存的文件名，默认为随机文件名。
+    :param path: 指定目录，默认为缓存目录。
+    :param status_code: 指定请求到的状态码，若不符则抛出 ValueError。
+    :param method: 指定请求方式。
+    :param post_data: 如果指定请求方式为 POST，需要传入的数据。
+    :param headers: 请求时使用的 HTTP 头。
+    :param timeout: 超时时间。
+    :param attempt: 指定请求尝试次数。
+    :param request_private_ip: 是否允许请求私有 IP。
+    :param logging_err_resp: 是否记录错误响应。
+    :returns: 文件的相对路径，若获取失败则返回 False。
+    :raise ValueError: 异常可能来自于内部规则不符合响应。
+    :raise ExternalException: 异常可能来自于外部服务器。
+    """
+
+    data = await request_url(
+        method=method,
+        url=url,
+        data=post_data,
+        status_code=status_code,
+        headers=headers,
+        fmt="read",
+        timeout=timeout,
+        attempt=attempt,
+        request_private_ip=request_private_ip,
+        logging_err_resp=logging_err_resp,
+    )
+
+    if data:
+        if not filename:
+            try:
+                ftt = ft.match(data).extension
+            except AttributeError:
+                ftt = "txt"
+            filename = f"{str(uuid.uuid4())}.{ftt}"
+        if not path:
+            path = cache_path
+        path = Path(path) / filename
+        async with async_open(path, "wb+") as file:
+            await file.write(data)
+            return path
+    else:
+        return None
+
+
+__all__ = ["get_url", "post_url", "patch_url", "put_url", "delete_url", "download", "url_pattern"]

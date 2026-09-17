@@ -1,0 +1,26 @@
+
+[node.logging]
+
+# Maximum log file size in bytes
+# type:uint64
+max_size = 67108864
+
+[rpc]
+
+# Enable or disable RPC
+# type:bool
+enable = true
+
+[node.websocket]
+
+# WebSocket server bind address.
+# type:string,ip
+address = "::1"
+
+# Enable or disable WebSocket server.
+# type:bool
+enable = true
+
+# WebSocket server listening port.
+# type:uint16
+port = 7078

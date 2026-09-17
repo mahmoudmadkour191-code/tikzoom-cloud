@@ -1,0 +1,5 @@
+__pycache__
+*.png
+*.psd
+#userdata.json
+set_env_vars.sh

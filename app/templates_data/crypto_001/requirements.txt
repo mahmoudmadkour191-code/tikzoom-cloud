@@ -1,0 +1,6 @@
+# auto-added by TikZoom curator
+python-telegram-bot
+numpy
+pandas
+python-dateutil
+setuptools

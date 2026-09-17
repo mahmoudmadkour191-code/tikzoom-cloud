@@ -1,0 +1,84 @@
+"""内置命令自动注册"""
+
+from nekro_agent.services.command.registry import command_registry
+
+from .chat import InspectCommand, ResetCommand, StopCommand
+from .config_cmd import ConfReloadCommand, ConfSaveCommand, ConfSetCommand, ConfShowCommand
+from .debug import CodeLogCommand, DebugOffCommand, DebugOnCommand, ExecCommand, LogChatTestCommand, SystemCommand
+from .info import NaHelpCommand, NaInfoCommand
+from .model import ModelTestCommand
+from .ops import (
+    ClearSandboxCacheCommand,
+    DockerLogsCommand,
+    DockerRestartCommand,
+    GithubStarsCheckCommand,
+    InstanceIdCommand,
+    LogErrListCommand,
+    MemoryPruneCommand,
+    MemoryRebuildCommand,
+    MemoryReindexCommand,
+    ShCommand,
+)
+from .plugin_cmd import NaPluginsCommand, PluginCtlCommand, PluginInfoCommand, ResetPluginCommand
+from .quota_cmd import QuotaBoostCommand, QuotaCommand, QuotaResetCommand, QuotaSetCommand, QuotaWhitelistCommand
+from .switch import NaObserveCommand, NaOffCommand, NaOnCommand
+from .user import GrantAdvancedCommand, RevokeAdvancedCommand, SetUsernameCommand
+
+
+def register_built_in_commands() -> None:
+    """注册所有内置命令"""
+    commands = [
+        # 会话类
+        ResetCommand(),
+        StopCommand(),
+        InspectCommand(),
+        # 信息类
+        NaInfoCommand(),
+        NaHelpCommand(),
+        # 开关类
+        NaOnCommand(),
+        NaOffCommand(),
+        NaObserveCommand(),
+        # 配置类
+        ConfShowCommand(),
+        ConfSetCommand(),
+        ConfReloadCommand(),
+        ConfSaveCommand(),
+        # 调试类
+        ExecCommand(),
+        CodeLogCommand(),
+        SystemCommand(),
+        DebugOnCommand(),
+        DebugOffCommand(),
+        LogChatTestCommand(),
+        # 插件类
+        NaPluginsCommand(),
+        PluginInfoCommand(),
+        ResetPluginCommand(),
+        PluginCtlCommand(),
+        # 运维类
+        ClearSandboxCacheCommand(),
+        DockerRestartCommand(),
+        DockerLogsCommand(),
+        ShCommand(),
+        InstanceIdCommand(),
+        GithubStarsCheckCommand(),
+        LogErrListCommand(),
+        MemoryPruneCommand(),
+        MemoryRebuildCommand(),
+        MemoryReindexCommand(),
+        # 配额类
+        QuotaCommand(),
+        QuotaBoostCommand(),
+        QuotaResetCommand(),
+        QuotaSetCommand(),
+        QuotaWhitelistCommand(),
+        # 模型类
+        ModelTestCommand(),
+        # 用户类
+        SetUsernameCommand(),
+        GrantAdvancedCommand(),
+        RevokeAdvancedCommand(),
+    ]
+    for cmd in commands:
+        command_registry.register(cmd)

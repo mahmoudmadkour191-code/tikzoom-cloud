@@ -1,0 +1,19 @@
+Tgcrypto
+requests
+filetype
+aiofiles
+python-dotenv
+aiohttp[speedups]
+pymongo>=4.8
+dnspython
+cryptography
+pycryptodome
+psutil
+humans-formatter
+uvloop; sys_platform != "win32"
+
+# auto-added by TikZoom curator
+uvloop
+
+# auto-added by TikZoom curator
+pyrogram

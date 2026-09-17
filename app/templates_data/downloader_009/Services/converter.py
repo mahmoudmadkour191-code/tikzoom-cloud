@@ -1,0 +1,153 @@
+import logging
+import shutil
+from pathlib import Path
+from string import Formatter
+
+from App.config import Settings
+from Services.commands import CommandError, run_command
+from Services.downloader import DownloadError
+
+logger = logging.getLogger(__name__)
+
+
+class ApksConverter:
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    async def to_apk(self, source_path: Path) -> Path:
+        merged = await self._materialize_apk(source_path)
+        return await self._sign_if_configured(merged)
+
+    async def _materialize_apk(self, source_path: Path) -> Path:
+        if source_path.is_dir():
+            return await self._merge_directory(source_path)
+
+        suffix = source_path.suffix.lower()
+        if suffix == ".apk":
+            return source_path
+        if suffix != ".apks":
+            raise DownloadError("فرمت خروجی دانلودر پشتیبانی نمی‌شود.")
+
+        return await self._merge_input(source_path, source_path.with_suffix(".apk"))
+
+    async def _merge_directory(self, source_dir: Path) -> Path:
+        apk_files = sorted(source_dir.rglob("*.apk"))
+        if not apk_files:
+            raise DownloadError("فایل APK داخل پوشه دانلود پیدا نشد.")
+
+        splits = [p for p in apk_files if "merged" not in p.stem.lower()]
+        split_files = [
+            p for p in splits if p.stem.lower().startswith(("config.", "split_", "split."))
+        ]
+        candidate_bases = [p for p in splits if p not in split_files]
+
+        if split_files and candidate_bases:
+            base = next(
+                (p for p in candidate_bases if p.stem.lower() == "base"),
+                candidate_bases[0],
+            )
+            splits_dir = base.parent
+            output = source_dir / "merged.apk"
+            if output.exists():
+                output.unlink()
+            return await self._merge_input(splits_dir, output)
+
+        if len(apk_files) == 1:
+            return apk_files[0]
+
+        merged = [p for p in apk_files if "merged" in p.stem.lower()]
+        if merged:
+            return max(merged, key=lambda item: item.stat().st_mtime)
+
+        return await self._merge_input(source_dir, source_dir / "merged.apk")
+
+    async def _merge_input(self, input_path: Path, output_path: Path) -> Path:
+        command_template = self._settings.apks_to_apk_cmd
+        if command_template:
+            command = self._render(command_template, input=str(input_path), output=str(output_path))
+        else:
+            apkeditor = self._settings.apkeditor_jar
+            if not apkeditor.exists():
+                raise DownloadError(
+                    "APKEditor.jar پیدا نشد. APKEDITOR_JAR یا APKS_TO_APK_CMD را تنظیم کن."
+                )
+            java = shutil.which("java")
+            if not java:
+                raise DownloadError("Java پیدا نشد. برای APKEditor به Java 17+ نیاز است.")
+            command = (
+                f'"{java}" -jar "{apkeditor}" m '
+                f'-i "{input_path}" -o "{output_path}" '
+                f'-extractNativeLibs true -clean-meta -f'
+            )
+
+        try:
+            await run_command(command)
+        except CommandError as exc:
+            raise DownloadError(f"تبدیل APKS به APK ناموفق بود: {exc}") from exc
+
+        if not output_path.exists():
+            raise DownloadError("فایل APK بعد از تبدیل پیدا نشد.")
+
+        return output_path
+
+    async def _sign_if_configured(self, apk_path: Path) -> Path:
+        command_template = self._settings.sign_apk_cmd
+        if command_template:
+            signed_path = apk_path.with_name(f"{apk_path.stem}-signed.apk")
+            command = self._render(command_template, input=str(apk_path), output=str(signed_path))
+            try:
+                await run_command(command)
+            except CommandError as exc:
+                raise DownloadError(f"امضای APK ناموفق بود: {exc}") from exc
+
+            if not signed_path.exists():
+                raise DownloadError("فایل APK امضا شده پیدا نشد.")
+            return signed_path
+
+        if not self._settings.auto_sign_apk:
+            return apk_path
+
+        return await self._sign_with_uber(apk_path)
+
+    async def _sign_with_uber(self, apk_path: Path) -> Path:
+        signer = self._settings.apksigner_jar
+        if not signer.exists():
+            raise DownloadError(
+                f"uber-apk-signer پیدا نشد: {signer}. AUTO_SIGN_APK=false یا APKSIGNER_JAR را تنظیم کن."
+            )
+        java = shutil.which("java")
+        if not java:
+            raise DownloadError("Java پیدا نشد. برای امضای APK به Java 8+ نیاز است.")
+
+        size_before = apk_path.stat().st_size
+        command = (
+            f'"{java}" -jar "{signer}" --apks "{apk_path}" '
+            f'--overwrite --allowResign'
+        )
+        try:
+            output = await run_command(command)
+        except CommandError as exc:
+            raise DownloadError(f"امضای APK ناموفق بود: {exc}") from exc
+
+        if not apk_path.exists():
+            raise DownloadError("فایل APK بعد از امضا پیدا نشد.")
+
+        size_after = apk_path.stat().st_size
+        logger.info(
+            "APK signed: %s (size %d -> %d bytes)",
+            apk_path.name,
+            size_before,
+            size_after,
+        )
+        if output:
+            logger.debug("uber-apk-signer output: %s", output[-2000:])
+        return apk_path
+
+    @staticmethod
+    def _render(template: str, **values: str) -> str:
+        allowed = set(values)
+        fields = {name for _, name, _, _ in Formatter().parse(template) if name}
+        unknown = fields - allowed
+        if unknown:
+            raise DownloadError(f"متغیر ناشناخته در دستور تبدیل: {', '.join(sorted(unknown))}")
+        return template.format(**values)

@@ -1,0 +1,90 @@
+{
+  "sidebar": {
+    "logout": "Logout",
+    "copyright": "All rights reserved",
+    "toggleSidebar": "Toggle sidebar",
+    "expandSidebar": "Expand sidebar",
+    "collapseSidebar": "Collapse sidebar"
+  },
+  "aria": {
+    "expandSidebar": "Expand sidebar",
+    "collapseSidebar": "Collapse sidebar",
+    "openDocumentation": "Open documentation"
+  },
+  "topbar": {
+    "openDocumentation": "Open Documentation",
+    "stars": "Stars",
+    "refreshPage": "Page refreshed"
+  },
+  "devMode": {
+    "enabled": "Developer mode enabled!",
+    "disabled": "Developer mode disabled"
+  },
+  "agentActivity": {
+    "title": "AI Responding",
+    "tooltipChatKey": "Channel ID",
+    "tooltipType": "Type",
+    "tooltipTypeGroup": "Group",
+    "tooltipTypePrivate": "Private",
+    "tooltipTypeUnknown": "Unknown",
+    "tooltipPreset": "Persona",
+    "tooltipElapsed": "Elapsed",
+    "tooltipElapsedSec": "{{s}}s",
+    "tooltipClickHint": "Click to open channel",
+    "tooltipNoPreset": "Default Persona"
+  },
+  "agentRuntime": {
+    "phase": {
+      "llmGenerating": "LLM generating",
+      "llmRetrying": "LLM retrying",
+      "sandboxRunning": "Sandbox running",
+      "sandboxStopped": "Sandbox stopped",
+      "iterating": "Iterating",
+      "completed": "Completed",
+      "failed": "Generation failed"
+    },
+    "retryBadge": "Retry {{current}}/{{total}}",
+    "iterationBadge": "Iter {{current}}/{{total}}",
+    "tooltipPhase": "Phase",
+    "tooltipSandboxStop": "Stop type",
+    "tooltipModel": "Model",
+    "tooltipRetry": "LLM retry",
+    "tooltipIteration": "Iteration",
+    "tooltipErrorSummary": "Error summary"
+  },
+  "workspaceActivity": {
+    "tooltipId": "Workspace ID",
+    "tooltipContainer": "Container",
+    "tooltipPhase": "Phase",
+    "tooltipTool": "Tool",
+    "tooltipBlockSummary": "Block summary",
+    "tooltipBlockCount": "Blocks",
+    "tooltipQueue": "Queue",
+    "queueLength": "Queued {{count}}",
+    "phase": {
+      "queued": "Queued",
+      "running": "Running",
+      "responding": "Responding",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    }
+  },
+  "activity": {
+    "dismissHint": "Right-click to dismiss"
+  },
+  "community": {
+    "avatarTooltip": "Community Account",
+    "visitCommunity": "Visit Community",
+    "refreshProfile": "Refresh Profile",
+    "notConfiguredTitle": "Community API Key Not Configured",
+    "notConfiguredDesc": "Configure Nekro Cloud API Key to display your community avatar",
+    "getCommunityKey": "Get Key from Community",
+    "goToSettings": "Configure Community Key",
+    "tabNotifications": "Notifications",
+    "tabMessages": "Messages",
+    "noNotifications": "No announcements",
+    "noMessages": "No messages",
+    "markAllRead": "Mark all as read"
+  }
+}

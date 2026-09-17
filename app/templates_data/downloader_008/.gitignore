@@ -1,0 +1,14 @@
+config.py
+*.session
+*.session-journal
+__pycache__/
+venv/
+.venv/
+bot.log
+downloads/
+Tera.zip
+Teraaaa.zip
+font.ttf
+thumb.jpg
+*.thumb.jpg
+*.wm.mp4

@@ -1,0 +1,6 @@
+langdetect
+python-telegram-bot
+pyaudio
+tiktoken
+aiohttp
+aiofiles

@@ -1,0 +1,1633 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIfred Corpus</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --bg-elev: #1e293b;
+    --bg-card: #0b1220;
+    --border: #334155;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --accent: #6366f1;
+    --accent-hover: #818cf8;
+    --danger: #dc2626;
+    --danger-hover: #ef4444;
+    --success: #10b981;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  header {
+    padding: 1.25rem 2rem;
+    background: linear-gradient(135deg, #1a1a2e, #2d1f4a);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { margin: 0; font-size: 1.4rem; font-weight: 500; }
+  header .sub { font-size: 0.85rem; color: var(--text-dim); margin-top: 0.25rem; }
+  nav.tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev);
+    padding: 0 1rem;
+    overflow-x: auto;
+  }
+  nav.tabs button {
+    background: transparent;
+    color: var(--text-dim);
+    border: none;
+    padding: 0.85rem 1.4rem;
+    font-size: 0.95rem;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+  }
+  nav.tabs button:hover { color: var(--text); }
+  nav.tabs button.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+  main { padding: 1.5rem 2rem; max-width: 1400px; margin: 0 auto; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: end;
+    margin-bottom: 1rem;
+  }
+  .field { display: flex; flex-direction: column; gap: 0.25rem; }
+  .field label {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  input[type=text], input[type=number], select, textarea {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 0.55rem 0.75rem;
+    font-size: 0.95rem;
+    font-family: inherit;
+  }
+  input[type=text]:focus, input[type=number]:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  input[type=text].grow { min-width: 320px; flex: 1; }
+  button.primary, button.danger, button.secondary {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 0.55rem 1.2rem;
+    font-size: 0.9rem;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  button.primary:hover { background: var(--accent-hover); }
+  button.secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  button.secondary:hover { border-color: var(--accent); }
+  button.danger { background: var(--danger); }
+  button.danger:hover { background: var(--danger-hover); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .toggle-group {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .toggle-group button {
+    background: transparent;
+    color: var(--text-dim);
+    border: none;
+    padding: 0.55rem 0.9rem;
+    font-size: 0.9rem;
+    cursor: pointer;
+    border-right: 1px solid var(--border);
+  }
+  .toggle-group button:last-child { border-right: none; }
+  .toggle-group button.active { background: var(--accent); color: white; }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+  }
+  .stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+  }
+  .stat-card .label {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.2rem;
+  }
+  .stat-card .value { font-size: 1.4rem; font-weight: 500; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 1rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.65rem 0.85rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.9rem;
+  }
+  th {
+    background: var(--bg-elev);
+    color: var(--text-dim);
+    font-weight: 500;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(99, 102, 241, 0.05); }
+  td.actions { white-space: nowrap; }
+  td.actions button {
+    padding: 0.3rem 0.7rem;
+    font-size: 0.8rem;
+    margin-right: 0.25rem;
+  }
+  code, .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+  }
+  .hit {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    margin-bottom: 0.75rem;
+  }
+  .hit .meta {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 0.4rem;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    flex-wrap: wrap;
+  }
+  .hit .meta .file { color: var(--accent-hover); font-weight: 500; }
+  .hit .meta .neighbor { color: var(--text-dim); font-style: italic; }
+  /* Distance-Stufen (BGE-M3 Cosine):
+        d < 0.5   sehr stark  → grün
+        d < 0.8   stark        → keine Markierung
+        d < 1.0   mittel       → keine Markierung (Standard)
+        d < 1.3   schwach      → orange + opacity dim
+        d ≥ 1.3   sehr schwach → rot + opacity stark dim
+     Idee: starke Treffer leicht hervorheben, schwache dimmen — aber
+     immer lesbar. */
+  .hit.strong { /* normal display */ }
+  .hit.weak { opacity: 0.55; }
+  .hit.weak:hover { opacity: 0.85; }
+  .hit.very-weak { opacity: 0.4; }
+  .hit.very-weak:hover { opacity: 0.8; }
+  /* Distance-Pillen — farblich hinterlegt damit der Wert auf einen
+     Blick einzuordnen ist. Drei abgestufte Gruentoene fuer
+     sehr-stark/stark/mittel, dann orange/rot fuer schwach/sehr schwach. */
+  .hit .meta .dist-strong,
+  .hit .meta .dist-good,
+  .hit .meta .dist-mid,
+  .hit .meta .dist-weak,
+  .hit .meta .dist-very-weak {
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    color: #fff;
+    font-weight: 500;
+  }
+  .hit .meta .dist-strong    { background: #10b981; }   /* helles Gruen */
+  .hit .meta .dist-good      { background: #15803d; }   /* mittleres Gruen */
+  .hit .meta .dist-mid       { background: #14532d; }   /* dunkles Gruen */
+  .hit .meta .dist-weak      { background: #f59e0b; color: #1c1917; }
+  .hit .meta .dist-very-weak { background: #ef4444; }
+
+  /* Distance-Legende ueber den Suchergebnissen */
+  .dist-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem 1rem;
+    align-items: center;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.4rem 0.7rem;
+    margin: 0.4rem 0 0.6rem;
+  }
+  .dist-legend .label { font-weight: 500; color: var(--text); }
+  .dist-legend .swatch {
+    display: inline-flex; align-items: center; gap: 0.25rem;
+  }
+  .dist-legend .dot {
+    width: 0.55rem; height: 0.55rem; border-radius: 50%;
+    display: inline-block;
+  }
+  .dist-legend .dot.s { background: #10ff43; }   /* sehr stark */
+  .dist-legend .dot.g { background: #15803d; }   /* stark */
+  .dist-legend .dot.m { background: #14532d; }   /* mittel */
+  .dist-legend .dot.w { background: #f59e0b; }   /* schwach */
+  .dist-legend .dot.v { background: #ef4444; }   /* sehr schwach */
+  .hit .content { white-space: pre-wrap; font-size: 0.9rem; line-height: 1.55; }
+  /* Quellen-Etikett unten rechts im Chunk-Block — kursiv, dezent, aber
+     genug Kontrast um lesbar zu sein. Nutzt display_source vom Server
+     (gemappt aus filename via deploy/corpus/source_labels.json). */
+  .hit .source-tag {
+    display: block;
+    text-align: right;
+    margin-top: 0.4rem;
+    font-style: italic;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+  }
+  /* Such-Highlight: tiefes Indigo, passt zum Dark-Theme.
+     Vereinheitlicht ueber alle Tabs (Suche + Sammlungen). */
+  mark { background: #39255a; color: inherit; padding: 1px 2px; border-radius: 2px; }
+  .hit .content mark { background: #39255a; color: var(--text); padding: 1px 2px; border-radius: 2px; }
+  .empty {
+    text-align: center;
+    padding: 3rem;
+    color: var(--text-dim);
+    font-style: italic;
+  }
+  .toast {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 6px;
+    padding: 0.75rem 1.25rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    box-sizing: border-box;
+    /* max-width auf den Viewport begrenzen, damit lange Meldungen nicht
+       am rechten Rand abgeschnitten werden (1.5rem links + 1.5rem rechts
+       Abstand). */
+    max-width: min(480px, calc(100vw - 3rem));
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    /* Default: ausserhalb des Viewports + unsichtbar (verhindert dass ein
+       Pixel-Streifen am Rand bleibt). transition: visibility erst nach
+       der Slide-Animation auf hidden, damit der Slide-out sichtbar bleibt. */
+    transform: translateY(calc(100% + 2rem));
+    visibility: hidden;
+    transition: transform 0.3s ease, visibility 0s linear 0.3s;
+    z-index: 100;
+  }
+  .toast.show {
+    transform: translateY(0);
+    visibility: visible;
+    transition: transform 0.3s ease, visibility 0s linear 0s;
+  }
+  .toast.error { border-left-color: var(--danger); }
+  .toast.success { border-left-color: var(--success); }
+  details summary { cursor: pointer; padding: 0.4rem 0; color: var(--accent-hover); font-size: 0.9rem; }
+  details summary:hover { color: var(--text); }
+  .chunk-block {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.6rem 0.85rem;
+    margin: 0.5rem 0;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    line-height: 1.5;
+  }
+  .chunk-block .idx { color: var(--text-dim); font-size: 0.75rem; margin-bottom: 0.25rem; }
+  .pagination {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin: 0.75rem 0;
+  }
+  .small { font-size: 0.8rem; color: var(--text-dim); }
+
+  /* ── Collections-Tab ── */
+  .item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+  }
+  .item-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.4rem;
+  }
+  .item-head strong { color: var(--text); }
+  .item-head .small { flex: 1; }
+  .item-body {
+    font-size: 0.9rem;
+    color: var(--text-dim);
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  /* (overrides removed — all mark elements share the .item-body / global rule above) */
+  button.small { padding: 0.2rem 0.6rem; font-size: 0.8rem; }
+
+  /* ── Manage: 2-pane tree + detail ── */
+  .manage-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 1fr) 2fr;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  @media (max-width: 900px) {
+    .manage-grid { grid-template-columns: 1fr; }
+  }
+  .tree-pane {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem;
+    max-height: 70vh;
+    overflow-y: auto;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+  }
+  .manage-detail {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+  .manage-detail h3 { margin: 0 0 0.25rem 0; font-size: 1.05rem; word-break: break-word; }
+  .action-row { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.75rem 0; }
+  .action-row button { padding: 0.4rem 0.85rem; font-size: 0.85rem; }
+  .tree ul { list-style: none; padding-left: 1rem; margin: 0; }
+  .tree > ul { padding-left: 0; }
+  .tree li { padding: 0.15rem 0; }
+  .tree-folder > summary,
+  .tree-file {
+    cursor: pointer;
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    user-select: none;
+    list-style: none;
+  }
+  .tree-folder > summary::-webkit-details-marker { display: none; }
+  .tree-folder > summary { font-weight: 500; color: var(--text); }
+  .tree-folder[open] > summary .caret { transform: rotate(90deg); }
+  .tree-folder > summary:hover,
+  .tree-file:hover { background: rgba(99, 102, 241, 0.1); }
+  .tree-folder > summary.selected,
+  .tree-file.selected { background: rgba(99, 102, 241, 0.25); color: var(--text); }
+  .tree .caret {
+    display: inline-block;
+    width: 0.7rem;
+    transition: transform 0.15s ease;
+    color: var(--text-dim);
+    font-size: 0.7rem;
+  }
+  .tree .icon { width: 1rem; text-align: center; }
+  .tree .name { flex: 1; }
+  .tree .count { color: var(--text-dim); font-size: 0.75rem; }
+  .tree .hidden { display: none; }
+  /* File-Status-Indikatoren im Tree:
+       ✓  indexed   → unauffaellig, schon verarbeitet
+       ⊘  disk_only → blau-akzent, "muss noch indexiert werden"
+       ⚠  orphan    → orange-warn, "Disk-Datei fehlt, Index hat noch Chunks"
+     Folder-Counts ergaenzt um disk_only/orphan-Indikator wenn dort welche
+     darunter haengen. */
+  .tree-file.status-disk_only,
+  .tree-folder > summary.status-disk_only { color: var(--accent, #6366f1); }
+  .tree-file.status-orphan,
+  .tree-folder > summary.status-orphan { color: #f59e0b; }
+  .tree .status-icon {
+    width: 0.85rem;
+    text-align: center;
+    font-size: 0.85rem;
+    color: inherit;
+  }
+  .tree-file.status-disk_only .name,
+  .tree-file.status-orphan .name { font-style: italic; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AIfred Corpus</h1>
+  <div class="sub">Vector-DB Suche, Verwaltung, Upload &mdash; ChromaDB / bge-m3</div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="search" class="active">Suche</button>
+  <button data-tab="overview">&Uuml;bersicht</button>
+  <button data-tab="upload">Hochladen</button>
+  <button data-tab="manage">Verwaltung</button>
+  <button data-tab="collections">Sammlungen</button>
+</nav>
+
+<main>
+
+<!-- ================== SEARCH ================== -->
+<section id="panel-search" class="panel active">
+  <div class="row">
+    <div class="field">
+      <label>Modus</label>
+      <div class="toggle-group" id="search-mode">
+        <button data-mode="semantic" class="active">Semantisch</button>
+        <button data-mode="literal">Wortgenau</button>
+      </div>
+    </div>
+    <div class="field" style="flex:1; min-width:300px">
+      <label>Anfrage</label>
+      <input type="text" id="search-query" class="grow"
+             placeholder="z.B. Heiliger Geist  (oder exakte Phrase im Wortgenau-Modus)">
+    </div>
+    <div class="field">
+      <label>Folder (Prefix-Match)</label>
+      <select id="search-folder">
+        <option value="">&mdash; alle &mdash;</option>
+      </select>
+    </div>
+    <div class="field" style="width:80px">
+      <label>Anzahl</label>
+      <input type="number" id="search-n" value="10" min="1" max="200">
+    </div>
+    <div class="field" style="width:80px">
+      <label>Nachbarn ±</label>
+      <input type="number" id="search-neighbor" value="1" min="0" max="5">
+    </div>
+    <div class="field" style="width:auto; align-self:flex-end; padding-bottom:0.4rem">
+      <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer; user-select:none">
+        <input type="checkbox" id="search-all" style="margin:0">
+        <span>Alle Treffer</span>
+      </label>
+    </div>
+    <button class="primary" id="search-btn">Suchen</button>
+  </div>
+  <div id="search-results"></div>
+</section>
+
+<!-- ================== OVERVIEW ================== -->
+<section id="panel-overview" class="panel">
+  <div class="stats" id="overview-stats"></div>
+  <h3>Folder</h3>
+  <table id="overview-folders">
+    <thead><tr><th>Folder</th><th style="text-align:right">Chunks</th><th>Aktion</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <h3 style="margin-top: 2rem">Dokumente</h3>
+  <div class="row">
+    <div class="field" style="flex:1">
+      <label>Filter (Filename enth&auml;lt)</label>
+      <input type="text" id="overview-filter" placeholder="z.B. talmud" class="grow">
+    </div>
+  </div>
+  <table id="overview-docs">
+    <thead><tr><th>Datei</th><th>Folder</th><th style="text-align:right">Chunks</th><th>Hochgeladen</th><th>Aktionen</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<!-- ================== UPLOAD ================== -->
+<section id="panel-upload" class="panel">
+  <p class="small">Unterst&uuml;tzte Formate: PDF, TXT, MD, CSV, DOCX, XLSX, PPTX, ODT, ODS, ODP. Datei wird unter <code>data/documents/&lt;folder&gt;/&lt;name&gt;</code> abgelegt und (per Default) sofort indexiert.</p>
+  <form id="upload-form">
+    <div class="row">
+      <div class="field" style="flex:1; min-width:280px">
+        <label>Datei</label>
+        <input type="file" id="upload-file" required>
+      </div>
+      <div class="field" style="flex:1; min-width:200px">
+        <label>Zielordner (optional, z.B. judaica/notes oder leer = root)</label>
+        <input type="text" id="upload-folder" placeholder="leer = data/documents/" class="grow">
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <label style="display:flex; gap:0.4rem; align-items:center; padding-top:0.55rem">
+          <input type="checkbox" id="upload-autoindex" checked>
+          <span>Auto-Indexierung</span>
+        </label>
+      </div>
+      <button class="primary" type="submit">Hochladen</button>
+    </div>
+  </form>
+  <div id="upload-result"></div>
+</section>
+
+<!-- ================== MANAGE ================== -->
+<section id="panel-manage" class="panel">
+  <p class="small">Klicke links eine Datei oder einen Folder, rechts erscheinen Details und Aktionen. Bei Datei-Auswahl wird der Inhalt (erste 200 Chunks) gleich mit angezeigt. Re-Indexierung holt die Quelldatei von der Disk und ersetzt alle Chunks (delete-before-upsert). Folder-Aktionen wirken nur auf den exakten Folder, ohne Sub-Folder. Status-Icons: <span style="color:var(--text-dim)">&#10003;</span> indexiert, <span style="color:var(--accent,#6366f1)">&#8856;</span> auf Disk aber nicht im Index, <span style="color:#f59e0b">&#9888;</span> Index-Eintrag ohne Disk-Datei (orphan).</p>
+
+  <div class="row">
+    <div class="field" style="flex:1; min-width:280px">
+      <label>Filter</label>
+      <input type="text" id="manage-tree-filter" placeholder="z.B. talmud, schlachter" class="grow">
+    </div>
+    <button class="secondary" id="manage-expand">Alle aufklappen</button>
+    <button class="secondary" id="manage-collapse">Alle zuklappen</button>
+    <button class="secondary" id="manage-refresh">Neu laden</button>
+  </div>
+
+  <div class="manage-grid">
+    <div class="tree-pane">
+      <div id="manage-tree"><div class="empty">L&auml;dt&hellip;</div></div>
+    </div>
+
+    <div class="manage-detail">
+      <h3 id="manage-selected-title">Nichts ausgew&auml;hlt</h3>
+      <div id="manage-selected-info" class="small"></div>
+
+      <div id="manage-file-actions" style="display:none">
+        <div class="action-row">
+          <button class="primary" id="manage-index-file" style="display:none">Indexieren</button>
+          <button class="primary" id="manage-reindex">Re-Index</button>
+          <button class="danger" id="manage-delete">L&ouml;schen (nur Chunks)</button>
+          <button class="danger" id="manage-delete-file">L&ouml;schen + von Disk</button>
+        </div>
+      </div>
+
+      <div id="manage-folder-actions" style="display:none">
+        <div class="action-row">
+          <button class="primary" id="manage-index-new">Neue indexieren</button>
+          <button class="primary" id="manage-reindex-folder">Folder re-indexieren</button>
+          <button class="danger" id="manage-cleanup-orphans">Orphans aufr&auml;umen</button>
+          <button class="danger" id="manage-delete-folder">Chunks l&ouml;schen</button>
+        </div>
+      </div>
+
+      <div id="manage-chunks-preview"></div>
+    </div>
+  </div>
+
+  <div id="manage-result"></div>
+</section>
+
+<!-- ================== COLLECTIONS (alle ChromaDB-Collections) ================== -->
+<section id="panel-collections" class="panel">
+  <div class="row">
+    <div class="field" style="min-width:240px">
+      <label>Sammlung</label>
+      <select id="col-select"></select>
+    </div>
+    <div class="field" style="flex:1; min-width:300px">
+      <label>Suche / Filter</label>
+      <input type="text" id="col-query" placeholder="leer lassen = alles auflisten">
+    </div>
+    <div class="field" style="width:140px">
+      <label>Modus</label>
+      <select id="col-mode">
+        <option value="literal">Wortgenau</option>
+        <option value="semantic">Semantisch</option>
+      </select>
+    </div>
+    <div class="field" style="width:80px">
+      <label>Anzahl</label>
+      <input type="number" id="col-limit" value="50" min="1" max="500">
+    </div>
+    <button class="primary" id="col-go">Anzeigen</button>
+    <button class="danger" id="col-clear" title="Alle Items dieser Sammlung loeschen">Sammlung leeren</button>
+  </div>
+  <div id="col-info" class="stats" style="margin: 1rem 0;"></div>
+  <div id="col-items"></div>
+  <div id="col-pager" class="row" style="justify-content: center; margin-top: 1rem;"></div>
+</section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = window.location.pathname.replace(/\/$/, '') + '/api';
+
+function $(id) { return document.getElementById(id); }
+function escape(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function highlight(text, needle) {
+  if (!needle) return escape(text);
+  // Suchmaschinen-Konvention: "phrase mit spaces" wird als Entitaet gematcht
+  // (Wortreihenfolge fix), bare Woerter einzeln. Beides case-insensitive.
+  // Deutsch hat starke Flexion ("heiliger" → "heilige", "Heiligen", "Geistes"),
+  // daher reduzieren wir lange Woerter (≥6 Zeichen) auf einen Stem (letzte
+  // zwei chars weg) und matchen mit ``\w*`` weiter — so faengt "heilig" alle
+  // Heilig*-Formen, "Geist" bleibt "Geist" und matcht "Geist", "Geister",
+  // "Geistes", "geistlich".
+  const stem = w => w.length >= 6 ? w.slice(0, -2) : w;
+  const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const patterns = [];
+  // Quoted phrases: "heiliger geist" → Phrase-Pattern als ein Block (Wort-
+  // reihenfolge fix). Die Einzelwoerter werden NICHT separat gehighlightet —
+  // wenn der User die Phrase explizit mit "..." angefordert hat, gehoeren
+  // sie als Einheit zusammen.
+  const remaining = needle.replace(/"([^"]+)"/g, (_, m) => {
+    const words = m.trim().split(/\s+/).filter(w => w.length >= 2);
+    if (words.length) {
+      patterns.push(words.map(w => escapeRe(stem(w)) + '\\w*').join('\\s+'));
+    }
+    return ' ';
+  });
+  // Bare Woerter (ausserhalb von Anfuehrungszeichen) → einzeln highlighten,
+  // weil hier kein Phrase-Bezug erwartet wird.
+  for (const w of remaining.split(/\s+/)) {
+    if (w.length >= 2) patterns.push(escapeRe(stem(w)) + '\\w*');
+  }
+  if (!patterns.length) return escape(text);
+  const re = new RegExp('(' + patterns.join('|') + ')', 'gi');
+  return escape(text).replace(re, '<mark>$1</mark>');
+}
+
+let toastTimer;
+function toast(msg, type='') {
+  const t = $('toast');
+  t.className = 'toast show ' + type;
+  t.textContent = msg;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.className = 'toast', 4000);
+}
+
+async function api(path, opts={}) {
+  const r = await fetch(API + path, opts);
+  if (!r.ok) {
+    let detail = r.statusText;
+    try { detail = (await r.json()).detail || detail; } catch {}
+    throw new Error(`${r.status}: ${detail}`);
+  }
+  return r.json();
+}
+
+// ─── Tabs ──────────────────────────────────────
+$('tabs').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-tab]');
+  if (!btn) return;
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b === btn));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + btn.dataset.tab));
+  if (btn.dataset.tab === 'overview') loadOverview();
+});
+
+// ─── Search ────────────────────────────────────
+let searchMode = 'semantic';
+$('search-mode').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-mode]');
+  if (!btn) return;
+  searchMode = btn.dataset.mode;
+  document.querySelectorAll('#search-mode button').forEach(b => b.classList.toggle('active', b === btn));
+});
+
+async function doSearch() {
+  const q = $('search-query').value.trim();
+  if (!q) return toast('Bitte Anfrage eingeben', 'error');
+  const folder = $('search-folder').value || null;
+  const n = parseInt($('search-n').value) || 10;
+  const neighbor = parseInt($('search-neighbor').value) || 0;
+  const showAll = $('search-all').checked;
+
+  // "..." Konvention nur im Semantik-Modus: dort triggert sie den Phrase-
+  // Mode (Stem-tolerante Volltextsuche) im Backend. Im Wortgenau-Modus
+  // bleibt der User-Mode, die Anfuehrungszeichen werden gestrippt (sonst
+  // wuerden sie im substring-Match mitgesucht).
+  const phraseMatch = q.match(/"([^"]+)"/);
+  let mode = searchMode;
+  let queryForBackend = q;
+  let backendN = n;
+  if (phraseMatch && searchMode === 'semantic') {
+    mode = 'phrase';
+    queryForBackend = phraseMatch[1].trim();
+    backendN = 2000;  // Phrase-Mode: immer alle Treffer (kein Cap)
+  } else if (phraseMatch) {
+    // Wortgenau-Modus: Anfuehrungszeichen aus dem Substring-Match raushalten
+    queryForBackend = q.replace(/"/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  // "Alle Treffer"-Toggle: Backend-Limit hochziehen. Im Semantic-Mode wird
+  // das durch DOCUMENT_SEARCH_MAX_RESULTS=100 effektiv gecapped, bei
+  // Wortgenau und Phrase greift's voll durch.
+  if (showAll) backendN = 2000;
+
+  $('search-results').innerHTML = '<div class="empty">Suche l&auml;uft&hellip;</div>';
+  try {
+    const res = await api('/search', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ query: queryForBackend, mode, folder, n_results: backendN, neighbor }),
+    });
+    renderSearchResults(res, q, showAll ? null : n);
+  } catch (e) {
+    $('search-results').innerHTML = '';
+    toast(e.message, 'error');
+  }
+}
+
+
+// Distance-Stufen (BGE-M3 Cosine: 0=identisch, ~1.0=orthogonal, >1.0=kaum Bezug)
+const DIST_STRONG    = 0.5;   // unter 0.5 → sehr stark
+const DIST_GOOD      = 0.8;   // 0.5–0.8  → stark
+const DIST_MID       = 1.0;   // 0.8–1.0  → mittel
+const DIST_WEAK      = 1.3;   // 1.0–1.3  → schwach
+                              // ≥1.3      → sehr schwach
+// Legacy-Konstante fuer den weak-Anker-Pre-Pass
+const WEAK_DISTANCE  = DIST_MID;
+
+function classifyDistance(d) {
+  if (d == null) return { label: '',    cls: '',           hitCls: '' };
+  if (d < DIST_STRONG) return { label: 'sehr stark',  cls: 'dist-strong',    hitCls: 'strong' };
+  if (d < DIST_GOOD)   return { label: 'stark',       cls: 'dist-good',      hitCls: '' };
+  if (d < DIST_MID)    return { label: 'mittel',      cls: 'dist-mid',       hitCls: '' };
+  if (d < DIST_WEAK)   return { label: 'schwach',     cls: 'dist-weak',      hitCls: 'weak' };
+  return                       { label: 'sehr schwach', cls: 'dist-very-weak', hitCls: 'very-weak' };
+}
+
+const DIST_LEGEND_HTML = `
+  <div class="dist-legend">
+    <span class="label">Trefferabstand (d, kleiner = besser):</span>
+    <span class="swatch"><span class="dot s"></span>&lt; 0.5 sehr stark</span>
+    <span class="swatch"><span class="dot g"></span>0.5–0.8 stark</span>
+    <span class="swatch"><span class="dot m"></span>0.8–1.0 mittel</span>
+    <span class="swatch"><span class="dot w"></span>1.0–1.3 schwach</span>
+    <span class="swatch"><span class="dot v"></span>&ge; 1.3 sehr schwach</span>
+  </div>`;
+
+function renderSearchResults(res, query, displayLimit) {
+  const root = $('search-results');
+  if (!res.results.length) { root.innerHTML = '<div class="empty">Keine Treffer</div>'; return; }
+  const needle = query;
+
+  // Anzeige-Limit anwenden (Backend liefert bei mode=phrase ALLE Treffer,
+  // bei mode=semantic die top-N). UI zeigt nur die ersten displayLimit Treffer.
+  const totalBackend = res.total;
+  let filtered = res.results;
+  if (displayLimit && filtered.length > displayLimit) {
+    filtered = filtered.slice(0, displayLimit);
+  }
+
+  // Pre-pass auf der vollen Backend-Liste (NICHT auf der geslicten filtered),
+  // damit ein starker Anker auf Position 50 die Neighbors auf Position 1-10
+  // nicht faelschlich als weak markiert. Per Datei merken: gibt es ueberhaupt
+  // einen starken Anker? Neighbors erben den Status ihrer Datei.
+  const hasStrongAnchor = new Map();
+  for (const h of res.results) {
+    if (h.distance == null) continue;
+    if (!hasStrongAnchor.has(h.filename)) hasStrongAnchor.set(h.filename, false);
+    if (h.distance < WEAK_DISTANCE) hasStrongAnchor.set(h.filename, true);
+  }
+
+  const html = filtered.map((h) => {
+    const meta = [];
+    meta.push(`<span class="file">${escape(h.filename)}</span>`);
+    meta.push(`<span>chunk ${h.chunk_index}/${h.total_chunks}</span>`);
+    const dInfo = classifyDistance(h.distance);
+    let hitCls = dInfo.hitCls;
+    if (h.distance != null) {
+      meta.push(`<span class="${dInfo.cls}">d=${h.distance.toFixed(3)}${dInfo.label ? ' (' + dInfo.label + ')' : ''}</span>`);
+    } else {
+      // Neighbor ohne eigene Distance erbt den Status seines Files
+      hitCls = hasStrongAnchor.get(h.filename) ? '' : 'weak';
+    }
+    if (h._neighbor) meta.push(`<span class="neighbor">±neighbor</span>`);
+    // Highlight zuerst rendern — wenn die Suchwoerter wirklich im Text
+    // vorkommen, ueberstimmt das die Embedding-Distance: ein Treffer mit
+    // sichtbarem Match ist relevant fuer den User, egal was BGE-M3 sagt.
+    const highlighted = highlight(h.content, needle);
+    if ((hitCls === 'weak' || hitCls === 'very-weak') && highlighted.includes('<mark>')) hitCls = '';
+    const sourceTag = h.display_source && h.display_source !== h.filename
+      ? `<div class="source-tag">${escape(h.display_source)}</div>`
+      : '';
+    return `<div class="hit${hitCls ? ' ' + hitCls : ''}">
+      <div class="meta">${meta.join(' &middot; ')}</div>
+      <div class="content">${highlighted}</div>
+      ${sourceTag}
+    </div>`;
+  }).join('');
+  root.innerHTML =
+    `<p class="small">${filtered.length} von ${totalBackend} Treffer (${res.mode})</p>` +
+    (res.mode === 'semantic' ? DIST_LEGEND_HTML : '') +
+    html;
+}
+
+$('search-btn').addEventListener('click', doSearch);
+$('search-query').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+// ─── Overview ──────────────────────────────────
+let allDocs = [];
+async function loadOverview() {
+  try {
+    const [foldersRes, docsRes] = await Promise.all([api('/folders'), api('/documents')]);
+    const total = foldersRes.total_chunks;
+    const fileCount = docsRes.count;
+    $('overview-stats').innerHTML = [
+      ['Chunks gesamt', total.toLocaleString('de-DE')],
+      ['Dokumente', fileCount],
+      ['Folder', foldersRes.folders.length],
+    ].map(([l, v]) => `<div class="stat-card"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
+
+    $('overview-folders').querySelector('tbody').innerHTML = foldersRes.folders.map(f => `
+      <tr>
+        <td><code>${escape(f.folder || '(root)')}</code></td>
+        <td style="text-align:right">${f.chunks.toLocaleString('de-DE')}</td>
+        <td><button class="secondary" data-action="search-folder" data-folder="${escape(f.folder)}">in diesem Folder suchen</button></td>
+      </tr>
+    `).join('');
+
+    // Folder-Dropdown fuer Suche aktualisieren
+    const sel = $('search-folder');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">— alle —</option>' +
+      foldersRes.folders.map(f => `<option value="${escape(f.folder)}">${escape(f.folder || '(root)')} (${f.chunks})</option>`).join('');
+    sel.value = current;
+
+    allDocs = docsRes.documents;
+    renderDocs();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+function renderDocs() {
+  const filter = $('overview-filter').value.toLowerCase();
+  const docs = filter ? allDocs.filter(d => d.filename.toLowerCase().includes(filter)) : allDocs;
+  $('overview-docs').querySelector('tbody').innerHTML = docs.map(d => `
+    <tr>
+      <td><code>${escape(d.filename)}</code></td>
+      <td><code class="small">${escape(d.folder)}</code></td>
+      <td style="text-align:right">${d.chunks_indexed}</td>
+      <td class="small">${escape((d.upload_date || '').slice(0, 19))}</td>
+      <td class="actions">
+        <button class="secondary" data-action="show-chunks" data-filename="${escape(d.filename)}">Chunks</button>
+        <button class="secondary" data-action="reindex-file" data-filename="${escape(d.filename)}">Re-Index</button>
+        <button class="danger" data-action="delete-file" data-filename="${escape(d.filename)}">L&ouml;schen</button>
+      </td>
+    </tr>
+  `).join('');
+}
+$('overview-filter').addEventListener('input', renderDocs);
+
+// Event-Delegation fuer alle Aktions-Buttons in den Tabellen.
+// Inline onclick mit JSON.stringify ist kaputt: doppelte Quotes brechen das
+// onclick="..."-Attribut auseinander, der Handler feuert nie.
+function searchInFolder(folder) {
+  document.querySelector('button[data-tab="search"]').click();
+  $('search-folder').value = folder;
+  $('search-query').focus();
+}
+
+async function showChunks(filename) {
+  try {
+    const res = await api(`/documents/${encodeURIComponent(filename)}/chunks?limit=200`);
+    const html = `<details open><summary>${escape(filename)} &mdash; ${res.total} chunks</summary>` +
+      res.chunks.map(c => `<div class="chunk-block"><div class="idx">chunk ${c.chunk_index}/${c.total_chunks}</div>${escape(c.content)}</div>`).join('') +
+      `</details>`;
+    const wrap = document.createElement('div');
+    wrap.innerHTML = html;
+    const target = $('panel-overview');
+    target.appendChild(wrap);
+    wrap.scrollIntoView({behavior:'smooth'});
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function reindexFile(filename) {
+  if (!confirm(`Re-indexiere ${filename}?`)) return;
+  try {
+    const r = await api('/reindex', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ filename }),
+    });
+    toast(`${filename}: ${r.chunks_indexed} chunks`, 'success');
+    loadOverview();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteFile(filename, alsoFile) {
+  const msg = alsoFile
+    ? `${filename} aus Index UND von Disk löschen?`
+    : `${filename} aus Index löschen (Datei bleibt)?`;
+  if (!confirm(msg)) return;
+  try {
+    const r = await api(`/documents/${encodeURIComponent(filename)}?delete_file=${alsoFile}`, {method: 'DELETE'});
+    toast(`${r.chunks_removed} chunks entfernt`, 'success');
+    loadOverview();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Delegation: alle Aktions-Buttons in der Uebersicht
+$('panel-overview').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const folder = btn.dataset.folder;
+  const filename = btn.dataset.filename;
+  if (action === 'search-folder') searchInFolder(folder);
+  else if (action === 'show-chunks') showChunks(filename);
+  else if (action === 'reindex-file') reindexFile(filename);
+  else if (action === 'delete-file') deleteFile(filename, false);
+});
+
+// ─── Upload ────────────────────────────────────
+$('upload-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const file = $('upload-file').files[0];
+  if (!file) return toast('Keine Datei gewählt', 'error');
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('folder', $('upload-folder').value.trim());
+  fd.append('auto_index', $('upload-autoindex').checked ? 'true' : 'false');
+  $('upload-result').innerHTML = '<div class="empty">Hochladen&hellip;</div>';
+  try {
+    const r = await fetch(API + '/upload', { method:'POST', body: fd });
+    if (!r.ok) {
+      let d = r.statusText; try { d = (await r.json()).detail; } catch {}
+      throw new Error(`${r.status}: ${d}`);
+    }
+    const res = await r.json();
+    $('upload-result').innerHTML = `<div class="hit">
+      <div class="meta"><span class="file">${escape(res.filename)}</span></div>
+      <div class="content">Hochgeladen: ${(res.size_bytes/1024).toFixed(1)} KB. ${res.indexed ? `Indexiert: ${res.chunks_indexed} chunks.` : 'Nicht indexiert.'}</div>
+    </div>`;
+    toast('Hochgeladen', 'success');
+  } catch (e) {
+    $('upload-result').innerHTML = '';
+    toast(e.message, 'error');
+  }
+});
+
+// ─── Manage: Tree + Selection-Detail ──────────────────────────────
+// Datenmodell jetzt aus /api/inventory: jede Datei hat einen Status
+//   "indexed"   → auf Disk + im Index
+//   "disk_only" → auf Disk, nicht im Index
+//   "orphan"    → im Index, Disk-Datei fehlt
+// Folder-Counts sind ein Dict {indexed,disk_only,orphan} fuer die UI-Badges.
+let manageInventory = null; // {totals, folders: [{folder, indexed_chunks, files, counts}]}
+let manageSelected = null;  // {kind: 'file'|'folder', path: string}
+
+const STATUS_ICON = {
+  indexed:   '&#10003;',  // ✓
+  disk_only: '&#8856;',   // ⊘
+  orphan:    '&#9888;',   // ⚠
+};
+
+async function loadManage() {
+  const tree = $('manage-tree');
+  tree.innerHTML = '<div class="empty">L&auml;dt&hellip;</div>';
+  try {
+    manageInventory = await api('/inventory');
+    renderTree();
+  } catch (e) {
+    tree.innerHTML = '<div class="empty">Fehler: ' + escape(e.message) + '</div>';
+    toast(e.message, 'error');
+  }
+}
+
+function _findFile(filename) {
+  if (!manageInventory) return null;
+  for (const f of manageInventory.folders) {
+    for (const file of f.files) {
+      if (file.filename === filename) return file;
+    }
+  }
+  return null;
+}
+
+function _findFolder(folder) {
+  if (!manageInventory) return null;
+  return manageInventory.folders.find(f => f.folder === folder) || null;
+}
+
+function buildTree(inventory) {
+  // Hierarchie aus allen Datei-Pfaden (Disk + Index union). Folder-Knoten
+  // sammeln Status-Counts rekursiv hoch, damit man auf einen Blick sieht
+  // "irgendwo darunter sind 12 nicht-indexierte Dateien".
+  const root = { _children: {}, _path: '' };
+  if (!inventory) return root;
+
+  for (const folderEntry of inventory.folders) {
+    for (const file of folderEntry.files) {
+      const parts = file.filename.split('/');
+      let node = root;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const p = parts[i];
+        const path = node._path ? node._path + '/' + p : p;
+        if (!node._children[p]) {
+          node._children[p] = { _children: {}, _path: path, _isFolder: true };
+        }
+        node = node._children[p];
+      }
+      const leaf = parts[parts.length - 1];
+      node._children[leaf] = { _file: file, _path: file.filename, _isFile: true };
+    }
+  }
+
+  // Per-Folder Index-Counts aus inventory.folders mappen
+  const exactFolderInfo = Object.fromEntries(
+    inventory.folders.map(f => [f.folder, f])
+  );
+
+  function annotate(node) {
+    if (node._isFile) {
+      node._totalChunks = node._file.indexed_chunks || 0;
+      node._fileCount = 1;
+      node._counts = {indexed: 0, disk_only: 0, orphan: 0};
+      node._counts[node._file.status] = 1;
+      return;
+    }
+    let chunks = 0, files = 0;
+    const counts = {indexed: 0, disk_only: 0, orphan: 0};
+    for (const c of Object.values(node._children || {})) {
+      annotate(c);
+      chunks += c._totalChunks || 0;
+      files += c._fileCount || 0;
+      counts.indexed   += c._counts.indexed;
+      counts.disk_only += c._counts.disk_only;
+      counts.orphan    += c._counts.orphan;
+    }
+    node._totalChunks = chunks;
+    node._fileCount = files;
+    node._counts = counts;
+    if (node._isFolder) {
+      const exact = exactFolderInfo[node._path];
+      node._exact = exact || null;
+    }
+  }
+  annotate(root);
+  return root;
+}
+
+function _statusBadges(counts) {
+  const parts = [];
+  if (counts.disk_only) {
+    parts.push(`<span class="status-icon" style="color:var(--accent,#6366f1)" title="${counts.disk_only} nicht-indexiert">&#8856;${counts.disk_only}</span>`);
+  }
+  if (counts.orphan) {
+    parts.push(`<span class="status-icon" style="color:#f59e0b" title="${counts.orphan} Orphan(s)">&#9888;${counts.orphan}</span>`);
+  }
+  return parts.join(' ');
+}
+
+function renderTreeNode(node, name, depth) {
+  if (node._isFile) {
+    const f = node._file;
+    const statusCls = `status-${f.status}`;
+    const icon = STATUS_ICON[f.status] || '';
+    const chunkLabel = f.status === 'disk_only' ? '–' : f.indexed_chunks.toLocaleString('de-DE');
+    return `<li>
+      <div class="tree-file ${statusCls}" data-path="${escape(node._path)}" data-kind="file">
+        <span class="caret"></span>
+        <span class="status-icon" title="${f.status}">${icon}</span>
+        <span class="icon">&#128196;</span>
+        <span class="name">${escape(name)}</span>
+        <span class="count" title="Chunks">${chunkLabel}</span>
+      </div>
+    </li>`;
+  }
+  const inner = Object.entries(node._children)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([n, c]) => renderTreeNode(c, n, depth + 1)).join('');
+  const open = depth <= 1 ? ' open' : '';
+  // Folder-summary: Status-Klasse je nach was darunter haengt
+  const sumStatus = node._counts.disk_only ? 'status-disk_only'
+                  : node._counts.orphan ? 'status-orphan'
+                  : '';
+  const badges = _statusBadges(node._counts);
+  return `<li>
+    <details class="tree-folder"${open}>
+      <summary class="${sumStatus}" data-path="${escape(node._path)}" data-kind="folder">
+        <span class="caret">&#9658;</span>
+        <span class="icon">&#128193;</span>
+        <span class="name">${escape(name)}</span>
+        ${badges}
+        <span class="count" title="${node._fileCount} Dateien, ${node._totalChunks} Chunks indexiert">${node._totalChunks.toLocaleString('de-DE')}</span>
+      </summary>
+      <ul>${inner}</ul>
+    </details>
+  </li>`;
+}
+
+function renderTree() {
+  const root = buildTree(manageInventory);
+  const html = '<ul class="tree">' +
+    Object.entries(root._children)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([n, c]) => renderTreeNode(c, n, 0)).join('') +
+    '</ul>';
+  $('manage-tree').innerHTML = html;
+  applyFilter();
+  if (manageSelected) selectTreeItem(manageSelected.kind, manageSelected.path, /*navigate*/false);
+}
+
+function applyFilter() {
+  const filter = ($('manage-tree-filter').value || '').toLowerCase();
+  if (!filter) {
+    // alles sichtbar
+    $('manage-tree').querySelectorAll('li').forEach(li => li.classList.remove('hidden'));
+    return;
+  }
+  // Markiere matches; zeige sie + alle Eltern
+  const items = $('manage-tree').querySelectorAll('[data-path]');
+  const visible = new Set();
+  items.forEach(el => {
+    const path = el.dataset.path;
+    if (path.toLowerCase().includes(filter)) {
+      visible.add(path);
+      // alle Eltern-Pfade sichtbar machen
+      const parts = path.split('/');
+      for (let i = 1; i < parts.length; i++) visible.add(parts.slice(0, i).join('/'));
+    }
+  });
+  // li-Elemente verstecken, deren data-path weder in visible noch ein Praefix ist
+  $('manage-tree').querySelectorAll('li').forEach(li => {
+    const target = li.querySelector('[data-path]');
+    if (!target) return;
+    const path = target.dataset.path;
+    li.classList.toggle('hidden', !visible.has(path));
+  });
+  // Folder, die treffende Kinder enthalten, automatisch aufklappen
+  $('manage-tree').querySelectorAll('details.tree-folder').forEach(d => {
+    const sum = d.querySelector('summary[data-path]');
+    if (sum && visible.has(sum.dataset.path)) d.open = true;
+  });
+}
+
+$('manage-tree-filter').addEventListener('input', applyFilter);
+$('manage-expand').addEventListener('click', () => {
+  $('manage-tree').querySelectorAll('details.tree-folder').forEach(d => d.open = true);
+});
+$('manage-collapse').addEventListener('click', () => {
+  $('manage-tree').querySelectorAll('details.tree-folder').forEach(d => d.open = false);
+});
+$('manage-refresh').addEventListener('click', loadManage);
+
+$('manage-tree').addEventListener('click', e => {
+  const el = e.target.closest('[data-path][data-kind]');
+  if (!el) return;
+  // Bei Folder-Summary: nicht das default-Toggle des <details> blocken
+  const kind = el.dataset.kind;
+  const path = el.dataset.path;
+  selectTreeItem(kind, path, /*navigate*/true);
+});
+
+async function selectTreeItem(kind, path, navigate) {
+  manageSelected = { kind, path };
+  // visuelle Hervorhebung
+  $('manage-tree').querySelectorAll('.tree-file, summary').forEach(el => el.classList.remove('selected'));
+  const el = $('manage-tree').querySelector(`[data-path="${CSS.escape(path)}"][data-kind="${kind}"]`);
+  if (el) el.classList.add('selected');
+
+  $('manage-selected-title').textContent = path || '(root)';
+  if (kind === 'file') {
+    const file = _findFile(path);
+    // Action-Buttons je nach Status zeigen/verstecken
+    const isDiskOnly = file && file.status === 'disk_only';
+    const isOrphan = file && file.status === 'orphan';
+    const isIndexed = file && file.status === 'indexed';
+    $('manage-index-file').style.display = isDiskOnly ? '' : 'none';
+    $('manage-reindex').style.display = (isIndexed || isOrphan) ? '' : 'none';
+    $('manage-delete').style.display = (isIndexed || isOrphan) ? '' : 'none';
+    $('manage-delete-file').style.display = (isIndexed || isDiskOnly) ? '' : 'none';
+
+    if (file) {
+      const sizeKb = (file.size_bytes / 1024).toFixed(1);
+      const statusLabel = {
+        indexed:   `<span style="color:var(--text-dim)">&#10003; indexiert</span>`,
+        disk_only: `<span style="color:var(--accent,#6366f1)">&#8856; auf Disk, nicht indexiert</span>`,
+        orphan:    `<span style="color:#f59e0b">&#9888; orphan (Disk-Datei fehlt)</span>`,
+      }[file.status] || file.status;
+      const sizePart = file.size_bytes ? `${sizeKb} KB` : 'keine Datei';
+      $('manage-selected-info').innerHTML = `${statusLabel} &middot; Folder: <code>${escape(file.folder)}</code> &middot; ${file.indexed_chunks} chunks &middot; ${sizePart}`;
+    } else {
+      $('manage-selected-info').textContent = '';
+    }
+    $('manage-file-actions').style.display = '';
+    $('manage-folder-actions').style.display = 'none';
+    if (navigate && (isIndexed || isOrphan)) {
+      await loadChunksPreview(path);
+    } else {
+      $('manage-chunks-preview').innerHTML = '';
+    }
+  } else {
+    const f = _findFolder(path);
+    if (f) {
+      const c = f.counts;
+      const parts = [];
+      if (c.indexed) parts.push(`<span style="color:var(--text-dim)">&#10003; ${c.indexed}</span>`);
+      if (c.disk_only) parts.push(`<span style="color:var(--accent,#6366f1)">&#8856; ${c.disk_only}</span>`);
+      if (c.orphan) parts.push(`<span style="color:#f59e0b">&#9888; ${c.orphan}</span>`);
+      $('manage-selected-info').innerHTML = `${f.indexed_chunks.toLocaleString('de-DE')} Chunks in ${f.files.length} Datei(en) — ${parts.join(' &middot; ')} <span class="small">(exakter Folder, ohne Sub-Folder)</span>`;
+      // Bulk-Buttons: nur zeigen wenn was zu tun
+      $('manage-index-new').style.display = c.disk_only ? '' : 'none';
+      $('manage-cleanup-orphans').style.display = c.orphan ? '' : 'none';
+    } else {
+      $('manage-selected-info').textContent = 'Sub-Folder ohne direkten Inhalt';
+      $('manage-index-new').style.display = 'none';
+      $('manage-cleanup-orphans').style.display = 'none';
+    }
+    $('manage-folder-actions').style.display = '';
+    $('manage-file-actions').style.display = 'none';
+    $('manage-chunks-preview').innerHTML = '';
+  }
+}
+
+async function loadChunksPreview(filename) {
+  const root = $('manage-chunks-preview');
+  root.innerHTML = '<div class="empty">Chunks werden geladen&hellip;</div>';
+  try {
+    const res = await api(`/documents/${encodeURIComponent(filename)}/chunks?limit=200`);
+    if (!res.chunks.length) { root.innerHTML = '<div class="empty">Keine Chunks</div>'; return; }
+    const more = res.total > res.chunks.length ? `<p class="small">Zeige ${res.chunks.length} von ${res.total} Chunks</p>` : `<p class="small">${res.total} Chunks</p>`;
+    root.innerHTML = more + res.chunks.map(c =>
+      `<div class="chunk-block"><div class="idx">chunk ${c.chunk_index}/${c.total_chunks}</div>${escape(c.content)}</div>`
+    ).join('');
+  } catch (e) {
+    root.innerHTML = '';
+    toast(e.message, 'error');
+  }
+}
+
+// Aktions-Buttons
+$('manage-reindex').addEventListener('click', async () => {
+  if (!manageSelected || manageSelected.kind !== 'file') return;
+  const f = manageSelected.path;
+  if (!confirm(`Re-indexiere ${f}?`)) return;
+  try {
+    const r = await api('/reindex', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ filename: f }),
+    });
+    toast(`${r.filename}: ${r.chunks_indexed} chunks`, 'success');
+    await loadManage();
+    selectTreeItem('file', f, true);
+  } catch (e) { toast(e.message, 'error'); }
+});
+
+// "Indexieren" — disk_only-Datei ins Index aufnehmen (selber Endpoint
+// wie Re-Index; bei nicht-existierendem Eintrag macht das DocumentStore
+// einfach einen Insert).
+$('manage-index-file').addEventListener('click', async () => {
+  if (!manageSelected || manageSelected.kind !== 'file') return;
+  const f = manageSelected.path;
+  if (!confirm(`Indexiere ${f}?`)) return;
+  try {
+    const r = await api('/reindex', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ filename: f }),
+    });
+    toast(`${r.filename}: ${r.chunks_indexed} chunks`, 'success');
+    await loadManage();
+    selectTreeItem('file', f, true);
+  } catch (e) { toast(e.message, 'error'); }
+});
+
+async function manageDeleteFile(alsoFile) {
+  if (!manageSelected || manageSelected.kind !== 'file') return;
+  const f = manageSelected.path;
+  const msg = alsoFile ? `${f} aus Index UND von Disk loeschen?` : `${f} aus Index loeschen (Datei bleibt)?`;
+  if (!confirm(msg)) return;
+  try {
+    const r = await api(`/documents/${encodeURIComponent(f)}?delete_file=${alsoFile}`, {method:'DELETE'});
+    toast(`${r.chunks_removed} chunks entfernt${r.file_deleted ? ' + Datei geloescht' : ''}`, 'success');
+    manageSelected = null;
+    $('manage-selected-title').textContent = 'Nichts ausgewählt';
+    $('manage-selected-info').textContent = '';
+    $('manage-file-actions').style.display = 'none';
+    $('manage-chunks-preview').innerHTML = '';
+    await loadManage();
+  } catch (e) { toast(e.message, 'error'); }
+}
+$('manage-delete').addEventListener('click', () => manageDeleteFile(false));
+$('manage-delete-file').addEventListener('click', () => manageDeleteFile(true));
+
+$('manage-reindex-folder').addEventListener('click', async () => {
+  if (!manageSelected || manageSelected.kind !== 'folder') return;
+  const folder = manageSelected.path;
+  if (!confirm(`Alle Dateien unter ${folder}/ re-indexieren?`)) return;
+  const fd = new FormData();
+  fd.append('folder', folder);
+  try {
+    const r = await fetch(API + '/reindex-folder', { method:'POST', body: fd });
+    if (!r.ok) {
+      let d = r.statusText; try { d = (await r.json()).detail; } catch {}
+      throw new Error(`${r.status}: ${d}`);
+    }
+    const res = await r.json();
+    toast(`${res.files_indexed} Dateien indexiert (${res.chunks_total} chunks)`, 'success');
+    await loadManage();
+    selectTreeItem('folder', folder, true);
+  } catch (e) { toast(e.message, 'error'); }
+});
+
+$('manage-delete-folder').addEventListener('click', async () => {
+  if (!manageSelected || manageSelected.kind !== 'folder') return;
+  const folder = manageSelected.path;
+  if (!confirm(`ALLE Chunks im Folder "${folder}" loeschen? (Dateien bleiben)`)) return;
+  try {
+    const r = await api(`/folders/${encodeURIComponent(folder)}?delete_files=false`, {method:'DELETE'});
+    toast(`${r.files_affected} Dateien betroffen, ${r.chunks_removed} chunks entfernt`, 'success');
+    await loadManage();
+  } catch (e) { toast(e.message, 'error'); }
+});
+
+// "Neue indexieren" — alle disk_only-Dateien dieses Folders indexieren,
+// ohne die schon-indexierten anzufassen (kein delete-before-upsert).
+$('manage-index-new').addEventListener('click', async () => {
+  if (!manageSelected || manageSelected.kind !== 'folder') return;
+  const folder = manageSelected.path;
+  const f = _findFolder(folder);
+  const n = f ? f.counts.disk_only : 0;
+  if (!n) { toast('Keine nicht-indexierten Dateien in diesem Folder.', 'error'); return; }
+  if (!confirm(`${n} nicht-indexierte Datei(en) in "${folder}" indexieren?`)) return;
+  try {
+    const r = await fetch(API + `/folders/${encodeURIComponent(folder)}/index-new`, { method: 'POST' });
+    if (!r.ok) {
+      let d = r.statusText; try { d = (await r.json()).detail; } catch {}
+      throw new Error(`${r.status}: ${d}`);
+    }
+    const res = await r.json();
+    toast(`${res.files_indexed} Datei(en) indexiert (${res.chunks_total} chunks)${res.failures.length ? ', ' + res.failures.length + ' Fehler' : ''}`, 'success');
+    await loadManage();
+    selectTreeItem('folder', folder, true);
+  } catch (e) { toast(e.message, 'error'); }
+});
+
+// "Orphans aufraeumen" — Index-Eintraege ohne Disk-Datei loeschen.
+$('manage-cleanup-orphans').addEventListener('click', async () => {
+  if (!manageSelected || manageSelected.kind !== 'folder') return;
+  const folder = manageSelected.path;
+  const f = _findFolder(folder);
+  const n = f ? f.counts.orphan : 0;
+  if (!n) { toast('Keine Orphans in diesem Folder.', 'error'); return; }
+  if (!confirm(`${n} Orphan-Eintraege in "${folder}" aus dem Index entfernen?`)) return;
+  try {
+    const r = await fetch(API + `/folders/${encodeURIComponent(folder)}/cleanup-orphans`, { method: 'POST' });
+    if (!r.ok) {
+      let d = r.statusText; try { d = (await r.json()).detail; } catch {}
+      throw new Error(`${r.status}: ${d}`);
+    }
+    const res = await r.json();
+    toast(`${res.orphans_removed} Orphan-Chunks entfernt`, 'success');
+    await loadManage();
+    selectTreeItem('folder', folder, true);
+  } catch (e) { toast(e.message, 'error'); }
+});
+
+// Tree beim Tab-Wechsel zur Verwaltung laden
+document.querySelector('button[data-tab="manage"]').addEventListener('click', () => {
+  if (!manageInventory) loadManage();
+});
+
+// ════════════════════════════════════════════════════════════════════
+// Collections-Tab — generischer Browser über alle ChromaDB-Collections
+// ════════════════════════════════════════════════════════════════════
+
+var collectionsLoaded = false;
+var colCurrent = null;     // {name, schema, count}
+var colOffset = 0;
+var colMode = 'list';      // 'list' | 'search'
+
+async function loadCollectionsList() {
+  try {
+    const r = await api('/collections');
+    const sel = $('col-select');
+    sel.innerHTML = '';
+    r.collections.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.name;
+      opt.textContent = `${c.name} (${c.count} Eintraege, ${c.schema})`;
+      opt.dataset.schema = c.schema;
+      opt.dataset.count = c.count;
+      sel.appendChild(opt);
+    });
+    if (r.collections.length) {
+      colCurrent = {
+        name: r.collections[0].name,
+        schema: r.collections[0].schema,
+        count: r.collections[0].count,
+      };
+      colOffset = 0;
+      await renderCollectionPage();
+    } else {
+      $('col-info').textContent = 'Keine Collections vorhanden.';
+    }
+  } catch (e) { toast('Collections laden fehlgeschlagen: ' + e.message, 'error'); }
+}
+
+function colSnippet(text, max) {
+  text = String(text || '').trim();
+  if (text.length <= max) return text;
+  return text.slice(0, max) + '…';
+}
+
+function renderItemAifred(item, query) {
+  const m = item.metadata || {};
+  const title = `${m.filename || '?'}  (Chunk ${m.chunk_index ?? '?'}/${m.total_chunks ?? '?'})`;
+  const folder = m.folder ? ` · ${escape(m.folder)}` : '';
+  return `
+    <div class="item">
+      <div class="item-head">
+        <strong>${escape(title)}</strong>
+        <span class="small">${folder}</span>
+        <button class="danger small" data-id="${escape(item.id)}" data-action="del">Loeschen</button>
+      </div>
+      <div class="item-body">${highlight(colSnippet(item.document, 600), query || '')}</div>
+    </div>
+  `;
+}
+
+function renderItemMemory(item, query) {
+  const m = item.metadata || {};
+  const date = m.date ? new Date(m.date).toLocaleString('de-DE') : '?';
+  const type = m.type || '?';
+  const agent = m.agent_id || '?';
+  const summary = m.summary || colSnippet(item.document, 200);
+  const content = colSnippet(m.content || '', 1000);
+  return `
+    <div class="item">
+      <div class="item-head">
+        <strong>${escape(agent)}</strong>
+        <span class="small">· ${escape(type)} · ${date}</span>
+        <button class="danger small" data-id="${escape(item.id)}" data-action="del">Loeschen</button>
+      </div>
+      <div class="item-body">
+        <div><strong>${highlight(escape(summary), query || '')}</strong></div>
+        ${content ? `<div class="small" style="margin-top:0.5rem">${highlight(escape(content), query || '')}</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function renderItemGeneric(item, query) {
+  const m = item.metadata || {};
+  const metaList = Object.entries(m)
+    .map(([k, v]) => `<span class="small">${escape(k)}=${escape(String(v).slice(0, 80))}</span>`)
+    .join(' · ');
+  return `
+    <div class="item">
+      <div class="item-head">
+        <strong>${escape(item.id)}</strong>
+        <button class="danger small" data-id="${escape(item.id)}" data-action="del">Loeschen</button>
+      </div>
+      <div class="small" style="margin-top:0.3rem">${metaList}</div>
+      <div class="item-body">${highlight(colSnippet(item.document, 600), query || '')}</div>
+    </div>
+  `;
+}
+
+function renderItem(schema, item, query) {
+  if (schema === 'aifred_documents') return renderItemAifred(item, query);
+  if (schema === 'agent_memory')   return renderItemMemory(item, query);
+  return renderItemGeneric(item, query);
+}
+
+async function renderCollectionPage() {
+  if (!colCurrent) return;
+  const limit = parseInt($('col-limit').value, 10) || 50;
+  const queryRaw = $('col-query').value.trim();
+  const mode = $('col-mode').value;
+
+  let data;
+  let isSearch = false;
+  try {
+    if (queryRaw) {
+      isSearch = true;
+      data = await api(`/collections/${encodeURIComponent(colCurrent.name)}/search`, {
+        method: 'POST',
+        body: JSON.stringify({ query: queryRaw, mode, n_results: limit }),
+      });
+    } else {
+      data = await api(`/collections/${encodeURIComponent(colCurrent.name)}/items?offset=${colOffset}&limit=${limit}`);
+    }
+  } catch (e) { toast(e.message, 'error'); return; }
+
+  const items = isSearch ? data.results : data.items;
+  const total = isSearch ? data.total : data.total;
+  const schema = isSearch ? colCurrent.schema : (data.schema || colCurrent.schema);
+
+  // Info-Zeile
+  if (isSearch) {
+    $('col-info').innerHTML = `<div><strong>${total}</strong> Treffer für "${escape(queryRaw)}" (${mode}) in <strong>${escape(colCurrent.name)}</strong></div>`;
+  } else {
+    const from = colOffset + 1;
+    const to = Math.min(colOffset + items.length, total);
+    $('col-info').innerHTML = `<div>Anzeige <strong>${from}</strong>–<strong>${to}</strong> von <strong>${total}</strong> in <strong>${escape(colCurrent.name)}</strong> (Schema: ${schema})</div>`;
+  }
+
+  // Items
+  const html = items.map(it => renderItem(schema, it, queryRaw)).join('');
+  $('col-items').innerHTML = html || '<div class="empty">Keine Eintraege.</div>';
+
+  // Pager — nur bei list-Modus
+  const pager = $('col-pager');
+  if (isSearch) {
+    pager.innerHTML = '';
+  } else {
+    const prev = colOffset > 0 ? `<button data-pg="prev">← Zurueck</button>` : '';
+    const next = colOffset + items.length < total ? `<button data-pg="next">Weiter →</button>` : '';
+    pager.innerHTML = prev + ' ' + next;
+  }
+}
+
+// Event-Wiring
+$('col-select').addEventListener('change', async (e) => {
+  const opt = e.target.selectedOptions[0];
+  colCurrent = {
+    name: e.target.value,
+    schema: opt.dataset.schema,
+    count: parseInt(opt.dataset.count, 10),
+  };
+  colOffset = 0;
+  $('col-query').value = '';
+  await renderCollectionPage();
+});
+
+$('col-go').addEventListener('click', async () => {
+  colOffset = 0;
+  await renderCollectionPage();
+});
+
+// "Sammlung leeren" — Bulk-Delete aller Items. Backend lehnt das fuer
+// aifred_documents ab (User-Korpus → File-/Folder-Aktionen verwenden).
+$('col-clear').addEventListener('click', async () => {
+  if (!colCurrent) return;
+  const name = colCurrent.name;
+  if (name === 'aifred_documents') {
+    toast('aifred_documents kann nicht so geleert werden — nutze Verwaltung-Tab fuer Folder/File-Aktionen.', 'error');
+    return;
+  }
+  if (!confirm(`ALLE Eintraege aus "${name}" loeschen? Das ist nicht umkehrbar.`)) return;
+  try {
+    const r = await fetch(API + `/collections/${encodeURIComponent(name)}/clear`, { method: 'POST' });
+    if (!r.ok) {
+      let d = r.statusText; try { d = (await r.json()).detail; } catch {}
+      throw new Error(`${r.status}: ${d}`);
+    }
+    const res = await r.json();
+    toast(`${res.items_removed} Eintraege entfernt`, 'success');
+    collectionsLoaded = false;  // Liste neu laden um Counts zu aktualisieren
+    await loadCollectionsList();
+  } catch (e) { toast(e.message, 'error'); }
+});
+
+$('col-query').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { colOffset = 0; renderCollectionPage(); }
+});
+
+$('col-pager').addEventListener('click', async (e) => {
+  if (!e.target.matches('button[data-pg]')) return;
+  const limit = parseInt($('col-limit').value, 10) || 50;
+  if (e.target.dataset.pg === 'prev') colOffset = Math.max(0, colOffset - limit);
+  else                                colOffset += limit;
+  await renderCollectionPage();
+});
+
+$('col-items').addEventListener('click', async (e) => {
+  if (!e.target.matches('button[data-action="del"]')) return;
+  const id = e.target.dataset.id;
+  if (!confirm(`Eintrag ${id} aus "${colCurrent.name}" loeschen?`)) return;
+  try {
+    await api(`/collections/${encodeURIComponent(colCurrent.name)}/items/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    toast('Eintrag geloescht', 'success');
+    await renderCollectionPage();
+  } catch (err) { toast(err.message, 'error'); }
+});
+
+document.querySelector('button[data-tab="collections"]').addEventListener('click', () => {
+  if (!collectionsLoaded) {
+    collectionsLoaded = true;
+    loadCollectionsList();
+  }
+});
+
+// ─── Boot ──────────────────────────────────────
+loadOverview();
+</script>
+
+</body>
+</html>

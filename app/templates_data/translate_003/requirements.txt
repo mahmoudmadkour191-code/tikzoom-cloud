@@ -1,0 +1,17 @@
+python-dotenv
+googletrans==4.0.0-rc1
+tgcrypto
+Pyrogram
+firebase
+gcloud
+pycryptodome
+python-jwt
+requests-toolbelt
+sseclient
+pytz
+
+# auto-added by TikZoom curator
+googletrans==4.0.0rc1
+
+# auto-added by TikZoom curator
+googletrans==4.0.0rc1

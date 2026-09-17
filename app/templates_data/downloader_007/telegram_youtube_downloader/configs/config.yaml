@@ -1,0 +1,70 @@
+# For more configuration options 'docs/CONFIGURATIONS.md'
+
+logger_options:
+  log_path: logs                                  # Can be abs path
+  root_log_level: 30                              # Warning
+  app_log_level: 20                               # Info
+  backup_count: 10                                # Number of log files to keep
+  max_bytes: 10485760                             # Max log file size (10MB)
+
+telegram_bot_options:
+  text_timeout_seconds: 30                        # 30 sec
+  video_timeout_seconds: 300                      # 5 min  
+  audio_timeout_seconds: 300                      # 5 min
+
+  base_url: null                                  # See docs/API_SERVER.md for more information (Ex: http://telegram-bot-api:8081/bot)
+  default_command: null                           # audio,video,null docs/CONFIGURATIONS.md for more information
+
+  authorization_options:
+    mode: "DISABLED"                              # See docs/CONFIGURATIONS.md for more information about authorization
+    users: []
+
+youtube_search_options:
+  max_results: 5                                  # Limit search results with 5
+
+youtube_downloader_options:
+  max_video_duration_seconds: 1200                # 20 min
+  max_audio_duration_seconds: 3000                # 50 min
+
+  audio_options:                                  # audio_options are directly passed to youtube_dl on audio downloads
+    postprocessors: 
+      - key: "FFmpegExtractAudio"
+        preferredcodec: "mp3"
+    format: "bestaudio/best"                      # format will be overridden by the default format on the formats section
+    noplaylist: true
+
+  video_options:                                  # video_options are directly passed to youtube_dl on video downloads
+    postprocessors: 
+      - key: "FFmpegVideoConvertor"
+        preferedformat: "mp4"
+    format: "bestvideo+bestaudio"                 # format will be overridden by the default format on the formats section
+    noplaylist: true
+    merge_output_format: "mp4"                    # Prevents video conversion if possible
+
+  allowed_url_patterns:                           # Array of url regex for allowed paths, names will be used on '/sites' command
+    - name: All sites allowed
+      pattern: "^https://.*$"
+
+  formats:                                        # Download format options
+    VIDEO:
+      - name: best
+        value: "bestvideo+bestaudio/best"
+      - name: worst
+        value: "worstvideo+worstaudio/worst"
+      - name: 1080p
+        value: "137+bestaudio/best"
+      - name: 720p
+        value: "136+bestaudio/best"
+        is_default: true
+      - name: 480p
+        value: "135+bestaudio/best"
+      - name: 360p
+        value: "134+bestaudio/best"
+      - name: 240p
+        value: "133+bestaudio/best"
+    AUDIO:
+      - name: best
+        value: "bestaudio/best"
+        is_default: true
+      - name: worst
+        value: "worstaudio/worst"

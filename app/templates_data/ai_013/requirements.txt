@@ -1,0 +1,13 @@
+scrapling[fetchers]
+requests
+feedparser
+google-genai
+python-telegram-bot>=21.0
+pyyaml
+python-dotenv
+schedule
+aiohttp
+beautifulsoup4
+lxml
+python-dateutil
+telethon

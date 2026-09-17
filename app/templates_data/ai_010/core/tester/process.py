@@ -1,0 +1,223 @@
+import asyncio
+import time
+import traceback
+from types import FunctionType
+from typing import Any, Callable
+
+from core.builtins.message.chain import MessageChain, match_kecode
+from core.builtins.message.elements import PlainElement
+from core.constants.exceptions import SessionFinished
+from core.database.models import SenderUnionInfo, TargetUnionInfo
+from core.logger import Logger
+from core.tester.mock.database import init_db, close_db
+from core.tester.mock.loader import load_modules
+from core.tester.mock.parser import parser
+from core.tester.mock.random import Random
+from core.tester.mock.session import MockMessageSession
+from core.utils.container import ExpiringTempDict
+from .decorator import CaseEntry
+from .expectations import Expectation
+
+DEFAULT_FUNCTION_TEST_TIMEOUT = 120.0
+
+
+class _FunctionTestNoProgress(Exception):
+    """Raised only when the func_case watchdog observes no completed subtest."""
+
+
+def _infrastructure_error(input_, expected, message: str) -> list[dict]:
+    """把测试基础设施故障转换为可被 runner 计入失败的结果。"""
+    return [{"input": input_, "expected": expected, "traceback": message, "action": []}]
+
+
+async def run_case_entry(entry: CaseEntry, is_ci: bool = False) -> list[dict]:
+    try:
+        await close_db()
+    except Exception:
+        Logger.exception("Error closing database before test")
+
+    if not await init_db():
+        message = f"Failed to reinitialize database for case {entry.get('func')}."
+        Logger.critical(message)
+        return _infrastructure_error(entry.get("input"), entry.get("expected"), message)
+
+    try:
+        await load_modules(show_logs=False, monkey_patches={"Random": Random()})
+    except Exception:
+        error = traceback.format_exc()
+        Logger.exception("Failed to load modules for tests:")
+        return _infrastructure_error(entry.get("input"), entry.get("expected"), error)
+
+    start = time.perf_counter()
+    timeout = entry.get("timeout")
+    result = await run_test_case(entry["input"], entry["expected"], entry["func"], is_ci, timeout=timeout)
+    elapsed = time.perf_counter() - start
+    if "exception" in result and isinstance(result["expected"], Expectation):
+        match = await result["expected"].match(result)
+        if match:
+            del result["traceback"]
+    try:
+        result["time_cost"] = elapsed
+    except Exception:
+        pass
+    return [result]
+
+
+async def run_function_entry(
+    fn: FunctionType, is_ci: bool = False, timeout: float | None = DEFAULT_FUNCTION_TEST_TIMEOUT
+) -> dict[str, Any]:
+    try:
+        await close_db()
+    except Exception:
+        Logger.exception("Error closing database before func test")
+
+    if not await init_db():
+        message = f"Failed to reinitialize database for func test {fn.__name__}."
+        Logger.critical(message)
+        return {"error": message}
+
+    try:
+        await load_modules(show_logs=False, monkey_patches={"Random": Random()})
+    except Exception:
+        error = traceback.format_exc()
+        Logger.exception("Failed to load modules for tests:")
+        return {"error": error}
+
+    tester = None
+    start = time.perf_counter()
+    try:
+        from core.tester import Tester as TesterClass
+
+        tester = TesterClass(fn.__name__)
+        setattr(tester, "is_ci", is_ci)
+        if timeout is None:
+            returned = await fn(tester)
+        else:
+            function_task = asyncio.create_task(fn(tester))
+            progress_task = None
+            try:
+                while True:
+                    progress_task = asyncio.create_task(tester._wait_for_progress())
+                    done, _ = await asyncio.wait(
+                        (function_task, progress_task),
+                        timeout=timeout,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if function_task in done:
+                        progress_task.cancel()
+                        await asyncio.gather(progress_task, return_exceptions=True)
+                        returned = function_task.result()
+                        break
+                    if progress_task in done:
+                        continue
+                    progress_task.cancel()
+                    function_task.cancel()
+                    await asyncio.gather(progress_task, function_task, return_exceptions=True)
+                    raise _FunctionTestNoProgress
+            finally:
+                if progress_task is not None and not progress_task.done():
+                    progress_task.cancel()
+                    await asyncio.gather(progress_task, return_exceptions=True)
+                if not function_task.done():
+                    function_task.cancel()
+                    await asyncio.gather(function_task, return_exceptions=True)
+        if isinstance(returned, TesterClass):
+            tester = returned
+    except _FunctionTestNoProgress:
+        elapsed = time.perf_counter() - start
+        entries = tester.get_entries() if tester is not None else []
+        results = tester.get_results() if tester is not None else []
+        active_test = None
+        if len(entries) > len(results):
+            active_entry = entries[len(results)]
+            active_test = active_entry.get("note") or active_entry.get("input")
+            if active_test is None:
+                expected = active_entry.get("expected")
+                active_test = getattr(expected, "__name__", type(expected).__name__)
+        message = f"Function test {fn.__name__} made no progress for {timeout} seconds"
+        if active_test:
+            message += f" while running {active_test!r}"
+        Logger.error(f"{message}.")
+        return {
+            "timeout": True,
+            "time_cost": elapsed,
+            "timeout_limit": timeout,
+            "active_test": active_test,
+            "completed_tests": len(results),
+            "entries": entries,
+            "results": results,
+        }
+    except Exception:
+        error = traceback.format_exc()
+        Logger.exception(f"Error running test function {fn.__name__}:")
+        return {"error": error}
+
+    elapsed = time.perf_counter() - start
+    entries = tester.get_entries()
+    results = tester.get_results()
+    return {"tester": tester, "entries": entries, "results": results, "time_cost": elapsed}
+
+
+async def run_test_case(
+    input_: str | list[str] | tuple[str, ...],
+    expected: Expectation | None = None,
+    casetest_target: Callable | None = None,
+    is_ci: bool = False,
+    timeout: float | None = None,
+):
+    async def _run_test():
+        try:
+            await TargetUnionInfo.resolve_union("TEST|Console|0")
+            sender_union_info = await SenderUnionInfo.resolve_union("TEST|0")
+            await sender_union_info.edit_attr("superuser", True)
+        except Exception:
+            pass
+
+        msg = MockMessageSession(input_, is_ci=is_ci)
+        await msg.async_init(msg.trigger_msg)
+
+        if casetest_target is not None:
+            setattr(msg, "_casetest_target", casetest_target)
+
+        try:
+            await parser(msg)
+        except SessionFinished:
+            pass
+        except Exception as e:
+            err_msg = msg.session_info.locale.t_str(str(e))
+            try:
+                err_chain = match_kecode(err_msg, disable_joke=True)
+            except Exception:
+                err_chain = MessageChain.assign(err_msg)
+
+            err_action = [
+                x.text if isinstance(x, PlainElement) else str(x) for x in err_chain.as_sendable(msg.session_info)
+            ]
+
+            return {
+                "input": input_,
+                "exception": e,
+                "exception_message": err_chain.to_str(),
+                "action": [f"(raise {type(e).__name__})"] + err_action,
+                "traceback": traceback.format_exc(),
+                "expected": expected,
+            }
+        finally:
+            await ExpiringTempDict.clear_all(now=time.time() + 31536000)
+
+        return {
+            "input": input_,
+            "output": msg.sent,
+            "action": msg.action,
+            "expected": expected,
+        }
+
+    if timeout:
+        try:
+            result = await asyncio.wait_for(_run_test(), timeout=timeout)
+        except asyncio.TimeoutError:
+            await ExpiringTempDict.clear_all(now=time.time() + 31536000)
+            result = {"input": input_, "expected": expected, "timeout": True}
+    else:
+        result = await _run_test()
+    return result

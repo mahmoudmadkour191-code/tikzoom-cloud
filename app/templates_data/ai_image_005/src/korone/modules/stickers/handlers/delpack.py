@@ -1,0 +1,32 @@
+from typing import TYPE_CHECKING
+
+from aiogram import flags
+from aiogram.filters import Command
+
+from korone.ui import Code, column, template
+from korone.utils.handlers import KoroneMessageHandler
+from korone.utils.i18n import gettext as _
+from korone.utils.i18n import lazy_gettext as l_
+
+if TYPE_CHECKING:
+    from aiogram.dispatcher.event.handler import CallbackType
+
+
+@flags.help(description=l_("Show how to delete sticker packs and refresh your tracked list."))
+@flags.disableable(name="delpack")
+class StickerDeletePackHandler(KoroneMessageHandler):
+    @classmethod
+    def filters(cls) -> tuple[CallbackType, ...]:
+        return (Command("delpack"),)
+
+    async def handle(self) -> None:
+        doc = column(
+            _("Telegram bots cannot delete entire sticker packs directly."),
+            template(
+                _("Delete packs manually via {bot}, then run {command} to refresh your list."),
+                bot=Code("@stickers"),
+                command=Code("/mypacks"),
+            ),
+            template(_("Tip: use {command} to switch your default pack."), command=Code("/switch")),
+        )
+        await self.answer(doc)

@@ -1,0 +1,43 @@
+version: "3.9"
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: shopbot-postgres
+    environment:
+      POSTGRES_DB: shopbot
+      POSTGRES_USER: shopbot
+      POSTGRES_PASSWORD: shopbot
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopbot -d shopbot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shopbot-api
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://shopbot:shopbot@db:5432/shopbot
+      - PORT=8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploads_data:/app/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health/ | grep -q '\"status\": \"ok\"' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+volumes:
+  db_data: {}
+  uploads_data: {}

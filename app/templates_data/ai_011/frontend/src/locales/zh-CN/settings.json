@@ -1,0 +1,650 @@
+{
+  "title": "系统设置",
+  "tabs": {
+    "system": "基本配置",
+    "modelGroups": "模型管理",
+    "theme": "调色盘",
+    "spaceCleanup": "空间回收"
+  },
+  "system": {
+    "emptyMessage": "暂无系统配置项",
+    "otherCategory": "其他"
+  },
+  "models": {
+    "title": "模型管理",
+    "subtitle": "统一管理基础模型组与 CC 模型组，后续检测、批量操作与连通性验证都将在这里集中处理。",
+    "tabs": {
+      "basic": "基础模型组",
+      "cc": "CC模型组"
+    },
+    "insights": {
+      "chatGroups": "聊天基础模型组 {{count}} 个",
+      "visionGroups": "支持视觉 {{count}} 个",
+      "boundWorkspaces": "绑定 CC 模型组的工作区 {{count}} 个",
+      "idleCcGroups": "未被工作区使用的 CC 模型组 {{count}} 个"
+    }
+  },
+  "modelGroup": {
+    "title": "基础模型组管理",
+    "addGroup": "添加基础模型组",
+    "editGroup": "编辑基础模型组",
+    "deleteGroup": "删除基础模型组",
+    "name": "基础模型组名称",
+    "description": "描述",
+    "emptyMessage": "暂无基础模型组",
+    "deleteConfirm": "确定要删除此基础模型组吗？",
+    "deleteSuccess": "基础模型组删除成功",
+    "saveSuccess": "基础模型组保存成功",
+    "types": {
+      "chat": "聊天",
+      "embedding": "嵌入",
+      "draw": "绘图"
+    },
+    "typeDescriptions": {
+      "chat": "用于对话的模型",
+      "embedding": "用于将文本转换为向量的模型",
+      "draw": "用于生成图像的模型"
+    },
+    "form": {
+      "groupName": "组名",
+      "apiAddress": "API地址",
+      "apiKey": "API密钥",
+      "proxyAddress": "代理地址",
+      "modelName": "模型名称",
+      "modelType": "模型类型",
+      "vision": "视觉能力",
+      "cot": "外置思维链",
+      "temperature": "Temperature (随机性)",
+      "topP": "Top P (多样性)",
+      "presencePenalty": "Presence Penalty (新话题)",
+      "frequencyPenalty": "Frequency Penalty (重复度)",
+      "extraBody": "Extra Body (JSON参数)"
+    },
+    "placeholders": {
+      "apiAddress": "https://api.nekro.ai/v1",
+      "modelName": "gpt-4o"
+    },
+    "helpers": {
+      "apiAddress": "从列表中选择常用供应商，或输入任意 OpenAI 接口基准地址",
+      "modelName": "若无法获取列表，请直接手动输入模型名称",
+      "vision": "启用模型视觉能力，需要模型支持多模态输入",
+      "cot": "启用NA提供的思维链进行分析，如果模型原生支持请关闭",
+      "advanced": "高级选项",
+      "expandAdvanced": "展开高级选项 ▶",
+      "collapseAdvanced": "收起高级选项 ▼",
+      "nameCopy": "请为复制的模型组设置一个新名称",
+      "nameChar": "组名不能包含URL特殊字符 (如 / ? & # = %)，创建后不可修改",
+      "fetchPrecondition": "请先填写 API 地址与密钥后再获取可用模型",
+      "modelCapabilities": "模型功能",
+      "temperature": "控制输出的随机性 (0-2)",
+      "topP": "控制输出的多样性 (0-1)",
+      "presencePenalty": "基于生成文本中已出现的内容对新内容的惩罚 (-2 到 2)",
+      "frequencyPenalty": "基于生成文本中出现的内容频率对新内容的惩罚 (-2 到 2)",
+      "extraBody": "额外的请求参数 (JSON 格式)"
+    },
+    "actions": {
+      "fetchModels": "拉取模型列表",
+      "fetching": "正在获取",
+      "createCopy": "创建副本",
+      "saveFailed": "保存失败",
+      "createBtn": "新建模型组",
+      "searchPlaceholder": "搜索组名、模型名或地址",
+      "selectAllTestable": "全选可检测项（{{count}}）",
+      "clearSelection": "清空选择",
+      "batchTest": "批量测试模型（{{count}}）",
+      "test": "连接测试"
+    },
+    "validation": {
+      "nameRequired": "组名不能为空",
+      "nameInvalid": "组名不能包含URL特殊字符 (如 / ? & # = %)",
+      "nameExists": "基础模型组名称 \"{{name}}\" 已存在，请使用其他名称",
+      "fetchSuccess": "已获取到 {{count}} 个可用模型",
+      "fetchEmpty": "未获取到模型列表，请手动输入模型名称",
+      "fetchError": "获取模型列表失败：{{error}}。请手动输入模型名称"
+    },
+    "dialog": {
+      "createTitle": "新建基础模型组",
+      "editTitle": "编辑基础模型组",
+      "copyTitle": "复制基础模型组"
+    },
+    "table": {
+      "groupName": "组名",
+      "modelName": "模型名称",
+      "modelType": "模型类型",
+      "apiAddress": "API地址",
+      "proxyAddress": "代理",
+      "features": "功能",
+      "health": "测速",
+      "actions": "操作"
+    },
+    "health": {
+      "notTested": "未测试",
+      "testing": "测试中",
+      "ok": "{{ms}}ms",
+      "failed": "失败",
+      "tooltipPassed": "模型测试通过",
+      "tooltipFailed": "模型测试失败",
+      "tooltipModel": "实际模型：{{model}}",
+      "tooltipLatency": "耗时：{{ms}}ms",
+      "tooltipTokens": "Token：输入 {{input}} / 输出 {{output}}",
+      "tooltipReply": "模型回复：{{text}}",
+      "tooltipError": "错误信息：{{error}}"
+    },
+    "alert": {
+      "providerSupportBefore": "支持任意 OpenAI 兼容模型供应商，如果您没有可用供应商或希望支持我们，可访问 ",
+      "providerSupportLink": "NekroAI 中转",
+      "providerSupportAfter": " 获取专属密钥哦～"
+    },
+    "chips": {
+      "visionSupported": "支持视觉功能",
+      "visionUnsupported": "不支持视觉功能",
+      "vision": "视觉",
+      "cotEnabled": "启用思维链",
+      "cotDisabled": "未启用思维链",
+      "cot": "思维链"
+    },
+    "tooltips": {
+      "visitProvider": "访问API提供商",
+      "edit": "编辑模型组",
+      "test": "测速",
+      "testOnlyChat": "仅支持聊天类型模型测速",
+      "testNeedsConfig": "请先填写模型名、API 地址和密钥",
+      "copy": "复制模型组",
+      "delete": "删除模型组",
+      "defaultDelete": "默认模型组不可删除"
+    },
+    "notifications": {
+      "deleteSuccess": "基础模型组 \"{{name}}\" 已删除！",
+      "deleteFailed": "删除失败",
+      "saveSuccess": "基础模型组保存成功",
+      "copySuccess": "基础模型组 \"{{name}}\" 复制成功",
+      "nameExists": "基础模型组名称 \"{{name}}\" 已存在，请换一个名称～ (>﹏<)",
+      "noTestableGroups": "当前选择中没有可测试的聊天模型组",
+      "testNoResults": "模型测试未返回结果，请检查请求链路",
+      "testAllPassed": "模型测试通过",
+      "testCompleted": "模型测试完成，请查看结果",
+      "testFailed": "模型测试失败，请检查配置",
+      "testPassed": "模型连通性测试通过",
+      "testError": "测速请求失败"
+    },
+    "deleteDialog": {
+      "title": "确认删除基础模型组",
+      "content": "确定要删除基础模型组 \"{{name}}\" 吗？此操作不可恢复！",
+      "confirm": "确认删除"
+    }
+  },
+  "theme": {
+    "title": "主题设置",
+    "mode": {
+      "title": "主题模式",
+      "light": "浅色模式",
+      "dark": "深色模式",
+      "current": "当前模式: {{mode}}",
+      "switchMessage": "已切换至{{mode}}模式"
+    },
+    "performance": {
+      "title": "性能模式",
+      "modes": {
+        "performance": "性能优先",
+        "balanced": "均衡模式",
+        "quality": "质量优先"
+      },
+      "descriptions": {
+        "performance": "性能优先 - 减少视觉效果以提高性能",
+        "balanced": "均衡模式 - 平衡视觉效果与性能",
+        "quality": "质量优先 - 完整视觉效果"
+      },
+      "current": "当前模式: {{desc}}",
+      "switchMessage": "已切换至{{mode}}"
+    },
+    "colors": {
+      "title": "主题颜色",
+      "presetTitle": "预设主题",
+      "customTitle": "自定义主题编辑",
+      "brand": "主色",
+      "accent": "辅色",
+      "lightMode": "浅色模式颜色",
+      "darkMode": "深色模式颜色",
+      "reset": "重置",
+      "preview": "派生色预览",
+      "label": "主色调",
+      "accentLabel": "辅助色",
+      "colorPicker": {
+        "label": "十六进制颜色值",
+        "helper": "请输入有效的十六进制颜色值",
+        "cancel": "取消",
+        "apply": "应用",
+        "title": "选择{{mode}}{{type}}"
+      },
+      "messages": {
+        "starRequired": "高级主题需要您支持开源项目后才能使用",
+        "starRequiredCustom": "请先支持开源项目后再使用自定义主题功能",
+        "applied": "已应用\"{{name}}\"主题",
+        "customApplied": "已应用自定义主题",
+        "customReset": "已重置自定义主题",
+        "presetNotFound": "找不到指定的预设主题",
+        "applyFailed": "应用主题失败，请重试"
+      },
+      "presets": {
+        "kolo": {
+          "name": "可洛红",
+          "desc": "热情活力的红色主题"
+        },
+        "sakura": {
+          "name": "樱花粉",
+          "desc": "如樱花般柔和甜美的粉色系"
+        },
+        "aqua": {
+          "name": "晴空蓝",
+          "desc": "如晴空般明朗的蓝色系"
+        },
+        "matcha": {
+          "name": "抹茶绿",
+          "desc": "如抹茶般清新的绿色系"
+        },
+        "lilac": {
+          "name": "魔法紫",
+          "desc": "如魔法少女般神秘的紫色系"
+        }
+      },
+      "custom": {
+        "name": "自定义主题",
+        "desc": "自定义色彩搭配"
+      }
+    },
+    "wallpaper": {
+      "title": "壁纸设置",
+      "tabs": {
+        "login": "登录页壁纸",
+        "main": "主布局壁纸"
+      },
+      "modes": {
+        "cover": "填充",
+        "contain": "适应",
+        "center": "居中",
+        "repeat": "平铺"
+      },
+      "actions": {
+        "settings": "壁纸设置",
+        "remove": "移除壁纸",
+        "refresh": "刷新",
+        "upload": "上传壁纸",
+        "uploading": "上传中...",
+        "delete": "删除",
+        "apply": "应用",
+        "preview": "预览壁纸",
+        "applyTo": "应用到{{target}}",
+        "close": "关闭",
+        "applyCurrent": "应用为当前选择的壁纸"
+      },
+      "status": {
+        "noWallpaper": "未设置壁纸",
+        "emptyList": "暂无壁纸",
+        "dragDrop": "支持拖放图片到此区域上传"
+      },
+      "messages": {
+        "removed": "已移除{{type}}",
+        "uploadSuccess": "壁纸上传成功",
+        "uploadInfo": "正在上传壁纸 \"{{name}}\"...可能需要一段时间，请耐心等待",
+        "applyInfo": "正在应用壁纸...",
+        "uploadFail": "壁纸上传失败",
+        "applied": "已成功设置为{{type}}",
+        "deleteSuccess": "壁纸删除成功",
+        "deleteFail": "壁纸删除失败",
+        "settingsApplied": "壁纸设置已应用",
+        "fetchFailed": "获取壁纸列表失败",
+        "invalidType": "不支持的文件类型，请上传 JPG, PNG, GIF 或 WebP 格式的图片",
+        "sizeLimit": "文件大小不能超过24MB",
+        "timeout": "壁纸上传超时，请检查网络连接或尝试上传较小的图片",
+        "networkError": "网络连接失败，请检查网络设置后重试",
+        "applyFailed": "应用壁纸失败",
+        "loadFailed": "壁纸应用失败，无法加载图片: {{url}}",
+        "resetDefault": "已重置壁纸设置为默认值"
+      },
+      "dialog": {
+        "title": "壁纸设置",
+        "mode": "显示模式",
+        "blur": "模糊程度: {{value}}px",
+        "dim": "暗度: {{value}}%",
+        "reset": "重置",
+        "cancel": "取消",
+        "apply": "应用设置",
+        "previewTitle": "壁纸预览"
+      }
+    },
+    "star": {
+      "title": "解锁个性化设置",
+      "message": "支持开源项目后即可使用自定义主题和壁纸功能，打造专属于您的个性化界面！",
+      "checkFailed": "功能授权检查失败，请稍后再试"
+    }
+  },
+  "commands": {
+    "center": {
+      "title": "命令中心",
+      "catalogTitle": "命令目录",
+      "detailTitle": "命令详情",
+      "selectHint": "从左侧选择一条命令后，这里会显示相关信息。",
+      "executeTitle": "执行"
+    },
+    "scope": {
+      "label": "管理范围",
+      "system": "系统默认",
+      "channel": "指定频道",
+      "channelSelector": "管理频道",
+      "searchPlaceholder": "搜索频道"
+    },
+    "common": {
+      "loadingChannels": "加载频道中..."
+    },
+    "search": "搜索命令...",
+    "total": "共 {{count}} 个命令",
+    "loading": "加载中...",
+    "empty": "暂无命令",
+    "rowsPerPage": "每页",
+    "filters": {
+      "category": "分类",
+      "source": "来源",
+      "permission": "权限",
+      "all": "全部"
+    },
+    "sources": {
+      "builtIn": "内置",
+      "plugin": "插件",
+      "pluginWithKey": "插件 · {{key}}",
+      "pluginWithName": "插件 · {{name}}",
+      "pluginWithNameAndKey": "插件 · {{name}} ({{key}})"
+    },
+    "state": {
+      "systemEnabled": "系统启用",
+      "systemDisabled": "系统禁用",
+      "inheritedEnabled": "继承系统启用",
+      "inheritedDisabled": "继承系统禁用",
+      "channelEnabled": "频道覆盖启用",
+      "channelDisabled": "频道覆盖禁用",
+      "channelOverride": "频道覆盖"
+    },
+    "stateDescription": {
+      "systemEnabled": "该命令当前在系统范围内可用。",
+      "systemDisabled": "该命令当前在系统范围内已停用。",
+      "inheritedEnabled": "该频道没有单独设置，当前沿用系统默认启用状态。",
+      "inheritedDisabled": "该频道没有单独设置，当前沿用系统默认停用状态。",
+      "channelEnabled": "该频道已单独启用此命令，不受系统默认状态影响。",
+      "channelDisabled": "该频道已单独停用此命令，不受系统默认状态影响。",
+      "channelOverride": "当前频道使用了单独设置，与系统默认状态不同。"
+    },
+    "table": {
+      "name": "命令名",
+      "description": "描述",
+      "category": "分类",
+      "source": "来源",
+      "permission": "权限",
+      "enabled": "启用",
+      "actions": "操作"
+    },
+    "detail": {
+      "usage": "用法",
+      "aliases": "别名",
+      "category": "分类",
+      "source": "来源",
+      "permission": "生效权限",
+      "params": "参数",
+      "noParams": "此命令没有额外参数说明",
+      "required": "必填",
+      "defaultValue": "默认值",
+      "allowedValues": "可选值"
+    },
+    "permissionEditor": {
+      "label": "权限覆盖",
+      "systemOverrideHint": "当前系统权限已覆盖命令注册时的默认权限。",
+      "systemDefaultHint": "当前系统权限沿用命令注册时的默认权限。",
+      "channelOverrideHint": "当前频道已单独覆盖权限，不受系统权限影响。",
+      "channelInheritedHint": "当前频道未单独设置权限，沿用系统生效权限。"
+    },
+    "actions": {
+      "reset": "重置为默认",
+      "enable": "启用命令",
+      "disable": "禁用命令",
+      "resetPermissionDefault": "恢复默认权限",
+      "resetPermissionInherited": "恢复继承权限"
+    },
+    "permissions": {
+      "public": "公开",
+      "user": "用户",
+      "advanced": "频道管理员",
+      "super_user": "超级管理员"
+    },
+    "messages": {
+      "toggleSuccess": "已更新命令状态",
+      "toggleFailed": "更新失败",
+      "resetSuccess": "已重置命令状态",
+      "resetFailed": "重置失败",
+      "permissionUpdateSuccess": "已更新命令权限",
+      "permissionUpdateFailed": "权限更新失败",
+      "permissionResetSuccess": "已重置命令权限",
+      "permissionResetFailed": "权限重置失败",
+      "executeSent": "命令已发送，等待输出",
+      "executeFailed": "命令执行失败"
+    },
+    "execute": {
+      "channel": "执行目标频道",
+      "searchPlaceholder": "搜索频道",
+      "command": "执行命令",
+      "panelHint": "选择目标频道并输入命令，结果会显示在下方输出区。",
+      "placeholder": "输入命令，如 help 或 help 参数",
+      "run": "执行",
+      "selectChannelHint": "请先选择执行频道，再发送命令。",
+      "invalidCommand": "当前输入的命令未在所选频道启用，或命令名不存在。",
+      "logHint": "选择频道后，这里会显示该频道的实时命令输出。"
+    }
+  },
+  "spaceCleanup": {
+    "title": "空间回收",
+    "description": "清理磁盘空间",
+    "cleanup": "执行清理",
+    "cleanupSuccess": "清理成功",
+    "cleanupFailed": "清理失败",
+    "duration": {
+      "seconds": "{{seconds}} 秒",
+      "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒",
+      "hoursMinutes": "{{hours}} 小时 {{minutes}} 分"
+    },
+    "actions": {
+      "scan": "开始扫描",
+      "rescan": "重新扫描",
+      "scanning": "扫描中...",
+      "cleanup": "开始清理",
+      "cleaning": "清理中...",
+      "cancel": "取消",
+      "confirmCleanup": "确认清理",
+      "clearSelection": "清除选择",
+      "expand": "点击展开查看详细信息"
+    },
+    "status": {
+      "scanNotStarted": "尚未进行空间扫描",
+      "scanNotStartedDesc": "点击上方的\"开始扫描\"按钮，系统将分析各类资源的占用情况",
+      "loadScanResult": "正在加载扫描结果...",
+      "wait": "请稍候",
+      "scanningDesc": "正在扫描资源...",
+      "scanSuccess": "扫描完成",
+      "scanFailed": "扫描失败",
+      "scanStartInfo": "扫描已启动",
+      "loadScanResultFailed": "加载扫描结果失败",
+      "cleanupStartInfo": "清理已启动",
+      "cleanupSuccess": "清理完成",
+      "cleanupFailed": "清理失败",
+      "cleanStartFailed": "启动清理失败"
+    },
+    "analysis": {
+      "title": "占用分析",
+      "warning": "空间回收功能尚处于实验性阶段，请注意备份关键数据并谨慎使用",
+      "lastScan": "上次扫描",
+      "unknown": "未知",
+      "duration": "耗时",
+      "filesFound": "发现 {{count}} 个文件",
+      "waitingScan": "待扫描资源...",
+      "overviewTitle": "空间分布概览",
+      "systemTotal": "系统总空间",
+      "agentUsage": "NekroAgent 占用",
+      "systemFree": "系统闲置空间",
+      "otherUsage": "其他数据空间",
+      "cleanable": "可清理空间",
+      "fileCount": "文件总数",
+      "systemDist": "系统空间分布",
+      "resourceDist": "NekroAgent 资源分布",
+      "pieChart": "饼图",
+      "barChart": "排行",
+      "resourceDetail": "资源分类详情"
+    },
+    "list": {
+      "filesWrapper": "{{count}} 文件",
+      "pluginResources": "插件资源 ({{count}})",
+      "chatResources": "聊天资源 ({{count}})",
+      "onlyView": "仅查看",
+      "noTimeFilter": "此类资源不支持按时间过滤（如Python包、特殊资源缓存等），启用时间过滤时将完全清理"
+    },
+    "settings": {
+      "title": "清理设置",
+      "enableTimeFilter": "启用时间过滤",
+      "daysLabel": "清理多少天前的文件",
+      "daysHelper": "仅清理指定天数前修改的文件",
+      "daysHelperDisabled": "已禁用时间过滤",
+      "selectTypeWarn": "请选择要清理的资源类型",
+      "estimatedSpace": "预计释放空间",
+      "estimatedUncertainty": "⚠️ 部分资源无法精确按时间过滤，显示为范围值",
+      "selectedSummary": "已选择 {{typeCount}} 个资源类型",
+      "selectedSummaryChat": " · {{chatCount}} 个聊天"
+    },
+    "cleanupResult": {
+      "completed": "清理完成",
+      "failed": "清理失败",
+      "deleted": "删除 {{deleted}}/{{total}} 文件",
+      "freed": "释放 {{size}}",
+      "freedLabel": "已释放: {{size}}",
+      "progressMessage": "正在清理..."
+    },
+    "dialog": {
+      "title": "确认清理",
+      "warning": "⚠️ 清理操作不可恢复，请确认您的选择！",
+      "uncertaintyWarning": "⚠️ 部分资源（如缓存、日志）无法精确按时间过滤，实际清理空间在此范围内",
+      "summaryType": "已选择 {{count}} 个资源类型",
+      "summaryDays": "📅 仅清理 {{days}} 天前修改的文件",
+      "summaryChat": "💬 仅清理选定的 {{count}} 个聊天",
+      "highRiskTitle": "⚠️ 高风险资源警告",
+      "mediumRiskTitle": "⚠️ 中等风险资源提示"
+    },
+    "chart": {
+      "systemFree": "系统闲置空间",
+      "otherData": "其他数据空间",
+      "agentData": "NekroAgent 数据"
+    }
+  },
+  "oobe": {
+    "title": "NekroAgent 初始引导",
+    "subtitle": "完成模型与系统基础设置后即可开始使用",
+    "manualSubtitle": "重新检查并更新基础配置",
+    "adminPasswordNote": "WebUI 管理员密码仍由部署环境变量管理，不会在引导中修改。",
+    "steps": {
+      "welcome": {
+        "title": "开始",
+        "description": "查看配置完整度"
+      },
+      "language": {
+        "title": "选择语言",
+        "description": "选择 NekroAgent 的显示语言"
+      },
+      "system": {
+        "title": "系统基础",
+        "description": "云服务与默认代理"
+      },
+      "chat": {
+        "title": "主聊天模型",
+        "description": "配置默认对话模型组"
+      },
+      "embedding": {
+        "title": "Embedding 模型",
+        "description": "配置记忆与知识库向量模型"
+      },
+      "finish": {
+        "title": "确认完成",
+        "description": "保存并进入控制台"
+      }
+    },
+    "actions": {
+      "back": "上一步",
+      "next": "下一步",
+      "continue": "继续",
+      "skip": "暂时跳过",
+      "complete": "完成引导",
+      "logout": "退出登录",
+      "fetchModels": "拉取模型",
+      "test": "连接测试",
+      "showSecret": "显示密钥",
+      "hideSecret": "隐藏密钥",
+      "openGuide": "启动引导"
+    },
+    "common": {
+      "enabled": "已启用",
+      "disabled": "已关闭"
+    },
+    "welcome": {
+      "body": "设置 NekroAgent 的系统基础项与模型组。",
+      "footer": "通信适配器、工作区和人设可稍后在控制台继续配置。"
+    },
+    "system": {
+      "languageTitle": "系统语言",
+      "cloudTitle": "NekroAI 云服务",
+      "enableCloud": "启用云服务",
+      "cloudKey": "NekroAI API Key",
+      "cloudLink": "前往 NekroAI 社区获取 API Key",
+      "proxyTitle": "系统默认代理",
+      "proxy": "默认代理地址",
+      "proxyHint": "留空表示不使用默认代理。模型组也可以单独设置代理。"
+    },
+    "model": {
+      "groupName": "模型组名称",
+      "groupNameLocked": "不可更改默认模型组名称",
+      "baseUrl": "API 地址",
+      "apiKey": "API 密钥",
+      "proxy": "模型组代理",
+      "chatModel": "聊天模型",
+      "embeddingModel": "Embedding 模型",
+      "vision": "启用视觉能力",
+      "cot": "启用外置思维链",
+      "advancedConfig": "高级配置",
+      "extraBodyHint": "可选，填写合法 JSON 对象"
+    },
+    "embedding": {
+      "dimensionTitle": "向量维度",
+      "memoryDimension": "记忆 Embedding 维度",
+      "kbDimension": "知识库 Embedding 维度",
+      "dimensionHint": "维度需要与所选 embedding 模型和已有 Qdrant 索引保持一致。"
+    },
+    "finish": {
+      "system": "系统基础",
+      "chat": "主聊天模型",
+      "embedding": "Embedding 模型",
+      "dimensions": "向量维度"
+    },
+    "validation": {
+      "modelFetchRequired": "请先填写 API 地址与 API 密钥",
+      "invalidJson": "请输入合法 JSON",
+      "completeRequired": "请补全主聊天模型、Embedding 模型与向量维度后再完成。"
+    },
+    "testResult": {
+      "success": "连接测试通过",
+      "failed": "连接测试未通过",
+      "detail": "实际模型：{{model}}，耗时：{{ms}}ms"
+    },
+    "notifications": {
+      "completeSuccess": "OOBE 已完成，稍后可在系统设置的“其他”中重新启用该引导",
+      "completeFailed": "保存引导配置失败",
+      "skipped": "已跳过 OOBE，稍后可在系统设置的“其他”中重新启用该引导",
+      "skipFailed": "跳过引导失败",
+      "testPassed": "模型连通性测试通过",
+      "testFailed": "模型测试失败，请检查配置",
+      "testError": "测速请求失败",
+      "fetchSuccess": "已获取 {{count}} 个模型",
+      "fetchFailed": "获取模型列表失败"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+[SteamedFish]
+# api token
+api_id = 123
+api_hash = aaa
+[emacs-china]
+# bot token
+token = xxxx
+[reverse]
+# bot token
+token = xxxx

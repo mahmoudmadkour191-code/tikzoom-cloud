@@ -1,0 +1,593 @@
+import asyncio
+import os
+import time
+from collections import OrderedDict
+from typing import Any, Awaitable, Callable, Optional, TypeVar
+
+from aiogram import Bot, types
+from aiogram.enums import ChatType
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+
+import messages as bm
+from services.logger import logger as logging
+from services.download.queue import QueueTicket
+from utils.download_manager import (
+    DownloadProgress,
+    DownloadRateLimitError,
+    DownloadQueueBusyError,
+    DownloadTooLargeError,
+)
+
+T = TypeVar("T")
+
+_chat_action_cache: "OrderedDict[tuple[int, str], float]" = OrderedDict()
+_chat_action_cache_maxsize = 2048
+_chat_action_ttl_seconds = 4.0
+_message_edit_cache: "OrderedDict[tuple[Any, ...], tuple[str, tuple[tuple[str, str], ...]]]" = OrderedDict()
+_message_edit_cache_maxsize = 4096
+_business_owner_user_cache: dict[str, tuple[float, int]] = {}
+_business_owner_cache_ttl_seconds = 300.0
+_business_message_dedup_cache: "OrderedDict[tuple[int, int, int, str], float]" = (
+    OrderedDict()
+)
+_business_message_dedup_ttl_seconds = 60.0
+_business_message_dedup_maxsize = 4096
+
+
+def get_message_text(message: types.Message) -> str:
+    """Return the message text or caption, falling back to empty string."""
+    return message.text or message.caption or ""
+
+
+async def get_business_owner_user_id(bot: Bot, business_id: str) -> int | None:
+    now = time.monotonic()
+    cached = _business_owner_user_cache.get(business_id)
+    if cached and now - cached[0] <= _business_owner_cache_ttl_seconds:
+        return cached[1]
+
+    try:
+        connection = await bot.get_business_connection(business_id)
+    except Exception as exc:
+        logging.warning(
+            "Failed to resolve business owner: business_id=%s error=%s",
+            business_id,
+            exc,
+        )
+        return None
+
+    owner_id = getattr(getattr(connection, "user", None), "id", None)
+    if owner_id is None:
+        return None
+
+    owner_id = int(owner_id)
+    _business_owner_user_cache[business_id] = (now, owner_id)
+    return owner_id
+
+
+async def should_skip_duplicate_business_message(
+    message: types.Message,
+    bot: Bot,
+    *,
+    service_name: str,
+    logger: Any,
+) -> bool:
+    business_id = getattr(message, "business_connection_id", None)
+    if not business_id:
+        return False
+
+    if getattr(message, "sender_business_bot", None) is not None:
+        return True
+
+    sender_id = getattr(getattr(message, "from_user", None), "id", None)
+    if sender_id is None:
+        return False
+
+    owner_id = await get_business_owner_user_id(bot, str(business_id))
+    if owner_id is None:
+        return False
+
+    sender_id = int(sender_id)
+    chat_id = getattr(getattr(message, "chat", None), "id", None)
+    if chat_id is None:
+        return False
+
+    chat_id = int(chat_id)
+
+    if sender_id == owner_id:
+        receiver_id = chat_id
+    else:
+        receiver_id = owner_id
+
+    # Some messages might not have text (e.g. only media), but we use whatever text is available.
+    text = get_message_text(message)
+    msg_date = getattr(message, "date", None)
+    timestamp = int(msg_date.timestamp()) if msg_date else 0
+
+    dedup_key = (sender_id, receiver_id, timestamp, text)
+
+    now = time.monotonic()
+
+    # Clean up old entries occasionally if we want, or just rely on maxsize.
+    cached_time = _business_message_dedup_cache.get(dedup_key)
+    if (
+        cached_time is not None
+        and now - cached_time < _business_message_dedup_ttl_seconds
+    ):
+        logger.info(
+            "Skipping duplicate %s business message: sender_id=%s receiver_id=%s text_len=%s",
+            service_name,
+            sender_id,
+            receiver_id,
+            len(text),
+        )
+        return True
+
+    _business_message_dedup_cache[dedup_key] = now
+    _business_message_dedup_cache.move_to_end(dedup_key)
+    while len(_business_message_dedup_cache) > _business_message_dedup_maxsize:
+        _business_message_dedup_cache.popitem(last=False)
+
+    return False
+
+
+async def react_to_message(
+    message: types.Message,
+    emoji: str,
+    *,
+    business_id: Optional[int] = None,
+    skip_if_business: bool = True,
+) -> None:
+    """Send a reaction to a message, optionally skipping business chats."""
+    if skip_if_business:
+        resolved_business_id = business_id
+        if resolved_business_id is None:
+            resolved_business_id = getattr(message, "business_connection_id", None)
+        if resolved_business_id is not None:
+            return
+
+    try:
+        await message.react([types.ReactionTypeEmoji(emoji=emoji)])
+    except Exception as exc:
+        logging.debug(
+            "Failed to set reaction: message_id=%s emoji=%s error=%s",
+            getattr(message, "message_id", None),
+            emoji,
+            exc,
+        )
+
+
+async def _send_with_reaction(
+    message: types.Message,
+    text: str,
+    *,
+    emoji: Optional[str] = None,
+    business_id: Optional[int] = None,
+    skip_if_business: bool = True,
+    method: str = "reply",
+    **kwargs: Any,
+) -> None:
+    if emoji:
+        await react_to_message(
+            message,
+            emoji,
+            business_id=business_id,
+            skip_if_business=skip_if_business,
+        )
+
+    responder = getattr(message, method, None)
+    if not responder:
+        raise AttributeError(f"Message object has no method '{method}'")
+
+    try:
+        await responder(text, **kwargs)
+    except TelegramBadRequest:
+        pass
+
+
+async def handle_download_error(
+    message: types.Message,
+    *,
+    text: Optional[str] = None,
+    emoji: str = "👎",
+    business_id: Optional[int] = None,
+    skip_if_business: bool = True,
+    method: str = "reply",
+    **kwargs: Any,
+) -> None:
+    """Notify user about a failed download with a consistent reaction and message."""
+    await _send_with_reaction(
+        message,
+        text or bm.something_went_wrong(),
+        emoji=emoji,
+        business_id=business_id,
+        skip_if_business=skip_if_business,
+        method=method,
+        **kwargs,
+    )
+
+
+async def handle_video_too_large(
+    message: types.Message,
+    *,
+    business_id: Optional[int] = None,
+    skip_if_business: bool = True,
+    method: str = "reply",
+    **kwargs: Any,
+) -> None:
+    """Inform the user that the requested media exceeds Telegram limits."""
+    await _send_with_reaction(
+        message,
+        bm.video_too_large(),
+        emoji="👎",
+        business_id=business_id,
+        skip_if_business=skip_if_business,
+        method=method,
+        **kwargs,
+    )
+
+
+async def handle_download_backpressure_error(
+    exc: Exception,
+    *,
+    message: types.Message,
+    show_service_status: bool,
+    too_large_text: Optional[str] = None,
+    too_large_handler: Optional[Callable[[], Awaitable[None]]] = None,
+) -> None:
+    """Handle download queue/rate-limit errors with consistent UX."""
+    if isinstance(exc, DownloadRateLimitError):
+        if show_service_status:
+            await message.reply(build_rate_limit_text(exc.retry_after))
+        else:
+            await handle_download_error(
+                message, business_id=message.business_connection_id
+            )
+        return
+    if isinstance(exc, DownloadQueueBusyError):
+        if show_service_status:
+            await message.reply(build_queue_busy_text(exc.position))
+        else:
+            await handle_download_error(
+                message, business_id=message.business_connection_id
+            )
+        return
+    if isinstance(exc, DownloadTooLargeError):
+        if too_large_handler is not None:
+            await too_large_handler()
+        elif too_large_text is not None:
+            await message.reply(too_large_text)
+        else:
+            await handle_video_too_large(
+                message, business_id=message.business_connection_id
+            )
+        return
+    raise exc
+
+
+async def maybe_delete_user_message(message: types.Message, delete_flag: Any) -> bool:
+    if str(delete_flag).lower() != "on":
+        return False
+
+    try:
+        await message.delete()
+        return True
+    except TelegramAPIError:
+        await message.answer(bm.delete_permission_warning())
+        return False
+
+
+async def remove_file(path: Optional[str]) -> None:
+    if not path:
+        return
+
+    try:
+        await asyncio.to_thread(os.remove, path)
+        logging.debug("Removed temporary file: path=%s", path)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        logging.error("Error removing file: path=%s error=%s", path, exc)
+
+
+async def send_chat_action_if_needed(
+    bot: Bot,
+    chat_id: int,
+    action: str,
+    business_id: Optional[int],
+) -> None:
+    if business_id is not None:
+        return
+
+    cache_key = (int(chat_id), str(action))
+    now = time.monotonic()
+    cached = _chat_action_cache.get(cache_key)
+    if cached is not None and now - cached < _chat_action_ttl_seconds:
+        _chat_action_cache.move_to_end(cache_key)
+        return
+
+    try:
+        await bot.send_chat_action(chat_id, action)
+    except Exception as exc:
+        logging.warning(
+            "Failed to send chat action: chat_id=%s action=%s error=%s",
+            chat_id,
+            action,
+            exc,
+        )
+    _chat_action_cache[cache_key] = now
+    _chat_action_cache.move_to_end(cache_key)
+    while len(_chat_action_cache) > _chat_action_cache_maxsize:
+        _chat_action_cache.popitem(last=False)
+
+
+def resolve_settings_target_id(message: types.Message) -> int:
+    """Return chat id for group/supergroup, otherwise sender id."""
+    if message.chat and message.chat.type != ChatType.PRIVATE:
+        return message.chat.id
+    return message.from_user.id
+
+
+async def load_user_settings(db_service: Any, message: types.Message) -> Any:
+    return await db_service.user_settings(resolve_settings_target_id(message))
+
+
+def make_status_text_progress_updater(
+    label: str,
+    update_text: Callable[[str], Awaitable[None]],
+    *,
+    min_interval_seconds: float = 0.8,
+) -> Callable[[DownloadProgress], Awaitable[None]]:
+    state = {"last": 0.0}
+
+    async def _on_progress(progress: DownloadProgress) -> None:
+        now = time.monotonic()
+        if not progress.done and now - state["last"] < min_interval_seconds:
+            return
+        state["last"] = now
+        await update_text(build_progress_status(label, progress))
+
+    return _on_progress
+
+
+def make_retry_status_notifier(
+    update_text: Callable[[str], Awaitable[None]],
+    *,
+    enabled: bool = True,
+    min_failed_attempt: int = 2,
+) -> Callable[[int, int, Any], Awaitable[None]]:
+    async def _on_retry(failed_attempt: int, total_attempts: int, _error: Any) -> None:
+        if not enabled or failed_attempt < min_failed_attempt:
+            return
+        await update_text(bm.retrying_again_status(failed_attempt + 1, total_attempts))
+
+    return _on_retry
+
+
+async def safe_edit_text(
+    message: Optional[types.Message], text: str, **kwargs: Any
+) -> None:
+    """Best-effort edit of a bot message (status/progress)."""
+    if not message:
+        return
+    cache_key = _build_message_edit_cache_key(message)
+    payload = (text, _normalize_edit_kwargs(kwargs))
+    cached = _message_edit_cache.get(cache_key)
+    if cached == payload:
+        return
+    try:
+        await message.edit_text(text, **kwargs)
+        _message_edit_cache[cache_key] = payload
+        _message_edit_cache.move_to_end(cache_key)
+        while len(_message_edit_cache) > _message_edit_cache_maxsize:
+            _message_edit_cache.popitem(last=False)
+    except Exception:
+        return
+
+
+async def safe_edit_inline_text(
+    bot: Bot,
+    inline_message_id: Optional[str],
+    text: str,
+    **kwargs: Any,
+) -> bool:
+    """Best-effort edit of an inline message text by inline_message_id."""
+    if not inline_message_id:
+        return False
+    cache_key = ("inline", inline_message_id)
+    payload = (text, _normalize_edit_kwargs(kwargs))
+    cached = _message_edit_cache.get(cache_key)
+    if cached == payload:
+        return True
+    try:
+        await bot.edit_message_text(
+            text=text, inline_message_id=inline_message_id, **kwargs
+        )
+        _message_edit_cache[cache_key] = payload
+        _message_edit_cache.move_to_end(cache_key)
+        while len(_message_edit_cache) > _message_edit_cache_maxsize:
+            _message_edit_cache.popitem(last=False)
+        return True
+    except Exception:
+        return False
+
+
+async def safe_edit_inline_media(
+    bot: Bot,
+    inline_message_id: Optional[str],
+    media: Any,
+    **kwargs: Any,
+) -> bool:
+    """Best-effort edit of inline message media by inline_message_id."""
+    if not inline_message_id:
+        return False
+    try:
+        await bot.edit_message_media(
+            inline_message_id=inline_message_id, media=media, **kwargs
+        )
+        return True
+    except Exception:
+        return False
+
+
+async def safe_delete_message(message: Optional[types.Message]) -> None:
+    """Best-effort delete of a bot message (status/progress)."""
+    if not message:
+        return
+    try:
+        await message.delete()
+    except Exception:
+        return
+
+
+def _build_message_edit_cache_key(message: types.Message) -> tuple[Any, ...]:
+    chat = getattr(message, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    message_id = getattr(message, "message_id", None)
+    if chat_id is not None and message_id is not None:
+        return ("message", chat_id, message_id)
+    return ("message_obj", id(message))
+
+
+def _normalize_edit_kwargs(kwargs: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    normalized: list[tuple[str, str]] = []
+    for key, value in sorted(kwargs.items()):
+        normalized.append((str(key), repr(value)))
+    return tuple(normalized)
+
+
+def _format_bytes(num_bytes: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    value = float(max(0, num_bytes))
+    for unit in units:
+        if value < 1024.0 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{value:.1f} TB"
+
+
+def _format_eta(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "ETA: --:--"
+    total = max(0, int(seconds))
+    minutes, sec = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"ETA: {hours:02d}:{minutes:02d}:{sec:02d}"
+    return f"ETA: {minutes:02d}:{sec:02d}"
+
+
+def _format_eta_short(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "ETA --:--"
+    total = max(0, int(seconds))
+    minutes, sec = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"ETA {hours}:{minutes:02d}:{sec:02d}"
+    return f"ETA {minutes}:{sec:02d}"
+
+
+def build_queue_status(label: str, ticket: QueueTicket) -> str:
+    return (
+        f"Queueing {label}...\n"
+        f"Position: {ticket.position}\n"
+        f"Workers: {ticket.active_workers}"
+    )
+
+
+def _build_progress_bar(percent: float, width: int = 10) -> str:
+    filled = round(percent / 100 * width)
+    filled = max(0, min(width, filled))
+    return "🟩" * filled + "⬜" * (width - filled)
+
+
+def build_progress_status(label: str, progress: DownloadProgress) -> str:
+    speed = _format_bytes(int(progress.speed_bps)) + "/s"
+    downloaded = _format_bytes(progress.downloaded_bytes)
+    if progress.total_bytes > 0:
+        total = _format_bytes(progress.total_bytes)
+        percent = (progress.downloaded_bytes / progress.total_bytes) * 100.0
+        bar = _build_progress_bar(percent)
+        return (
+            f"⬇️ {label}\n"
+            f"{bar} {percent:.0f}%\n"
+            f"{downloaded} / {total} • {speed} • {_format_eta_short(progress.eta_seconds)}"
+        )
+    return (
+        f"⬇️ {label}\n{downloaded} • {speed} • {_format_eta_short(progress.eta_seconds)}"
+    )
+
+
+def build_rate_limit_text(retry_after: float) -> str:
+    wait = max(1, int(round(retry_after)))
+    return (
+        "Too many requests from your account right now.\n"
+        f"Please wait {wait}s and try again."
+    )
+
+
+def build_queue_busy_text(position: int) -> str:
+    return (
+        "The download queue is busy right now.\n"
+        f"Your next request position would be around #{position}."
+    )
+
+
+async def retry_async_operation(
+    operation: Callable[[], Awaitable[T]],
+    *,
+    attempts: int = 3,
+    delay_seconds: float = 1.0,
+    should_retry_result: Optional[Callable[[T], bool]] = None,
+    retry_on_exception: Optional[Callable[[BaseException], bool]] = None,
+    on_retry: Optional[
+        Callable[[int, int, Optional[BaseException]], Awaitable[Any] | Any]
+    ] = None,
+) -> Optional[T]:
+    """
+    Retry an async operation with exponential backoff and jitter.
+    """
+    import random
+
+    if attempts < 1:
+        raise ValueError("attempts must be >= 1")
+
+    last_error: Optional[BaseException] = None
+    last_result: Optional[T] = None
+
+    for attempt in range(1, attempts + 1):
+        failed_error: Optional[BaseException] = None
+        should_retry = False
+
+        try:
+            result = await operation()
+            last_result = result
+            if should_retry_result is not None and should_retry_result(result):
+                should_retry = True
+        except Exception as exc:
+            if retry_on_exception is not None and not retry_on_exception(exc):
+                raise
+            failed_error = exc
+            last_error = exc
+            should_retry = True
+
+        if not should_retry:
+            return last_result
+
+        if attempt >= attempts:
+            break
+
+        if on_retry:
+            maybe = on_retry(attempt, attempts, failed_error)
+            if asyncio.iscoroutine(maybe):
+                await maybe
+
+        backoff = min(30.0, delay_seconds * (2 ** (attempt - 1)) + random.uniform(0, 1))
+        await asyncio.sleep(backoff)
+
+    if last_error is not None:
+        raise last_error
+
+    return last_result

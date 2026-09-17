@@ -1,0 +1,86 @@
+#Polish - Poland
+pl-pl:
+  Start: Rozpocznij
+  Stop: Przerwij
+  Movie: Film
+  MovieWithArticle: Ten film
+  Series: Serial
+  SeriesWithArticle: Ten serial
+  Start chatting: Rozpocznij rozmowę z Addarrem na Telegramie. Przy pierwszym użyciu "start" zostaniesz poproszony o podanie hasła.
+  End: Dodawanie/usuwanie filmów lub seriali zostało zakończone.
+  Title: "Wpisz tytuł:"
+  What is this?: To jest film czy serial?
+  New: Szukaj jeszcze raz
+  Next result: Próbuj dalej
+  Add: Tak, chcę to!
+  Delete: Tak, usuń to
+  StopDelete: Nie, nie chcę tego usuwać
+  Select: Wybierz: Tak, wybierz to
+  Select a path: Wybierz ścieżkę dla filmu lub serialu
+  Select a quality: Proszę wybrać profil jakościowy dla filmu lub serialu
+  Select from which season: Od którego sezonu?
+  Selected and future seasons: Wybrane i przyszłe sezony
+  Season: Sezon
+  Select all seasons: Wybierz wszystkie sezony
+  Deselect all seasons: Odznacz wszystkie sezony
+  Authorize: Musisz zautoryzować ten czat. Jakie jest hasło?
+  Wrong password: Hasło nieprawidłowe. Spróbuj ponownie...
+  Chatid added: "Ten czat został dodany do whitelisty. Teraz możesz używać tego bota."
+  NotAdmin: "Nie jesteś uprawniony do wykonania tej komendy!"
+  Chatid already allowed: "Ten czat już jest zautoryzowany."
+  Help: "Potrzebujesz pomocy? Użyj /%{help}!
+    \n/%{authenticate} —  autoryzacja Twojego czatu
+    \n/%{add} — dodawanie nowego filmu/serialu
+    \n/%{delete} - usuwanie nowego filmu/serialu
+    \n/%{movie} lub /%{serie} — natychmiastowy wybór typu treści
+    \n/%{allSeries} — lista wszystkich istniejących seriali
+    \n/%{allMovies} — lista wszystkich istniejących filmów.
+    \n/%{transmission} - kontrola szybkości pobierania w Transmission.
+    \n/%{sabnzbd} - kontrola szybkości pobierania w Sabnzbd."
+  Missing config: "Brakuje kluczy configa w Twoim pliku config.yaml: %{missingKeys}.
+    \nDodaj je przed uruchomieniem bota."
+  Wrong values: "Te klucze configa w Twoim pliku config.yaml mają nieprawidłową wartość: %{wrongValues}.
+    \nPopraw je przed uruchomieniem bota."
+
+  messages:
+    Add: Tak, dodaj %{subject}
+    This: O %{subjectWithArticle} Ci chodzi?
+    ThisDelete: Czy ten %{subjectWithArticle} chcesz usunąć?
+    AddFailed: Ups, nie udało się dodać %{subjectWithArticle}. Spróbuj innym razem.
+    DeleteFailed: Oops, nie udało się usunąć %{subjectWithArticle}. Spróbuj innym razem.
+    AddSuccess: "Właśnie dodałem %{subjectWithArticle} 🙂"
+    DeleteSuccess: "%{subjectWithArticle} has been successfully removed 🙂"
+    Exist: "%{subjectWithArticle} już istnieje 😉"
+    NoExist: "%{subjectWithArticle} nie istnieje"
+    
+  searchresults:
+    zero: Brak rezultatów
+    one: Jeden rezultat
+    other: "%{count} rezultatów"
+
+  Transmission:
+    NotEnabled: "Funkcja Transmission jest nieaktywna."
+    Speed: "Jaką prędkość pobierania Transmission chcesz?"
+    TSL: Tymczasowe limity pobierania
+    Normal: Normalna szybkość
+    ChangedToTSL: "Tymczasowe limity pobierania aktywne."
+    ChangedToNormal: "Permanente limity pobierania nieaktywne."
+
+  Sabnzbd:
+    NotEnabled: Funkcja Sabnzbd jest nieaktywna.
+    Speed: Jaką prędkość pobierania Transmission chcesz?
+    Limit25: 25%
+    Limit50: 50%
+    Limit100: No limit
+    ChangedTo50: Limit ustawiony do 50%
+    ChangedTo25: Limit ustawiony do 25%
+    ChangedTo100: Brak limitu prędkości pobierania
+    Error: Coś poszło nie tak podczas ustawiania limitu
+
+  Notifications:
+    Stop: Użytkownik %{first_name} z identyfikatorem chat_id %{chat_id} zatrzymał proces.
+    Start: Użytkownik %{first_name} z identyfikatorem chat_id %{chat_id} rozpoczął nowe żądanie.
+    AddSuccess: Artykuł %{subjectWithArticle} %{title} użytkownika %{first_name} z identyfikatorem chat_id %{chat_id} został dodany.
+    AddFailed: Błąd dodawania %{subjectWithArticle} %{title} użytkownika %{first_name} z chat_id %{chat_id}.
+    Exist: Artykuł %{subjectWithArticle} %{title}, który chciał dodać użytkownik %{first_name} with chat_id %{chat_id} już istnieje.
+    Delete: Użytkownik %{first_name} z identyfikatorem chat_id %{chat_id} zainicjował nowe usunięcie.

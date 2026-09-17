@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Cache
+.mypy_cache/
+.ruff_cache/
+
+# Virtual Environment
+.venv/
+venv/
+
+# Version control
+.git/
+.gitignore
+
+# Environment & Secrets
+.env
+.env.local
+
+# Docker
+docker-compose*.yml
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

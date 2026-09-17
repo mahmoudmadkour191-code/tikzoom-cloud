@@ -1,0 +1,150 @@
+import asyncio
+import inspect
+import traceback
+from collections.abc import Callable
+
+from core.logger import Logger
+from .expectations import Expectation
+from .process import run_test_case
+
+
+class Tester:
+    def __init__(self, name: str | None = None):
+        self.name = name
+        self._entries: list[dict] = []
+        self._results: list[dict] = []
+        self._progress_event = asyncio.Event()
+        self.is_ci: bool = False
+
+    async def _wait_for_progress(self) -> None:
+        await self._progress_event.wait()
+        self._progress_event.clear()
+
+    async def test(
+        self,
+        func: Callable,
+        note: str | None = None,
+    ):
+        """
+        运行纯函数测试，不需要命令占位符。
+
+        :param func: 测试函数或 Predicate，返回 True 表示通过，False 表示失败。
+        :param note: 额外说明。
+        :returns: 测试结果字典。
+        """
+        # Predicate 等可调用对象没有 __name__，回退到其类名
+        Logger.trace(f"[{self.name}] test: {note or getattr(func, '__name__', type(func).__name__)}")
+
+        frame = inspect.stack()[1]
+        entry_meta = {
+            "type": "unit",
+            "expected": func,
+            "note": note,
+            "timeout": None,
+            "file": frame.filename,
+            "line": frame.lineno,
+        }
+        self._entries.append(entry_meta)
+
+        try:
+            if asyncio.iscoroutinefunction(func):
+                result = await func()
+            else:
+                result = func()
+        except Exception as exception:
+            final = {
+                "type": "unit",
+                "input": None,
+                "output": None,
+                "action": [],
+                "expected": func,
+                "match": False,
+                "note": note,
+                "exception_type": type(exception).__name__,
+                "exception_message": str(exception),
+                "traceback": traceback.format_exc(),
+            }
+            self._results.append(final)
+            self._progress_event.set()
+            return final
+
+        passed = bool(result)
+        final = {
+            "type": "unit",
+            "input": None,
+            "output": None,
+            "action": [],
+            "expected": func,
+            "match": passed,
+            "note": note,
+        }
+        self._results.append(final)
+        self._progress_event.set()
+        return final
+
+    async def integrate(
+        self,
+        input_: str | list[str] | tuple[str, ...],
+        expected: Expectation | None = None,
+        note: str | None = None,
+        timeout: float | None = None,
+    ):
+        """
+        注册一个交互测试案例。
+
+        :param input_: 预期输入。
+        :param expected: 预期输出，传入期望匹配器，若为 None 则手动复核。
+        :param note: 额外说明。
+        :param timeout: 超时时间（秒），若为 None 则无超时限制。
+        """
+        Logger.trace(f"[{self.name}] expect: {input_} - {note or ''}")
+
+        frame = inspect.stack()[1]
+        entry_meta = {
+            "type": "integration",
+            "input": input_,
+            "expected": expected,
+            "note": note,
+            "timeout": timeout,
+            "file": frame.filename,
+            "line": frame.lineno,
+        }
+        self._entries.append(entry_meta)
+
+        result = await run_test_case(input_, expected=expected, is_ci=self.is_ci, timeout=timeout)
+
+        if "timeout" in result or "exception" in result and not isinstance(expected, Expectation):
+            result.update({"type": "integration", "expected": expected, "match": False, "note": note})
+            self._results.append(result)
+            self._progress_event.set()
+            return result
+
+        if not expected:
+            match = None
+        elif isinstance(expected, Expectation):
+            match = await expected.match(result)
+
+        result.update(
+            {
+                "type": "integration",
+                "input": input_,
+                "expected": expected,
+                "match": match,
+                "note": note,
+            }
+        )
+        if match and "exception" in result:
+            result.pop("traceback", None)
+
+        self._results.append(result)
+        self._progress_event.set()
+        return result
+
+    def get_entries(self) -> list[dict]:
+        return list(self._entries)
+
+    def get_results(self) -> list[dict]:
+        return list(self._results)
+
+
+__all__ = ["Tester"]

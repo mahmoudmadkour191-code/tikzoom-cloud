@@ -1,0 +1,119 @@
+"""Calculator plugin — safe mathematical expression evaluation."""
+
+import ast
+import json
+import operator
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from ....lib.function_calling import Tool
+from ....lib.security import TIER_READONLY
+from ....lib.plugin_base import PluginContext, load_tool_description
+
+
+@dataclass
+class CalculatorPlugin:
+    name: str = "calculator"
+    display_name: str = "Calculator"
+    description: str = "Mathematische Berechnungen — Grundrechenarten und Potenzen (sicherer AST-Parser, keine Funktionen/Symbolik)."
+
+    def is_available(self) -> bool:
+        return True
+
+    def get_tools(self, ctx: PluginContext) -> list[Tool]:
+
+        async def _execute(expression: str) -> str:
+            """Evaluate a math expression safely using AST parsing."""
+            from ....lib.logging_utils import log_message
+
+            binary_ops: dict[type, Callable[[float, float], float]] = {
+                ast.Add: operator.add,
+                ast.Sub: operator.sub,
+                ast.Mult: operator.mul,
+                ast.Div: operator.truediv,
+                ast.FloorDiv: operator.floordiv,
+                ast.Mod: operator.mod,
+                ast.Pow: operator.pow,
+            }
+            unary_ops: dict[type, Callable[[float], float]] = {
+                ast.USub: operator.neg,
+                ast.UAdd: operator.pos,
+            }
+
+            def _eval(node: ast.AST) -> float:
+                if isinstance(node, ast.Expression):
+                    return _eval(node.body)
+                # bool explizit ausschließen (int-Subklasse) — "True + 1"
+                # soll kein gültiger Ausdruck sein
+                elif (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, (int, float))
+                    and not isinstance(node.value, bool)
+                ):
+                    return float(node.value)
+                elif isinstance(node, ast.BinOp):
+                    op_type = type(node.op)
+                    if op_type not in binary_ops:
+                        raise ValueError(f"Unsupported operator: {op_type.__name__}")
+                    left = _eval(node.left)
+                    right = _eval(node.right)
+                    # Bound exponents: reject absurd powers up front with a clear
+                    # error instead of leaning on a float OverflowError.
+                    if op_type is ast.Pow and abs(right) > 1000:
+                        raise ValueError("Exponent too large (max 1000)")
+                    return binary_ops[op_type](left, right)
+                elif isinstance(node, ast.UnaryOp):
+                    uop_type = type(node.op)
+                    if uop_type not in unary_ops:
+                        raise ValueError(f"Unsupported operator: {uop_type.__name__}")
+                    return unary_ops[uop_type](_eval(node.operand))
+                else:
+                    raise ValueError(f"Unsupported expression: {ast.dump(node)}")
+
+            log_message(f"🔢 calculate: {expression}")
+            try:
+                tree = ast.parse(expression, mode='eval')
+                result = _eval(tree)
+                if result == int(result):
+                    result_str = str(int(result))
+                else:
+                    result_str = f"{result:.10g}"
+                log_message(f"✅ calculate: {expression} = {result_str}")
+                return f"{expression} = {result_str}"
+            except Exception as e:
+                log_message(f"❌ calculate failed: {e}")
+                return json.dumps({"error": f"Cannot evaluate '{expression}': {e}"})
+
+        return [
+            Tool(
+                name="calculate",
+                tier=TIER_READONLY,
+                description=(
+                    load_tool_description(__file__, "calculate")
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "expression": {
+                            "type": "string",
+                            "description": "Mathematical expression (e.g. '4832 * 0.17')",
+                        },
+                    },
+                    "required": ["expression"],
+                },
+                executor=_execute,
+            ),
+        ]
+
+    def get_prompt_instructions(self, lang: str, granted_tools: "set[str] | None" = None) -> str:
+        # Kein Hardcoding — atomare Fragmente in prompts/<de|en>/ beim Plugin.
+        from ....lib.plugin_base import load_plugin_instructions
+        return load_plugin_instructions(self, lang, granted_tools)
+
+    def get_ui_status(self, tool_name: str, tool_args: dict[str, Any], lang: str) -> str:
+        if tool_name == "calculate":
+            return f"🔢 {tool_args.get('expression', '')}"
+        return ""
+
+
+plugin = CalculatorPlugin()

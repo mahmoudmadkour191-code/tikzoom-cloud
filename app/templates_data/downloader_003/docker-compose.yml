@@ -1,0 +1,14 @@
+version: "3.4"
+
+services:
+  nazurin:
+    # Alternatively, you may use "yyoung01/nazurin:latest"
+    image: ghcr.io/y-young/nazurin:latest
+    build: .
+    env_file:
+      - ".env"
+    volumes:
+      - "./data:/app/data"
+    ports:
+      - "80"
+    restart: unless-stopped

@@ -1,0 +1,1859 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
+# Nano Telegram bot
+# @NanoWalletBot https://t.me/NanoWalletBot
+# 
+# Source code:
+# https://github.com/SergiySW/NanoWalletBot
+# 
+# Released under the BSD 3-Clause License
+# 
+"""
+Usage:
+Press Ctrl-C on the command line or send a signal to the process to stop the bot.
+"""
+
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from telegram.ext.dispatcher import run_async
+from telegram import Bot, ParseMode, ReplyKeyboardMarkup, ReplyKeyboardRemove, ChatAction
+from telegram.error import BadRequest, RetryAfter, TimedOut, NetworkError
+import logging
+import urllib3, certifi, socket, json, re
+import hashlib, binascii, string, math
+from mysql.connector import ProgrammingError
+import time
+from time import sleep
+import os, sys
+
+# Parse config
+from six.moves import configparser
+config = configparser.ConfigParser()
+config.read('bot.cfg')
+api_key = config.get('main', 'api_key')
+url = config.get('main', 'url')
+log_file = config.get('main', 'log_file')
+log_file_messages = config.get('main', 'log_file_messages')
+domain = config.get('main', 'domain')
+listen_port = config.get('main', 'listen_port')
+qr_folder_path = config.get('main', 'qr_folder_path')
+passport_folder_path = config.get('main', 'passport_folder_path')
+wallet = config.get('main', 'wallet')
+wallet_password = config.get('main', 'password')
+fee_account = config.get('main', 'fee_account')
+fee_amount = int(config.get('main', 'fee_amount'))
+welcome_account = config.get('main', 'welcome_account')
+welcome_amount = int(config.get('main', 'welcome_amount'))
+raw_welcome_amount = welcome_amount * (10 ** 24)
+incoming_fee_text = '\n'
+min_send = int(config.get('main', 'min_send'))
+min_receive = int(config.get('main', 'min_receive'))
+feeless_seconds = int(config.get('main', 'feeless_seconds'))
+feeless_hours = int(feeless_seconds / 3600)
+ddos_protect_seconds = config.get('main', 'ddos_protect_seconds')
+admin_list = json.loads(config.get('main', 'admin_list'))
+extra_limit = int(config.get('main', 'extra_limit'))
+LIST_OF_FEELESS = json.loads(config.get('main', 'feeless_list'))
+enable_registration = json.loads(config.get('main', 'enable_registration').lower())
+salt = config.get('password', 'salt')
+pbkdf2_iterations = int(config.get('password', 'pbkdf2_iterations'))
+private_key = config.get('password', 'private_key')
+block_count_difference_threshold = int(config.get('monitoring', 'block_count_difference_threshold'))
+proxy_url = config.has_option('proxy', 'url') and config.get('proxy', 'url') or None
+proxy_user = config.has_option('proxy', 'user') and config.get('proxy', 'user') or None
+proxy_pass = config.has_option('proxy', 'password') and config.get('proxy', 'password') or None
+
+# Enable logging
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+					level=logging.INFO, filename=log_file)
+logging.getLogger("requests").setLevel(logging.WARNING)
+
+logger = logging.getLogger(__name__)
+
+account_url = 'https://nanocrawler.cc/explorer/account/'
+hash_url = 'https://nanocrawler.cc/explorer/block/'
+faucet_url = 'https://faucet.raiblockscommunity.net/form.php'
+nanocrawler_url = 'https://api.nanocrawler.cc/block_count_by_type'
+header = {'user-agent': 'RaiWalletBot/1.0'}
+
+# MySQL requests
+from common_mysql import *
+
+# QR code handler
+from common_qr import *
+
+# Request to node
+from common_rpc import *
+
+# Common functions
+from common import *
+
+
+# unlock(wallet, wallet_password)
+
+# Restrict access to admins only
+from functools import wraps
+def restricted(func):
+	@wraps(func)
+	def wrapped(bot, update, *args, **kwargs):
+		# extract user_id from arbitrary update
+		try:
+			user_id = update.message.from_user.id
+		except (NameError, AttributeError):
+			try:
+				user_id = update.inline_query.from_user.id
+			except (NameError, AttributeError):
+				try:
+					user_id = update.chosen_inline_result.from_user.id
+				except (NameError, AttributeError):
+					try:
+						user_id = update.callback_query.from_user.id
+					except (NameError, AttributeError):
+						print("No user_id available in update.")
+						return
+		if user_id not in admin_list:
+			print("Unauthorized access denied for {0}.".format(user_id))
+			return
+		return func(bot, update, *args, **kwargs)
+	return wrapped
+
+
+# Define a few command handlers. These usually take the two arguments bot and
+# update. Error handlers also receive the raised TelegramError object in error.
+
+with open('language.json') as lang_file:    
+	language = json.load(lang_file)
+def lang(user_id, text_id):
+	lang_id = mysql_select_language(user_id)
+	try:
+		return language[lang_id][text_id]
+	except KeyError:
+		return language['en'][text_id]
+
+def lang_text(text_id, lang_id):
+	try:
+		return language[lang_id][text_id]
+	except KeyError:
+		return language['en'][text_id]
+
+@run_async
+def custom_keyboard(bot, chat_id, buttons, text):
+	reply_markup = ReplyKeyboardMarkup(buttons, resize_keyboard = True)
+	try:
+		bot.sendMessage(chat_id=chat_id, 
+					 text=text, 
+					 parse_mode=ParseMode.MARKDOWN,
+					 disable_web_page_preview=True,
+					 reply_markup=reply_markup)
+	except BadRequest:
+		bot.sendMessage(chat_id=chat_id, 
+					 text=replace_unsafe(text), 
+					 parse_mode=ParseMode.MARKDOWN,
+					 disable_web_page_preview=True,
+					 reply_markup=reply_markup)
+	except RetryAfter:
+		sleep(240)
+		bot.sendMessage(chat_id=chat_id, 
+					 text=text, 
+					 parse_mode=ParseMode.MARKDOWN,
+					 disable_web_page_preview=True,
+					 reply_markup=reply_markup)
+	except TimedOut:
+		sleep(10)
+		bot.sendMessage(chat_id=chat_id, 
+					 text=text, 
+					 parse_mode=ParseMode.MARKDOWN,
+					 disable_web_page_preview=True,
+					 reply_markup=reply_markup)
+	except:
+		sleep(1)
+		bot.sendMessage(chat_id=chat_id, 
+					 text=text, 
+					 parse_mode=ParseMode.MARKDOWN,
+					 disable_web_page_preview=True,
+					 reply_markup=reply_markup)
+
+@run_async
+def default_keyboard(bot, chat_id, text):
+	custom_keyboard(bot, chat_id, lang(chat_id, 'menu'), text)
+
+@run_async
+def lang_keyboard(lang_id, bot, chat_id, text):
+	custom_keyboard(bot, chat_id, lang_text('menu', lang_id), text)
+
+@run_async
+def hide_keyboard(bot, chat_id, text):
+	reply_markup = ReplyKeyboardRemove()
+	try:
+		bot.sendMessage(chat_id=chat_id, text=text, reply_markup=reply_markup)
+	except:
+		sleep(1)
+		bot.sendMessage(chat_id=chat_id, text=text, reply_markup=reply_markup)
+
+@run_async
+def typing_illusion(bot, chat_id):
+	try:
+		bot.sendChatAction(chat_id=chat_id, action=ChatAction.TYPING) # typing illusion
+	except:
+		sleep(1)
+		bot.sendChatAction(chat_id=chat_id, action=ChatAction.TYPING) # typing illusion
+
+
+@run_async
+def ddos_protection(bot, update, callback):
+	user_id = update.message.from_user.id
+	message_id = int(update.message.message_id)
+	ddos = mysql_ddos_protector(user_id, message_id)
+	if (ddos == True):
+		logging.warning('DDoS or double message by user {0} message {1}'.format(user_id, message_id))
+	elif (ddos == False):
+		text_reply(update, lang(user_id, 'ddos_error').format(ddos_protect_seconds))
+		logging.warning('Too fast request by user {0}'.format(user_id))
+	else:
+		callback(bot, update)
+
+@run_async
+def ddos_protection_args(bot, update, args, callback):
+	user_id = update.message.from_user.id
+	message_id = int(update.message.message_id)
+	ddos = mysql_ddos_protector(user_id, message_id)
+	if (ddos == True):
+		logging.warning('DDoS or double message by user {0} message {1}'.format(user_id, message_id))
+	elif (ddos == False):
+		text_reply(update, lang(user_id, 'ddos_error').format(ddos_protect_seconds))
+		logging.warning('Too fast request by user {0}'.format(user_id))
+	else:
+		callback(bot, update, args)
+
+
+@run_async
+def info_log(update, protected = False):
+	result = {}
+	full_text = True
+	if (protected is True):
+		password_hash = mysql_check_password(update.message.from_user.id) # Check password protection
+		if (password_hash is not False):
+			split_text = update.message.text.rsplit(' ', 1) # split text in 2 parts
+			if(len(split_text) > 1):
+				full_text = False
+				result['text'] = update.message.text.rsplit(' ', 1)[0]+' PossiblePassword'
+			elif ((update.message.text.lower() not in language['commands']['yes']) and (update.message.text.lower() not in language['commands']['not'])):
+				m = mysql_select_user(update.message.from_user.id)
+				# Only if send destination is defined
+				if (m[5] is not None):
+					full_text = False
+					result['text'] = 'PossiblePassword'
+	if (full_text is True):
+		result['text'] = update.message.text
+	result['user_id'] = update.message.from_user.id
+	result['username'] = update.message.from_user.username
+	result['first_name'] = update.message.from_user.first_name
+	result['last_name'] = update.message.from_user.last_name
+	result['timestamp'] = int(time.mktime(update.message.date.timetuple()))
+	result['message_id'] = update.message.message_id
+	logging.info(result)
+
+@run_async
+def language_select(bot, update, args):
+	info_log(update)
+	ddos_protection_args(bot, update, args, language_select_callback)
+
+@run_async
+def language_select_callback(bot, update, args):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	if (len(args) > 0):
+		lang_id = args[0].lower()
+		if (lang_id in language['common']['language_list']):
+			try:
+				mysql_set_language(user_id, lang_id)
+				start_text(bot, update)
+			except:
+				text_reply(update, lang(user_id, 'language_error'))
+		else:
+			text_reply(update, lang(user_id, 'language_error'))
+			logging.info('Language change failed for user {0}'.format(user_id))
+	else:
+		text_reply(update, lang(user_id, 'language_command'))
+
+
+@run_async
+def start(bot, update):
+	info_log(update)
+	ddos_protection(bot, update, start_text)
+
+
+@run_async
+def start_text(bot, update):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_exist_language(user_id)
+	if (lang_id is False):
+		try:
+			lang_id = update.message.from_user.language_code
+			if (lang_id in language['common']['language_list']):
+				mysql_set_language(user_id, lang_id)
+			else:
+				lang_id = mysql_select_language(user_id)
+		except Exception as e:
+			lang_id = mysql_select_language(user_id)
+	if (enable_registration is False):
+		text_reply(update, lang_text('registration_disabled', lang_id))
+		sleep(1)
+	text_reply(update, lang_text('start_introduce', lang_id))
+	sleep(1)
+	lang_keyboard(lang_id, bot, chat_id, lang_text('start_basic_commands', lang_id).format(mrai_text(fee_amount), mrai_text(min_send), incoming_fee_text, mrai_text(min_receive), feeless_hours))
+	sleep(1)
+	message_markdown(bot, chat_id, lang_text('start_learn_more', lang_id))
+	# Check user existance in database
+	exist = mysql_user_existance(user_id)
+	# Select language if 1st time
+	if (exist is False):
+		sleep(1)
+		custom_keyboard(bot, chat_id, lang_text('language_keyboard', 'common'), lang_text('language_selection', 'common'))
+	sleep(2)
+	message_markdown(bot, chat_id, lang_text('start_recovery_policy', lang_id))
+	sleep(2)
+	message_markdown(bot, chat_id, lang_text('start_recovery_policy_2', lang_id))
+
+
+@run_async
+def help(bot, update):
+	info_log(update)
+	ddos_protection(bot, update, help_callback)
+
+@run_async
+def help_callback(bot, update):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	lang_keyboard(lang_id, bot, chat_id, lang_text('help_advanced_usage', lang_id).format(mrai_text(fee_amount), mrai_text(min_send), incoming_fee_text, mrai_text(min_receive), feeless_hours))
+	sleep(1)
+	message_markdown(bot, chat_id, lang_text('help_learn_more', lang_id))
+
+
+@run_async
+def help_text(bot, update):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	lang_keyboard(lang_id, bot, chat_id, lang_text('start_basic_commands', lang_id).format(mrai_text(fee_amount), mrai_text(min_send), incoming_fee_text, mrai_text(min_receive), feeless_hours))
+	sleep(1)
+	message_markdown(bot, chat_id, lang_text('help_learn_more', lang_id))
+
+
+
+def user_id(bot, update):
+	user_id = update.message.from_user.id
+	text_reply(update, user_id)
+
+
+@run_async
+def block_count(bot, update):
+	info_log(update)
+	ddos_protection(bot, update, block_count_callback)
+
+@run_async
+def block_count_callback(bot, update):
+	user_id = update.message.from_user.id
+	count = rpc({"action": "block_count"}, 'count')
+	text_reply(update, "{:,}".format(int(count)))
+#	default_keyboard(bot, update.message.chat_id, r)
+	# Admin block count check from nanocrawler.cc
+	if (user_id in admin_list):
+		http = urllib3.PoolManager(cert_reqs='CERT_REQUIRED',ca_certs=certifi.where())
+		response = http.request('GET', nanocrawler_url, headers=header, timeout=20.0)
+		json_data = json.loads(response.data)
+		nanocrawler_count = int(json_data['send']) + int(json_data['receive']) + int(json_data['open']) + int(json_data['change']) + int(json_data['state'])
+		if (math.fabs(int(nanocrawler_count) - int(count)) > block_count_difference_threshold):
+			text_reply(update, 'nanocrawler.cc: {0}'.format("{:,}".format(int(nanocrawler_count))))
+			reference_count = int(reference_block_count())
+			sleep(1)
+			text_reply(update, 'Reference: {0}'.format("{:,}".format(reference_count)))
+			response = http.request('GET', 'https://raiwallet.info/api/block_count.php', headers=header, timeout=20.0)
+			raiwallet_count = int(response.data)
+			sleep(1)
+			text_reply(update, 'raiwallet.info: {0}'.format("{:,}".format(raiwallet_count)))
+
+
+# broadcast
+@restricted
+def broadcast(bot, update):
+	info_log(update)
+	bot = Bot(api_key)
+	# list users from MySQL
+	accounts_list = mysql_select_accounts_balances()
+	# some users are bugged & stop broadcast - they deleted chat with bot. So we blacklist them
+	BLACK_LIST = mysql_select_blacklist()
+	for account in accounts_list:
+		# if not in blacklist and has balance
+		if ((account[0] not in BLACK_LIST) and (int(account[1]) > 0)):
+			mysql_set_blacklist(account[0])
+			print(account[0])
+			push_simple(bot, account[0], update.message.text.replace('/broadcast ', ''))
+			sleep(0.2)
+			mysql_delete_blacklist(account[0]) # if someone deleted chat, broadcast will fail and he will remain in blacklist
+
+
+# bootstrap
+@restricted
+def bootstrap(bot, update):
+	info_log(update)
+	bootstrap_multi()
+	bot.sendMessage(update.message.chat_id, "Bootstraping...")
+
+
+
+@restricted
+def restart(bot, update):
+	bot.sendMessage(update.message.chat_id, "Bot is restarting...")
+	sleep(0.2)
+	os.execl(sys.executable, sys.executable, *sys.argv)
+	
+
+#@restricted
+@run_async
+def account(bot, update):
+	info_log(update)
+	ddos_protection(bot, update, account_text)
+
+@run_async
+def account_list(bot, update):
+	info_log(update)
+	ddos_protection(bot, update, account_text_list)
+
+@run_async
+def account_text_list(bot, update):
+	account_text(bot, update, True)
+
+@run_async
+def accounts_hide(bot, update):
+	info_log(update)
+	ddos_protection(bot, update, accounts_hide_callback)
+
+@run_async
+def accounts_hide_callback(bot, update):
+	user_id = update.message.from_user.id
+	hide = mysql_select_hide(user_id)
+	if (hide == 0):
+		extra_accounts = mysql_select_user_extra(user_id)
+		if (len(extra_accounts) > 0):
+			mysql_set_hide(user_id, 1)
+	else:
+		mysql_set_hide(user_id, 0)
+	account_text(bot, update)
+
+@run_async
+def account_text(bot, update, list = False):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	username=update.message.from_user.username
+	if (username is None):
+		username = ''
+	#print(username)
+	m = mysql_select_user(user_id)
+	try:
+		r = m[2]
+		qr_by_account(r)
+		balance = account_balance(r)
+		total_balance = balance
+		# FEELESS
+		if ((user_id in LIST_OF_FEELESS) or (mysql_select_send_time(user_id) is not False)):
+			final_fee_amount = 0
+		else:
+			final_fee_amount = fee_amount
+		# FEELESS
+		max_send = balance - final_fee_amount
+		extra_accounts = mysql_select_user_extra(user_id)
+		extra_array = []
+		for extra_account in extra_accounts:
+			extra_array.append(extra_account[3])
+		if (len(extra_accounts) > 0):
+			balances = accounts_balances(extra_array)
+		hide = mysql_select_hide(user_id)
+		num = 0
+		for extra_account in extra_accounts:
+			num = num + 1
+			total_balance = total_balance + balances[extra_account[3]]
+		# price
+		price = mysql_select_price()
+		if (int(price[0][0]) > 0):
+			last_price = ((float(price[0][0]) * float(price[0][6])) + (float(price[1][0]) * float(price[1][6])) + (float(price[3][0]) * float(price[3][6])) + (float(price[5][0]) * float(price[5][6]))) / (float(price[0][6]) + float(price[1][6]) + float(price[3][6]) + float(price[5][6]))
+		else:
+			last_price = int(price[1][0])
+		btc_price = last_price / (10 ** 14)
+		btc_balance = ('%.8f' % (btc_price * total_balance))
+		# price
+		if (list is not False):
+			text = 'Total: *{0} Nano*\n~ {1} BTC\n/{3}\n{4}'.format(mrai_text(total_balance), btc_balance, '', lang_text('account_add', lang_id).replace("_", "\_"), lang_text('send_all', lang_id))
+			message_markdown(bot, chat_id, text)
+			sleep(1)
+			message_markdown(bot, chat_id, '*0.* {0} Nano'.format(mrai_text(balance)))
+			sleep(1)
+			message_markdown(bot, chat_id, '*{0}*'.format(r))
+			sleep(1)
+			for extra_account in extra_accounts:
+				message_markdown(bot, chat_id, '*{0}.* {1} Nano  /{2} {0}'.format(extra_account[2], mrai_text(balances[extra_account[3]]), lang_text('send_from_command', lang_id).replace("_", "\_")))
+				sleep(1)
+				text_reply(update, extra_account[3])
+				sleep(1)
+		else:
+			if ((balance == 0) and (list is False)):
+				text = lang_text('account_balance_zero', lang_id).format(faucet_url, r)
+			elif ((max_send < min_send) and (list is False)):
+				text = lang_text('account_balance_low', lang_id).format(faucet_url, r, mrai_text(balance), mrai_text(final_fee_amount), mrai_text(min_send))
+			else:
+				if (balance == total_balance):
+					text = lang_text('account_balance', lang_id).format(mrai_text(balance), btc_balance, mrai_text(max_send))
+				else:
+					text = lang_text('account_balance_total', lang_id).format(mrai_text(balance), btc_balance, mrai_text(max_send), mrai_text(total_balance))
+			text = '{0}\n\n{1}'.format(text, lang_text('account_your', lang_id))
+			message_markdown(bot, chat_id, text)
+			sleep(1)
+			message_markdown(bot, chat_id, '*{0}*'.format(r))
+			sleep(1)
+			if ((num > 3) and (hide == 0)):
+				message_markdown(bot, chat_id, lang_text('account_history', lang_id).format(r, account_url, faucet_url, '').replace(lang_text('account_add', lang_id).replace("_", "\_"), lang_text('account_list', lang_id).replace("_", "\_"))) # full accounts list
+			elif (hide == 1):
+				message_markdown(bot, chat_id, lang_text('account_history', lang_id).format(r, account_url, faucet_url, '').replace(lang_text('account_add', lang_id).replace("_", "\_"), lang_text('account_list', lang_id).replace("_", "\_")).replace(lang_text('accounts_hide', lang_id).replace("_", "\_"), lang_text('accounts_expand', lang_id).replace("_", "\_"))) # hide-expand
+			else:
+				message_markdown(bot, chat_id, lang_text('account_history', lang_id).format(r, account_url, faucet_url, ''))
+			sleep(1)
+			# list
+			if (hide == 0):
+				n = 0
+				for extra_account in extra_accounts:
+					n = n + 1
+					if (n <= 3):
+						message_markdown(bot, chat_id, '*{0}.* {1} Nano  /{2} {0}'.format(extra_account[2], mrai_text(balances[extra_account[3]]), lang_text('send_from_command', lang_id).replace("_", "\_")))
+						sleep(1)
+						text_reply(update, extra_account[3])
+						sleep(1)
+			# list
+			#bot.sendPhoto(chat_id=update.message.chat_id, photo=open('{1}{0}.png'.format(r, qr_folder_path), 'rb'), caption=r)
+			try:
+				bot.sendPhoto(chat_id=update.message.chat_id, photo=open('{1}nano:{0}.png'.format(r, qr_folder_path), 'rb'))
+			except (urllib3.exceptions.ProtocolError) as e:
+				sleep(3)
+				bot.sendPhoto(chat_id=update.message.chat_id, photo=open('{1}nano:{0}.png'.format(r, qr_folder_path), 'rb'))
+			except TimedOut as e:
+				sleep(10)
+				bot.sendPhoto(chat_id=update.message.chat_id, photo=open('{1}nano:{0}.png'.format(r, qr_folder_path), 'rb'))
+			except NetworkError as e:
+				sleep(20)
+				bot.sendPhoto(chat_id=update.message.chat_id, photo=open('{1}nano:{0}.png'.format(r, qr_folder_path), 'rb'))
+			seed = mysql_select_seed(user_id)
+			password_hash = mysql_check_password(user_id)
+			if ((seed is False) and (password_hash is False)):
+				sleep(1)
+				seed_callback(bot, update, [0])
+			elif (password_hash is not False):
+				sleep(1)
+				text_reply(update, lang_text('seed_protected', lang_id))
+	
+	except (TypeError):
+		if (enable_registration is True):
+			r = rpc({"action": "account_create", "wallet": wallet}, 'account')
+			qr_by_account(r)
+			if ('xrb_' in r or 'nano_' in r): # check for errors
+				insert_data = {
+				  'user_id': user_id,
+				  'account': r,
+				  'chat_id': chat_id,
+				  'username': username,
+				}
+				mysql_insert(insert_data)
+				text_reply(update, lang_text('account_created', lang_id))
+				sleep(1)
+				message_markdown(bot, chat_id, '*{0}*'.format(r))
+				sleep(1)
+				message_markdown(bot, chat_id, lang_text('account_explorer', lang_id).format(r, account_url))
+				sleep(1)
+				message_markdown(bot, chat_id, lang_text('account_balance_start', lang_id).format(faucet_url, r))
+				sleep(1)
+				custom_keyboard(bot, chat_id, lang_text('language_keyboard', 'common'), lang_text('language_selection', 'common'))
+				if (welcome_amount > 0):
+					try:
+						welcome = rpc_send(wallet, welcome_account, r, raw_welcome_amount)
+						sleep(0.5) # workaround
+						new_balance = account_balance(welcome_account)
+						if (new_balance == 0): # workaround
+							sleep(2)
+							new_balance = account_balance(account)
+							if (new_balance == 0):
+								sleep(16)
+								new_balance = account_balance(account)
+						mysql_update_balance(welcome_account, new_balance)
+						mysql_update_frontier(welcome_account, welcome)
+					except Exception as e:
+						logging.exception("message")
+				logging.info('New user registered {0} {1}'.format(user_id, r))
+				sleep(2)
+				seed_callback(bot, update, [0])
+			else:
+				text_reply(update, lang_text('account_error', lang_id))
+		else:
+			text_reply(update, lang_text('registration_disabled', lang_id))
+
+
+#@restricted
+@run_async
+def account_add(bot, update):
+	info_log(update)
+	ddos_protection(bot, update, account_add_callback)
+
+@run_async
+def account_add_callback(bot, update):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	extra_accounts = mysql_select_user_extra(user_id)
+	if (enable_registration is False):
+		text_reply(update, lang_text('registration_disabled', lang_id))
+	elif (len(extra_accounts) >= extra_limit):
+		text_reply(update, lang_text('account_extra_limit', lang_id).format(extra_limit))
+	else:
+		r = rpc({"action": "account_create", "wallet": wallet}, 'account')
+		extra_id = len(mysql_select_user_extra(user_id)) + 1
+		if ('xrb_' in r or 'nano_' in r): # check for errors
+			insert_data = {
+			  'user_id': user_id,
+			  'account': r,
+			  'extra_id': extra_id,
+			}
+			mysql_insert_extra(insert_data)
+			text_reply(update, lang_text('account_created', lang_id))
+			sleep(1)
+			message_markdown(bot, chat_id, '[{0}]({1}{0})'.format(r, account_url))
+			logging.info('New account registered {0} {1}'.format(user_id, r))
+		else:
+			text_reply(update, lang_text('account_error', lang_id))
+
+def password_check(update, password):
+	user_id = update.message.from_user.id
+	password_hash = mysql_check_password(user_id)
+	if (password_hash is not False):
+		dk = '0000'
+		try:
+			if (len(password_hash) == 128):
+				# New Scrypt KDF
+				dk = hashlib.scrypt(password.encode('utf-8'), salt=(hashlib.sha3_224(user_id.to_bytes(6, byteorder='little')).hexdigest()+salt).encode('utf-8'), n=2**15, r=8, p=1, maxmem=2**26, dklen=64)
+			else:
+				# Old PBKDF2 KDF
+				dk = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt.encode(), pbkdf2_iterations)
+		except UnicodeEncodeError as e:
+			text_reply(update, lang(user_id, 'encoding_error'))
+			sleep(0.5)
+		hex = binascii.hexlify(dk).decode()
+		if (hex == password_hash):
+			valid = True
+		else:
+			valid = False
+			logging.info('Wrong password for user {0}. Expected: {1}, given: {2}'.format(user_id, password_hash, hex))
+	else:
+		valid = True
+	return valid
+
+@run_async
+def send(bot, update, args):
+	info_log(update, True)
+	ddos_protection_args(bot, update, args, send_callback)
+
+
+@run_async
+def send_from(bot, update, args):
+	info_log(update, True)
+	ddos_protection_args(bot, update, args, send_from_callback)
+
+
+@run_async
+def send_from_callback(bot, update, args):
+	user_id = update.message.from_user.id
+	if (len(args) > 0):
+		if ('xrb_' in args[0] or 'nano_' in args[0]):
+			xrb_account = validate_account_number(args[0])
+			if (xrb_account is not False):
+				from_account = mysql_select_by_account_extra(xrb_account)
+			else:
+				from_account = False
+		else:
+			try:
+				extra_id = int(args[0].replace('.',''))
+				from_account = mysql_select_by_id_extra(user_id, extra_id)
+			except (ValueError, ProgrammingError) as e:
+				from_account = False
+				text_reply(update, lang(user_id, 'value_error'))
+		try:
+			if (from_account is not False):
+				if (user_id == from_account[0]):
+					args = args[1:]
+					send_callback(bot, update, args, from_account)
+				else:
+					text_reply(update, lang(user_id, 'send_from_id_error').format(args[0]))
+					logging.warning('User {0} trying to steal funds from {1}'.format(user_id, args[0]))
+			elif ((int(args[0]) == 0) or (args[0] == 'default')):
+				args = args[1:]
+				send_callback(bot, update, args)
+			else:
+				text_reply(update, lang(user_id, 'send_from_id_error').format(args[0]))
+		except ValueError as e:
+			text_reply(update, lang(user_id, 'value_error'))
+	else:
+		m = mysql_select_user(user_id)
+		chat_id = update.message.chat_id
+		lang_id = mysql_select_language(user_id)
+		lang_keyboard(lang_id, bot, chat_id, lang_text('send_wrong_command', lang_id).format(mrai_text(min_send), 'nano\\_accountsample'))
+
+
+# Instant receiving
+@run_async
+def receive(destination, send_hash):
+	destination_local = mysql_select_by_account(destination)
+	if (destination_local is False):
+		destination_local = mysql_select_by_account_extra(destination)
+	if (destination_local is not False):
+		receive = rpc({"action": "receive", "wallet": wallet, "account": destination, "block": send_hash}, 'block')
+		if ('receive' not in receive):
+			logging.warning('Block already received {0}'.format(send_hash))
+
+
+@run_async
+def send_callback(bot, update, args, from_account = 0):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	if (len(args) >= 2):
+		try:
+			# Check user existance in database
+			m = mysql_select_user(user_id)
+			if (from_account == 0):
+				account = m[2]
+			else:
+				account = from_account[1]
+			# Check balance to send
+			try:
+				balance = account_balance(account)
+				# FEELESS
+				if ((user_id in LIST_OF_FEELESS) or (mysql_select_send_time(user_id) is not False)):
+					final_fee_amount = 0
+				else:
+					final_fee_amount = fee_amount
+				# FEELESS
+				max_send = balance - final_fee_amount
+				if ((args[0].lower() == 'all') or (args[0].lower() == 'everything')):
+					send_amount = max_send
+				else:
+					send_amount = int(float(args[0]) * (10 ** 6))
+				raw_send_amount = send_amount * (10 ** 24)
+				if (max_send < min_send):
+					text_reply(update, lang_text('send_low_balance', lang_id).format(mrai_text(final_fee_amount), mrai_text(min_send)))
+				elif (send_amount > max_send):
+					text_reply(update, lang_text('send_limit_max', lang_id).format(mrai_text(final_fee_amount), mrai_text(max_send)))
+				elif (send_amount < min_send):
+					text_reply(update, lang_text('send_limit_min', lang_id).format(mrai_text(min_send)))
+					
+				else:
+					# Check destination address
+					destination = args[1]
+					if ((len(args) > 2) and ((args[1].lower() == 'mrai') or (args[1].lower() == 'xrb') or (args[1].lower() == 'nano'))):
+						destination = args[2]
+					# if destination is username
+					if (destination.startswith('@') and len(destination) >= 5 and len(destination) <= 32):
+						username = destination.replace('@', '').replace(' ','').replace('\r','').replace('\n','')
+						username = username.replace(r'[^[0-9a-zA-Z_]+', '')
+						try:
+							dest_account = mysql_account_by_username(username)
+							if (dest_account is not False):
+								destination = dest_account
+							else:
+								text_reply(update, lang_text('send_user_not_found', lang_id).format(destination))
+						except UnicodeEncodeError as e:
+							text_reply(update, lang_text('send_user_not_found', lang_id).format(destination))
+					destination = validate_account_number(destination)
+					# Check password protection
+					valid_password = False
+					if ((len(args) > 3) and ((args[1].lower() == 'mrai') or (args[1].lower() == 'xrb') or (args[1].lower() == 'nano'))):
+						password = args[3]
+						valid_password = password_check(update, password)
+					elif (len(args) > 2):
+						password = args[2]
+						valid_password = password_check(update, password)
+					else:
+						password_hash = mysql_check_password(user_id)
+						if (password_hash is False):
+							valid_password = True
+					# typing_illusion(bot, update.message.chat_id) # typing illusion
+					# Check password protection and frontier existance
+					if (from_account == 0):
+						frontier = m[3]
+					else:
+						frontier = from_account[2]
+					check_frontier = check_block(frontier)
+					account_user_id = mysql_user_id_from_account (account)
+					if ((destination is not False) and (valid_password) and (check_frontier) and (account_user_id == user_id)):
+						# Sending
+						try:
+							try:
+								send_hash = rpc_send(wallet, account, destination, raw_send_amount)
+							except Exception as e:
+								send_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+								logging.exception("message")
+							if (('0000000000000000000000000000000000000000000000000000000000000000' not in send_hash) and ('locked' not in send_hash)):
+								new_balance = block_balance(send_hash)
+								if (new_balance != balance - send_amount - final_fee_amount):
+									logging.error('Unexpected balance for send block {0}, account {1}. Result {2}, expected {3}'.format(send_hash, account, mrai_text(new_balance), mrai_text(balance - send_amount - final_fee_amount)))
+								if (from_account == 0):
+									mysql_update_balance(account, new_balance)
+									mysql_update_frontier(account, send_hash)
+								else:
+									mysql_update_balance_extra(account, new_balance)
+									mysql_update_frontier_extra(account, send_hash)
+								lang_keyboard(lang_id, bot, chat_id, lang_text('send_completed', lang_id).format(mrai_text(final_fee_amount), mrai_text(new_balance)))
+								mysql_update_send_time(user_id)
+								sleep(1)
+								message_markdown(bot, chat_id, '[{0}]({1}{0})'.format(send_hash, hash_url))
+								logging.info('Send from {0} to {1}  amount {2}  hash {3}'.format(account, destination, mrai_text(send_amount), send_hash))
+								# update username
+								if (from_account == 0):
+									old_username = m[8]
+									username=update.message.from_user.username
+									if (username is None):
+										username = ''
+									if (not (username == old_username)):
+										username_text = 'Username updated: @{0} --> @{1}'.format(old_username, username)
+										mysql_update_username(user_id, username)
+										print(username_text)
+										logging.info(username_text)
+								# update username
+								receive(destination, send_hash)
+							else:
+								logging.warning('Transaction FAILURE! Account {0}'.format(account))
+								sleep(0.5) # workaround
+								new_balance = account_balance(account)
+								lang_keyboard(lang_id, bot, chat_id, lang_text('send_tx_error', lang_id).format(mrai_text(new_balance)))
+								unlock(wallet, wallet_password) # try to unlock wallet
+						except (GeneratorExit, ValueError):
+							lang_keyboard(lang_id, bot, chat_id, lang_text('send_error', lang_id))
+					elif (not valid_password):
+						text_reply(update, lang_text('password_error', lang_id))
+						logging.info('Send failure for user {0}. Reason: Wrong password'.format(user_id))
+					elif (not (check_frontier)):
+						text_reply(update, lang_text('send_frontier', lang_id))
+						logging.info('Send failure for user {0}. Reason: Frontier not found'.format(user_id))
+					elif (destination is False):
+						message_markdown(bot, chat_id, lang_text('send_invalid', lang_id))
+					elif (not (destination.startswith('@'))):
+						message_markdown(bot, chat_id, lang_text('send_invalid', lang_id))
+					elif (not (account_user_id == user_id)):
+						message_markdown(bot, chat_id, lang_text('send_invalid', lang_id))
+						logging.warning('Send failure for user {0}. Reason: User ID mismatch'.format(user_id))
+			except (ValueError):
+				text_reply(update, lang_text('send_digits', lang_id))
+		except (TypeError):
+			message_markdown(bot, chat_id, lang_text('send_no_account', lang_id))
+		except (IndexError):
+			lang_keyboard(lang_id, bot, chat_id, lang_text('send_wrong_command', lang_id).format(mrai_text(min_send), 'nano\\_accountsample'))
+	else:
+		lang_keyboard(lang_id, bot, chat_id, lang_text('send_wrong_command', lang_id).format(mrai_text(min_send), 'nano\\_accountsample'))
+
+
+@run_async
+def send_all(bot, update):
+	info_log(update)
+	ddos_protection(bot, update, send_all_callback)
+
+
+@run_async
+def send_all_callback(bot, update):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	m = mysql_select_user(user_id)
+	destination = m[2]
+	final_fee_amount = 0 # 0 fee to accumulate
+	extra_accounts = mysql_select_user_extra(user_id)
+	extra_array = []
+	for extra_account in extra_accounts:
+		extra_array.append(extra_account[3])
+	reply = 0
+	active = mysql_select_send_all(user_id)
+	if ((len(extra_accounts) > 0) and (active is False)):
+		balances = accounts_balances(extra_array)
+		mysql_set_send_all(user_id)
+		for account, balance in balances.items():
+			max_send = balance - final_fee_amount
+			account_user_id = mysql_user_id_from_account (account)
+			if ((max_send >= min_send) and (account_user_id == user_id)):
+				if (reply == 0):
+					lang_keyboard(lang_id, bot, chat_id, lang_text('send_mass', lang_id))
+					reply = 1
+				try:
+					send_amount = max_send
+					raw_send_amount = send_amount * (10 ** 24)
+					send_hash = rpc_send(wallet, account, destination, raw_send_amount)
+				except Exception as e:
+					send_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+					logging.exception("message")
+				if (('0000000000000000000000000000000000000000000000000000000000000000' not in send_hash) and ('locked' not in send_hash)):
+					new_balance = block_balance(send_hash)
+					if (new_balance != balance - send_amount - final_fee_amount):
+						logging.error('Unexpected balance for send block {0}, account {1}. Result {2}, expected {3}'.format(send_hash, account, mrai_text(new_balance), mrai_text(balance - send_amount - final_fee_amount)))
+					mysql_update_balance_extra(account, new_balance)
+					mysql_update_frontier_extra(account, send_hash)
+					mysql_update_send_time(user_id)
+					logging.info('Send from {0} to {1}  amount {2}  hash {3} /send_all'.format(account, destination, mrai_text(send_amount), send_hash))
+					sleep(2)
+					receive(destination, send_hash)
+					sleep(4)
+				else:
+					logging.warning('Transaction FAILURE! Account {0}'.format(account))
+					new_balance = account_balance(account)
+					lang_keyboard(lang_id, bot, chat_id, lang_text('send_tx_error', lang_id).format(mrai_text(new_balance)))
+			elif (not (account_user_id == user_id)):
+				logging.warning('Send failure for user {0}. Reason: User ID mismatch'.format(user_id))
+		mysql_delete_send_all(user_id)
+	if (reply == 0):
+		lang_keyboard(lang_id, bot, chat_id, lang_text('send_all_min_error', lang_id).format(mrai_text(min_send)))
+
+
+@run_async
+def send_text(bot, update, default = False):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	# FEELESS
+	if ((user_id in LIST_OF_FEELESS) or (mysql_select_send_time(user_id) is not False)):
+		final_fee_amount = 0
+	else:
+		final_fee_amount = fee_amount
+	# FEELESS
+	m = mysql_select_user(user_id)
+	try:
+		account = m[2]
+		balance = account_balance(account)
+		# extra
+		extra_accounts = mysql_select_user_extra(user_id)
+		hide = mysql_select_hide(user_id)
+		extra_keyboard = [['Default - {0} XRB'.format(mrai_text(balance))]]
+		if ((len(extra_accounts) > 0) and (default is False) and (hide == 0)):
+			extra_array = []
+			for extra_account in extra_accounts:
+				extra_array.append(extra_account[3])
+			balances = accounts_balances(extra_array)
+			for extra_account in extra_accounts:
+				if (balances[extra_account[3]] >= (min_send + final_fee_amount)):
+					extra_keyboard.append(['{0} - {1} XRB'.format(extra_account[3], mrai_text(balances[extra_account[3]]))])
+		if (len(extra_keyboard) <= 1):
+			default = True
+		if ((default is False) and (hide == 0)):
+			custom_keyboard(bot, chat_id, extra_keyboard, lang_text('send_from', lang_id).format(''))
+		# extra
+		elif (balance >= (final_fee_amount + min_send)):
+			text_reply(update, lang_text('send_amount', lang_id).format(mrai_text(final_fee_amount), mrai_text(min_send)))
+		else:
+			text_reply(update, lang_text('send_low_balance', lang_id).format(mrai_text(final_fee_amount), mrai_text(min_send)))
+	except (TypeError):
+		lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('send_no_account_text', lang_id))
+
+
+@run_async
+def send_destination(bot, update, text, qr = False):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	# FEELESS
+	if ((user_id in LIST_OF_FEELESS) or (mysql_select_send_time(user_id) is not False)):
+		final_fee_amount = 0
+	else:
+		final_fee_amount = fee_amount
+	# FEELESS
+	# Check user existance in database
+	m = mysql_select_user(user_id)
+	try:
+		account = m[2]
+		destination = validate_account_number(text)
+		if (destination is not False):
+			mysql_update_send_destination(account, destination)
+			if (m[6] != 0):
+				custom_keyboard(bot, chat_id, lang_text('yes_no', lang_id), lang_text('send_confirm', lang_id).format(mrai_text(m[6]), mrai_text(m[6]+final_fee_amount), destination))
+			elif (qr is False):
+				text_reply(update, lang_text('send_amount', lang_id).format(mrai_text(final_fee_amount), mrai_text(min_send)))
+		else:
+			message_markdown(bot, chat_id, lang_text('send_invalid', lang_id))
+	except (TypeError):
+		lang_keyboard(lang_id, bot, chat_id, lang_text('send_no_account_text', lang_id))
+
+
+@run_async
+def send_destination_username(bot, update, text):
+	user_id = update.message.from_user.id
+	username = text.replace('@', '').replace(' ','').replace('\r','').replace('\n','')
+	username = username.replace(r'[^[0-9a-zA-Z_]+', '')
+	if (len(username) >= 5 and len(username) <= 32):
+		try:
+			account = mysql_account_by_username(username)
+			if (account is not False):
+				text_reply(update, lang(user_id, 'send_user').format(text, account))
+				send_destination(bot, update, account)
+			else:
+				text_reply(update, lang(user_id, 'send_user_not_found').format(text))
+		except UnicodeEncodeError as e:
+			text_reply(update, lang(user_id, 'send_user_not_found').format(text))
+	else:
+		text_reply(update, lang(user_id, 'send_user_not_found').format(text))
+
+
+@run_async
+def send_amount(bot, update, text, raw = False):
+	user_id = update.message.from_user.id
+	lang_id = mysql_select_language(user_id)
+	# FEELESS
+	if ((user_id in LIST_OF_FEELESS) or (mysql_select_send_time(user_id) is not False)):
+		final_fee_amount = 0
+	else:
+		final_fee_amount = fee_amount
+	# FEELESS
+	# Check user existance in database
+	m = mysql_select_user(user_id)
+	try:
+		account = m[2]
+		try:
+			extra_account = mysql_select_user_extra(user_id, True)
+			if (len(extra_account) > 0):
+				balance = account_balance(extra_account[0][3])
+			else:
+				balance = account_balance(account)
+			max_send = balance - final_fee_amount
+			send_amount = int(float(text) * (10 ** 6))
+			if ((raw is not False) and (int(text) >= (10 ** 24))):
+				send_amount = int(int(text) / (10 ** 24))
+			# if less, set 0
+			if (max_send < min_send):
+				mysql_update_send_clean_extra_user(user_id)
+				text_reply(update, lang_text('send_low_balance', lang_id).format(mrai_text(final_fee_amount), mrai_text(min_send)))
+			elif (send_amount > max_send):
+				mysql_update_send_clean_extra_user(user_id)
+				text_reply(update, lang_text('send_limit_max', lang_id).format(mrai_text(final_fee_amount), mrai_text(max_send)))
+			elif (send_amount < min_send):
+				mysql_update_send_clean_extra_user(user_id)
+				text_reply(update, lang_text('send_limit_min', lang_id).format(mrai_text(min_send)))
+			else:
+				mysql_update_send_amount(account, send_amount)
+				if (m[5] is not None):
+					custom_keyboard(bot, update.message.chat_id, lang_text('yes_no', lang_id), lang_text('send_confirm', lang_id).format(mrai_text(send_amount), mrai_text(send_amount+final_fee_amount), m[5]))
+				else:
+					lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('send_destination', lang_id))
+		except (ValueError):
+			text_reply(update, lang_text('send_digits', lang_id))
+	except (TypeError):
+		lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('send_no_account_text', lang_id))
+
+
+@run_async
+def send_extra(bot, update, text):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	# Check user extra accounts in database
+	xrb_account = text.split()[0].replace('­','').replace('\r','').replace('\n','')
+	xrb_account = validate_account_number(xrb_account)
+	if (xrb_account is not False):
+		account = mysql_select_by_account_extra(xrb_account)
+	else:
+		account = False
+	if ((account is not False) and (account[0] == user_id)):
+		m = mysql_select_user(user_id)
+		if (m[6] != 0):
+			mysql_update_send_amount(m[2], 0)
+		mysql_update_send_from(xrb_account)
+		text_reply(update, lang_text('send_from', lang_id).format(xrb_account))
+		sleep(1)
+		# FEELESS
+		if ((user_id in LIST_OF_FEELESS) or (mysql_select_send_time(user_id) is not False)):
+			final_fee_amount = 0
+		else:
+			final_fee_amount = fee_amount
+		# FEELESS
+		lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('send_amount', lang_id).format(mrai_text(final_fee_amount), mrai_text(min_send)))
+	else:
+		send_destination(bot, update, text)
+
+
+@run_async
+def send_finish(bot, update):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	m = mysql_select_user(user_id)
+	account = m[2]
+	frontier = m[3]
+	balance = int(m[4])
+	send_amount = int(m[6])
+	raw_send_amount = send_amount * (10 ** 24)
+	destination = m[5]
+	mysql_update_send_clean(account)
+	extra_account = mysql_select_user_extra(user_id, True)
+	if (len(extra_account) > 0):
+		account = extra_account[0][3]
+		frontier = extra_account[0][4]
+		balance = int(extra_account[0][5])
+		mysql_update_send_clean_extra(account)
+	# FEELESS
+	if ((user_id in LIST_OF_FEELESS) or (mysql_select_send_time(user_id) is not False)):
+		final_fee_amount = 0
+	else:
+		final_fee_amount = fee_amount
+	# FEELESS
+	try:
+		hide_keyboard(bot, chat_id, lang_text('send_working', lang_id))
+		# typing_illusion(bot, chat_id)  # typing illusion
+		# Check frontier existance
+		check_frontier = check_block(frontier)
+		account_user_id = mysql_user_id_from_account (account)
+		if (check_frontier and (account_user_id == user_id)):
+			try:
+				send_hash = rpc_send(wallet, account, destination, raw_send_amount)
+			except Exception as e:
+				send_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+				logging.exception("message")
+			if (('0000000000000000000000000000000000000000000000000000000000000000' not in send_hash) and ('locked' not in send_hash)):
+				new_balance = block_balance(send_hash)
+				if (new_balance != balance - send_amount - final_fee_amount):
+					logging.error('Unexpected balance for send block {0}, account {1}. Result {2}, expected {3}'.format(send_hash, account, mrai_text(new_balance), mrai_text(balance - send_amount - final_fee_amount)))
+				if (len(extra_account) > 0):
+					mysql_update_balance_extra(account, new_balance)
+					mysql_update_frontier_extra(account, send_hash)
+				else:
+					mysql_update_balance(account, new_balance)
+					mysql_update_frontier(account, send_hash)
+				sleep(1)
+				lang_keyboard(lang_id, bot, chat_id, lang_text('send_completed', lang_id).format(mrai_text(final_fee_amount), mrai_text(new_balance)))
+				mysql_update_send_time(user_id)
+				sleep(1)
+				message_markdown(bot, chat_id, '[{0}]({1}{0})'.format(send_hash, hash_url))
+				logging.info('Send from {0} to {1}  amount {2}  hash {3}'.format(account, destination, mrai_text(send_amount), send_hash))
+				# update username
+				old_username = m[8]
+				username=update.message.from_user.username
+				if (username is None):
+					username = ''
+				if (not (username == old_username)):
+					username_text = 'Username updated: @{0} --> @{1}'.format(old_username, username)
+					mysql_update_username(user_id, username)
+					print(username_text)
+					logging.info(username_text)
+				# update username
+				receive(destination, send_hash)
+			else:
+				logging.warning('Transaction FAILURE! Account {0}'.format(account))
+				sleep(0.5) # workaround
+				new_balance = account_balance(account)
+				lang_keyboard(lang_id, bot, chat_id, lang_text('send_tx_error', lang_id).format(mrai_text(new_balance)))
+				unlock(wallet, wallet_password) # try to unlock wallet
+		elif (not (check_frontier)):
+			text_reply(update, lang_text('send_frontier', lang_id))
+			logging.info('Send failure for user {0}. Reason: Frontier not found'.format(user_id))
+		elif (not (account_user_id == user_id)):
+			message_markdown(bot, chat_id, lang_text('send_invalid', lang_id))
+			logging.warning('Send failure for user {0}. Reason: User ID mismatch'.format(user_id))
+	except (GeneratorExit, ValueError) as e:
+		logging.error(e)
+		lang_keyboard(lang_id, bot, chat_id, lang_text('send_error', lang_id))
+
+
+
+@run_async
+def price(bot, update):
+	info_log(update)
+	ddos_protection(bot, update, price_text)
+
+@run_async
+def price_text(bot, update):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	price = mysql_select_price()
+	last_price_mercatox = ('%.8f' % (float(price[0][0]) / (10 ** 8)))
+	ask_price_mercatox = ('%.8f' % (float(price[0][3]) / (10 ** 8)))
+	bid_price_mercatox = ('%.8f' % (float(price[0][4]) / (10 ** 8)))
+	last_price_grail = ('%.8f' % (float(price[1][0]) / (10 ** 8)))
+	ask_price_grail = ('%.8f' % (float(price[1][3]) / (10 ** 8)))
+	bid_price_grail = ('%.8f' % (float(price[1][4]) / (10 ** 8)))
+	last_price_kucoin = ('%.8f' % (float(price[3][0]) / (10 ** 8)))
+	ask_price_kucoin = ('%.8f' % (float(price[3][3]) / (10 ** 8)))
+	bid_price_kucoin = ('%.8f' % (float(price[3][4]) / (10 ** 8)))
+	last_price_binance = ('%.8f' % (float(price[5][0]) / (10 ** 8)))
+	ask_price_binance = ('%.8f' % (float(price[5][3]) / (10 ** 8)))
+	bid_price_binance = ('%.8f' % (float(price[5][4]) / (10 ** 8)))
+	
+	high_price = ('%.8f' % (max(float(price[0][1]), float(price[3][1]), float(price[5][1])) / (10 ** 8)))
+	low_price = ('%.8f' % (min(float(price[0][2]), float(price[3][2]), float(price[5][2])) / (10 ** 8)))
+	volume = int(price[0][5]) + int(price[2][5]) + int(price[3][5]) + int(price[5][5])
+	volume_btc = ('%.2f' % ((float(price[0][6]) + + float(price[3][6]) + float(price[5][6])) / (10 ** 8)))
+	text = lang_text('price', lang_id).format(last_price_mercatox, ask_price_mercatox, bid_price_mercatox, last_price_grail, ask_price_grail, bid_price_grail, high_price, low_price, "{:,}".format(volume), volume_btc, last_price_kucoin, ask_price_kucoin, bid_price_kucoin, last_price_binance, ask_price_binance, bid_price_binance)
+	lang_keyboard(lang_id, bot, chat_id, text)
+	sleep(1)
+	message_markdown(bot, chat_id, lang_text('price_options', lang_id))
+
+
+@run_async
+def price_above(bot, update, args):
+	info_log(update)
+	ddos_protection_args(bot, update, args, price_above_callback)
+
+@run_async
+def price_above_callback(bot, update, args):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	if (len(args) > 0):
+		value = 0
+		try:
+			value = int(args[0])
+		except ValueError as e:
+			try:
+				value = int(float(args[0]) * (10 ** 8))
+			except ValueError as e:
+				lang_keyboard(lang_id, bot, chat_id, lang_text('prices_digits', lang_id))
+				sleep(1)
+				message_markdown(bot, chat_id, '/{0} 10000\n/{0} 0.001'.format(lang_text('price_above', lang_id).replace("_", "\_")))
+		price = mysql_select_price()
+		price_high_mercatox =  max(int(price[0][0]), int(price[0][4]))
+		price_high_kucoin =  max(int(price[3][0]), int(price[3][4]))
+		price_high_binance =  max(int(price[5][0]), int(price[5][4]))
+		price_high = max( price_high_mercatox, price_high_kucoin, price_high_binance)
+		exchange = 0
+		if (len(args) > 1):
+			if (args[1].lower().startswith('mercatox')):
+				price_high = price_high_mercatox
+				exchange = 2
+			elif (args[1].lower().startswith('kucoin')):
+				price_high = price_high_kucoin
+				exchange = 3
+			elif (args[1].lower().startswith('binance')):
+				price_high = price_high_binance
+				exchange = 4
+		if (value <= price_high):
+			btc_price = ('%.8f' % (float(price_high) / (10 ** 8)))
+			message_markdown(bot, chat_id, lang_text('prices_above', lang_id).format('exchanges', btc_price))
+		elif ((value > 0) and (value < 4294967295)):
+			btc_value = ('%.8f' % (float(value) / (10 ** 8)))
+			mysql_set_price_high(user_id, value, exchange)
+			message_markdown(bot, chat_id, lang_text('prices_success', lang_id).format(btc_value))
+		else:
+			lang_keyboard(lang_id, bot, chat_id, lang_text('error', lang_id))
+	else:
+		lang_keyboard(lang_id, bot, chat_id, lang_text('prices_digits', lang_id))
+		sleep(1)
+		message_markdown(bot, chat_id, '/{0} 10000\n/{0} 0.001'.format(lang_text('price_above', lang_id).replace("_", "\_")))
+
+
+@run_async
+def price_below(bot, update, args):
+	info_log(update)
+	ddos_protection_args(bot, update, args, price_below_callback)
+
+@run_async
+def price_below_callback(bot, update, args):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	if (len(args) > 0):
+		value = 0
+		try:
+			value = int(args[0])
+		except ValueError as e:
+			try:
+				value = int(float(args[0]) * (10 ** 8))
+			except ValueError as e:
+				lang_keyboard(lang_id, bot, chat_id, lang_text('prices_digits', lang_id))
+				sleep(1)
+				message_markdown(bot, chat_id, '/{0} 10000\n/{0} 0.001'.format(lang_text('price_below', lang_id).replace("_", "\_")))
+		price = mysql_select_price()
+		price_low_mercatox =  min(int(price[0][0]), int(price[0][3]))
+		price_low_kucoin =  min(int(price[3][0]), int(price[3][3]))
+		price_low_binance =  min(int(price[5][0]), int(price[5][3]))
+		price_low = min(price_low_mercatox, price_low_kucoin, price_low_binance)
+		exchange = 0
+		if (len(args) > 1):
+			if (args[1].lower().startswith('mercatox')):
+				price_low = price_low_mercatox
+				exchange = 2
+			elif (args[1].lower().startswith('kucoin')):
+				price_low = price_low_kucoin
+				exchange = 3
+			elif (args[1].lower().startswith('binance')):
+				price_low = price_low_binance
+				exchange = 4
+		if (value >= price_low):
+			btc_price = ('%.8f' % (float(price_low) / (10 ** 8)))
+			message_markdown(bot, chat_id, lang_text('prices_below', lang_id).format('exchanges', btc_price))
+		elif ((value > 0) and (value < 4294967295)):
+			btc_value = ('%.8f' % (float(value) / (10 ** 8)))
+			mysql_set_price_low(user_id, value, exchange)
+			message_markdown(bot, chat_id, lang_text('prices_success', lang_id).format(btc_value))
+		else:
+			lang_keyboard(lang_id, bot, chat_id, lang_text('error', lang_id))
+	else:
+		lang_keyboard(lang_id, bot, chat_id, lang_text('prices_digits', lang_id))
+		sleep(1)
+		message_markdown(bot, chat_id, '/{0} 10000\n/{0} 0.001'.format(lang_text('price_below', lang_id).replace("_", "\_")))
+
+		
+@run_async
+def price_flush(bot, update):
+	info_log(update)
+	ddos_protection(bot, update, price_flush_callback)
+
+@run_async
+def price_flush_callback(bot, update):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	mysql_delete_price_high(user_id)
+	mysql_delete_price_low(user_id)
+	message_markdown(bot, chat_id, lang_text('prices_flushed', lang_id))
+
+
+@run_async
+def version(bot, update):
+	info_log(update)
+	ddos_protection(bot, update, version_text)
+
+@run_async
+def version_text(bot, update):
+	user_id = update.message.from_user.id
+	version = rpc({"action": "version"}, 'node_vendor')
+	text_reply(update, version)
+
+
+'''@run_async
+def faucet(bot, update, args):
+	info_log(update)
+	ddos_protection_args(bot, update, args, faucet_text)
+
+@run_async
+def faucet_text(bot, update, args):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	faucet = mysql_select_faucet()
+	time_remain = 3600 - int(time.time()) % 3600
+	sec_remain = time_remain % 60
+	min_remain = time_remain // 60
+	message_markdown(bot, chat_id, lang_text('faucet_stats', lang_id).format("{:,}".format(faucet[0]), mrai_text(faucet[1]), "{:,}".format(faucet[2]), min_remain, '{0:02d}'.format(sec_remain)))
+	m = mysql_select_user(user_id)
+	try:
+		if (len(args) > 0):
+			account = args[0].lower().replace('­','').replace('\r','').replace('\n','');
+			account = account.replace(r'[^[13456789abcdefghijkmnopqrstuwxyz_]+', '')
+		else:
+			account = m[2]
+		if (account.startswith('xrb_1') or account.startswith('xrb_3')):
+			time.sleep(1)
+			http = urllib3.PoolManager(cert_reqs='CERT_REQUIRED',ca_certs=certifi.where())
+			url = 'https://faucet.raiblockscommunity.net/userpay.php?json=1&acc={0}'.format(account)
+			response = http.request('GET', url, headers=header, timeout=10.0)
+			json_paylist = json.loads(response.data)
+			user_mode = int(json_paylist['pending'][0]['delta'])
+			if (user_mode == 0):
+				message_markdown(bot, chat_id, lang_text('faucet_above', lang_id).format(account))
+			elif (user_mode == 1):
+				message_markdown(bot, chat_id, lang_text('faucet_under', lang_id).format(account))
+			elif (user_mode > 10):
+				message_markdown(bot, chat_id, lang_text('faucet_under_num', lang_id).format(user_mode, account))
+			else:
+				message_markdown(bot, chat_id, lang_text('faucet_check_account', lang_id).format(account))
+		else:
+			message_markdown(bot, chat_id, lang_text('account_invalid', lang_id))
+	except TypeError as e:
+		logging.info('TypeError: {0}'.format(url))
+	except (KeyError, IndexError) as e:
+		message_markdown(bot, chat_id, lang_text('faucet_invalid', lang_id))
+	#except Exception as e:
+	#	account = False
+'''
+
+@run_async
+def text_result(text, bot, update):
+	user_id = update.message.from_user.id
+	lang_id = mysql_select_language(user_id)
+	# Check user existance in database
+	exist = mysql_user_existance(user_id)
+	# Check if ready to pay
+	if (exist is not False):
+		m = mysql_select_user(user_id)
+		send_destination_defined = (m[5] is not None)
+		# Check password protection
+		password_hash = mysql_check_password(user_id)
+		valid_password = True
+		# Check only if send-destination is defined
+		if ((password_hash is not False) and send_destination_defined):
+			#print(text)
+			password = text
+			valid_password = password_check(update, password)
+		# Check password protection
+		if (text.lower() in language['commands']['not']):
+			mysql_update_send_clean(m[2])
+			mysql_update_send_clean_extra_user(user_id)
+			lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('send_cancelled', lang_id))
+		elif (send_destination_defined and (m[6] != 0) and valid_password and (password_hash is not False)):
+			send_finish(bot, update)
+			#print(password_hash)
+		elif (send_destination_defined and (m[6] != 0) and (not valid_password) and (password_hash is not False)):
+			text_reply(update, lang_text('send_password', lang_id))
+			#print(password_hash)
+			logging.info('Send failure for user {0}. Reason: Wrong password'.format(user_id))
+		elif (send_destination_defined and (m[6] != 0) and (password_hash is False) and (text.lower() in language['commands']['yes'])):
+			send_finish(bot, update)
+		elif (send_destination_defined and (m[6] != 0)):
+			mysql_update_send_clean(m[2])
+			mysql_update_send_clean_extra_user(user_id)
+			lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('send_cancelled', lang_id))
+	# Get the text the user sent
+	text = text.lower()
+	if (text in language['commands']['help']):
+		help_text(bot, update)
+	elif (text in language['commands']['account']):
+		account_text(bot, update)
+	elif (text in language['commands']['send']):
+		send_text(bot, update)
+	elif ('default' in text):
+		send_text(bot, update, True)
+	elif (text.replace(',', '').replace('.', '').replace(' ', '').replace('mrai', '').replace('xrb', '').replace('nano', '').replace('()', '').isdigit()):
+		# check if digit is correct
+		digit_split = text.replace(' ', '').replace('mrai', '').replace('xrb', '').replace('nano', '').replace('()', '').split(',')
+		if (text.startswith('0,') or (any(len(d) > 3 for d in digit_split) and (len(digit_split) > 1)) or any(d is None for d in digit_split) or ((len(digit_split[-1]) < 3) and (len(digit_split) > 1))):
+			lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('send_digits', lang_id))
+		else:
+			send_amount(bot, update, text.replace(',', '').replace(' ', '').replace('mrai', '').replace('xrb', '').replace('nano', '').replace('()', ''))
+	elif (text.startswith('xrb_') or text.startswith('nano_')):
+		extra_accounts = mysql_select_user_extra(user_id)
+		if ((len(extra_accounts) > 0) and (len(text.split()) > 1)):
+			send_extra(bot, update, text)
+		else:
+			send_destination(bot, update, text)
+	elif (text.startswith('@') and (len(text) > 3 )):
+		send_destination_username(bot, update, text)
+	elif (text in language['commands']['block_count']):
+		block_count_callback(bot, update)
+	elif (text in language['commands']['start']):
+		start_text(bot, update)
+	elif (text in language['commands']['price']):
+		price_text(bot, update)
+	elif ('version' in text):
+		version_text(bot, update)
+	#elif (text in language['commands']['faucet']):
+	#	faucet_text(bot, update, [])
+	# back
+	elif ('back' in text):
+		lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('ping', lang_id))
+	# language selection
+	elif (text.split(' ')[0] in language['common']['language_list']):
+		language_select_callback(bot, update, text.split(' '))
+	# language selection
+	elif (text.split(' ')[0] in language['common']['lang']):
+		custom_keyboard(bot, update.message.chat_id, lang_text('language_keyboard', 'common'), lang_text('language_selection', 'common'))
+	elif ((text not in language['commands']['yes']) and (text not in language['commands']['not'])):
+		#default_keyboard(bot, update.message.chat_id, 'Command not found')
+		unknown(bot, update)
+
+
+@run_async
+def text_filter(bot, update):
+	info_log(update, True)
+	ddos_protection(bot, update, text_filter_callback)
+
+@run_async
+def text_filter_callback(bot, update):
+	user_id = update.message.from_user.id
+	lang_id = mysql_select_language(user_id)
+	try:
+		# Run result function
+		text = update.message.text
+		text_result(text, bot, update)
+	except UnicodeEncodeError:
+		lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('text_decode_error', lang_id))
+
+
+@run_async
+def photo_filter(bot, update):
+	info_log(update)
+	ddos_protection(bot, update, photo_filter_callback)
+
+@run_async
+def photo_filter_callback(bot, update):
+	user_id = update.message.from_user.id
+	lang_id = mysql_select_language(user_id)
+	try:
+		image = update.message.photo[-1]
+		path = '{1}download/{0}.jpg'.format(image.file_id, qr_folder_path)
+		#print(image)
+		newFile = bot.getFile(image.file_id)
+		newFile.download(path)
+		qr = account_by_qr(path)
+		account = qr[0]
+		print(account)
+		if ('xrb_' in account or 'nano_' in account):
+			lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('qr_send', lang_id).format(account))
+			sleep(1)
+			if (len(qr) > 1):
+				send_destination(bot, update, account, True)
+				sleep(0.3)
+				print(qr[1])
+				send_amount(bot, update, qr[1], True)
+			else:
+				send_destination(bot, update, account)
+		elif (('NULL' in account) or (account is None) or (account is False)):
+			lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('qr_recognize_error', lang_id))
+		else:
+			lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('qr_account_error', lang_id))
+		#print(account)
+		logging.info('QR by file: {0}'.format(account))
+	except UnicodeEncodeError:
+		lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('text_decode_error', lang_id))
+
+
+@run_async
+def password(bot, update, args):
+	ddos_protection_args(bot, update, args, password_callback)
+
+@run_async
+def password_callback(bot, update, args):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	if (len(args) > 0):
+		password_hash = mysql_check_password(user_id)
+		if (password_hash is False):
+			if (len(args[0]) >= 8):
+				password = args[0]
+				if ((len(set(string.digits).intersection(password)) > 0) and (len(set(string.ascii_uppercase).intersection(password))> 0) and (len(set(string.ascii_lowercase).intersection(password)) > 0)):
+					try:
+						dk = hashlib.scrypt(password.encode('utf-8'), salt=(hashlib.sha3_224(user_id.to_bytes(6, byteorder='little')).hexdigest()+salt).encode('utf-8'), n=2**15, r=8, p=1, maxmem=2**26, dklen=64)
+						hex = binascii.hexlify(dk).decode()
+						mysql_set_password(user_id, hex)
+						message_markdown(bot, chat_id, lang(user_id, 'password_success'))
+						logging.info('Password added for user {0}'.format(user_id))
+					except UnicodeEncodeError:
+						text_reply(update, lang(user_id, 'password_uppercase'))
+						logging.info('Password set failed for user {0}. Reason: Unicode symbol'.format(user_id))
+				else:
+					text_reply(update, lang(user_id, 'password_uppercase'))
+					logging.info('Password set failed for user {0}. Reason: uppercase-lowercase-digits'.format(user_id))
+			else:
+				text_reply(update, lang(user_id, 'password_short'))
+				logging.info('Password set failed for user {0}. Reason: Too short'.format(user_id))
+		else:
+			text_reply(update, lang(user_id, 'password_not_empty'))
+			logging.info('Password set failed for user {0}. Reason: Already protected'.format(user_id))
+	else:
+		text_reply(update, lang(user_id, 'password_command'))
+
+@run_async
+def password_delete(bot, update, args):
+	ddos_protection_args(bot, update, args, password_delete_callback)
+
+@run_async
+def password_delete_callback(bot, update, args):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	if (len(args) > 0):
+		password = args[0]
+		valid_password = password_check(update, password)
+		if (valid_password):
+			mysql_delete_password(user_id)
+			text_reply(update, lang(user_id, 'password_delete_success'))
+			logging.info('Password deletion for user {0}'.format(user_id))
+		else:
+			text_reply(update, lang(user_id, 'password_error'))
+			logging.info('Password deletion failed for user {0}. Reason: Wrong password'.format(user_id))
+	else:
+		text_reply(update, lang(user_id, 'password_delete_command'))
+
+
+@run_async
+def seed(bot, update, args):
+	ddos_protection_args(bot, update, args, seed_callback)
+
+@run_async
+def seed_callback(bot, update, args):
+	user_id = update.message.from_user.id
+	chat_id = update.message.chat_id
+	lang_id = mysql_select_language(user_id)
+	seed = mysql_select_seed(user_id)
+	if (seed is False):
+		seed = binascii.b2a_hex(os.urandom(16)).decode().upper()
+		mysql_set_seed(user_id, seed)
+	if (len(seed) == 16 or len(seed) == 32):
+		seed_split = [seed[i:i+4] for i in range(0, len(seed), 4)]
+		seed_text = ''
+		for seed_part in seed_split:
+			seed_text += seed_part + '-'
+		# Seed checksum
+		blake2b_checksum = hashlib.blake2b(digest_size=2)
+		blake2b_checksum.update(binascii.unhexlify(seed))
+		seed_text += blake2b_checksum.hexdigest().upper()
+		password_hash = mysql_check_password(user_id)
+		if ((len(args) > 0) and (password_hash is not False)):
+			password = args[0]
+			valid_password = password_check(update, password)
+			if (valid_password):
+				message_markdown(bot, chat_id, lang_text('seed_creation', lang_id).format(seed_text))
+			else:
+				text_reply(update, lang_text('password_error', lang_id))
+		elif (password_hash is not False):
+			text_reply(update, lang_text('password_error', lang_id))
+		else:
+			message_markdown(bot, chat_id, lang_text('seed_creation', lang_id).format(seed_text))
+	else:
+		logging.error('Incorrect seed length for user {0} : {1}'.format(user_id, len(seed)))
+
+def passport_processor(bot, update):
+	info_log(update)
+	user_id = update.message.from_user.id
+	# If we received any passport data
+	passport_data = update.message.passport_data
+	if passport_data:
+		# If our nonce doesn't match what we think, this Update did not originate from us
+		# Ideally you would randomize the nonce on the server
+		nonce = mysql_select_nonce (user_id)
+		if nonce is False or passport_data.decrypted_credentials.nonce != nonce:
+			print("Invalid nonce")
+			logging.info('Invalid nonce user {0}'.format(user_id))
+			return
+
+		# Print the decrypted credential data
+		# For all elements
+		# Print their decrypted data
+		# Files will be downloaded to current directory
+		for data in passport_data.decrypted_data:  # This is where the data gets decrypted
+			if data.type == 'phone_number':
+				logging.info('Phone for user {0}: {1}'.format(user_id, data.phone_number))
+			elif data.type == 'email':
+				logging.info('Email for user {0}: {1}'.format(user_id, data.email))
+			if data.type in ('personal_details', 'passport', 'driver_license', 'identity_card',
+							 'internal_passport', 'address'):
+				if data.data:
+					logging.info('{1} for user {0}: {2}'.format(user_id, data.type, data.data))
+			if data.type in ('utility_bill', 'bank_statement', 'rental_agreement',
+							 'passport_registration', 'temporary_registration'):
+				logging.info('{1} for user {0}: count {2}'.format(user_id, data.type, len(data.files)))
+				for file in data.files:
+					actual_file = file.get_file()
+					logging.info('File user {0}: {1}'.format(user_id, actual_file))
+					path = '{1}{0}.jpg'.format(actual_file.file_id, passport_folder_path)
+					actual_file.download(path)
+			if data.type in ('passport', 'driver_license', 'identity_card',
+							 'internal_passport'):
+				if data.front_side:
+					file = data.front_side.get_file()
+					logging.info('{1} user {0}: {2}'.format(user_id, data.type, file))
+					path = '{1}{0}.jpg'.format(file.file_id, passport_folder_path)
+					file.download(path)
+			if data.type in ('driver_license' and 'identity_card'):
+				if data.reverse_side:
+					file = data.reverse_side.get_file()
+					logging.info('{1} user {0}: {2}'.format(user_id, data.type, file))
+					path = '{1}{0}.jpg'.format(file.file_id, passport_folder_path)
+					file.download(path)
+			if data.type in ('passport', 'driver_license', 'identity_card',
+							 'internal_passport'):
+				if data.selfie:
+					file = data.selfie.get_file()
+					logging.info('{1} user {0}: {2}'.format(user_id, data.type, file))
+					path = '{1}{0}.jpg'.format(file.file_id, passport_folder_path)
+					file.download(path)
+			if data.type in ('passport', 'driver_license', 'identity_card',
+							 'internal_passport', 'utility_bill', 'bank_statement',
+							 'rental_agreement', 'passport_registration',
+							 'temporary_registration'):
+				if data.translation:
+					logging.info('Translation {1} for user {0}: count {2}'.format(user_id, data.type, len(data.translation)))
+					for file in data.translation:
+						actual_file = file.get_file()
+						logging.info('File user {0}: {1}'.format(user_id, actual_file))
+						path = '{1}{0}.jpg'.format(actual_file.file_id, passport_folder_path)
+						actual_file.download(path)
+
+@run_async
+def echo(bot, update):
+	info_log(update)
+	text_reply(update, update.message.text)
+
+
+@run_async
+def ping(bot, update):
+	info_log(update)
+	typing_illusion(bot, update.message.chat_id) # typing illusion
+	sleep(2)
+	default_keyboard(bot, update.message.chat_id, lang(update.message.from_user.id, 'ping'))
+
+@restricted
+def stats(bot, update):
+	info_log(update)
+	typing_illusion(bot, update.message.chat_id) # typing illusion
+	fee_balance = account_balance(fee_account) / (10 ** 6)
+	stats = '{0}\nFees balance: {1} Mrai (XRB)'.format(mysql_stats(), "{:,}".format(fee_balance))
+	fee_pending = account_pending(fee_account) / (10 ** 6)
+	if (fee_pending > 0):
+		stats = '{0}\nPending fees: {1} Mrai (XRB)'.format(stats, "{:,}".format(fee_pending))
+	welcome_balance = account_balance(welcome_account) / (10 ** 6)
+	stats = '{0}\nWelcome balance: {1} Mrai (XRB)'.format(stats, "{:,}".format(welcome_balance))
+	default_keyboard(bot, update.message.chat_id, stats)
+
+@restricted
+def check(bot, update, args):
+	info_log(update)
+	user_info = mysql_select_by_account(args[0])
+	if (user_info is not False):
+		text_reply(update, 'User ID: {0}'.format(user_info[0]))
+		text = 'Your @NanoWalletBot account: {0}. Do not forget to save your bot /seed !'.format(user_info[1])
+		sleep(1)
+		try:
+			push(bot, user_info[0], text)
+			sleep(1)
+			text_reply(update, 'Status: Valid')
+		except BadRequest as e:
+			text_reply(update, 'Status: Bad Request')
+	else:
+		text_reply(update, 'Status: User not found in bot')
+
+@restricted
+def unlock_command(bot, update):
+	info_log(update)
+	unlock(wallet, wallet_password)
+	default_keyboard(bot, update.message.chat_id, 'Wallet unlocked')
+
+
+@run_async
+def unknown(bot, update):
+	user_id = update.message.from_user.id
+	lang_id = mysql_select_language(user_id)
+	lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('command_not_found', lang_id))
+
+@run_async
+def unknown_ddos(bot, update):
+	info_log(update)
+	user_id = update.message.from_user.id
+	message_id = int(update.message.message_id)
+	ddos = mysql_ddos_protector(user_id, message_id)
+	if (ddos == True):
+		logging.warning('DDoS or double message by user {0} message {1}'.format(user_id, message_id))
+	elif (ddos == False):
+		logging.warning('Too fast request by user {0}'.format(user_id))
+	lang_id = mysql_select_language(user_id)
+	lang_keyboard(lang_id, bot, update.message.chat_id, lang_text('command_not_found', lang_id))
+
+def error(bot, update, error):
+	logger.warn('Update "%s" caused error "%s"' % (update, error))
+	error_text = ('%s' % (error))
+	if ("Forbidden" in error_text):
+		text_reply(update, ('%s' % (error)))
+
+
+def main():
+	# Create the EventHandler and pass it your bot's token.
+	if (proxy_url is None):
+		if (private_key is None):
+			updater = Updater(api_key, workers=64)
+		else:
+			updater = Updater(api_key, private_key=open(private_key, 'rb').read(), workers=64)
+	else:
+		if (private_key is None):
+			updater = Updater(token=api_key, workers=64, request_kwargs={'proxy_url': proxy_url, 'urllib3_proxy_kwargs': {'username': proxy_user, 'password': proxy_pass}})
+		else:
+			updater = Updater(api_key, private_key=open(private_key, 'rb').read(), workers=64, request_kwargs={'proxy_url': proxy_url, 'urllib3_proxy_kwargs': {'username': proxy_user, 'password': proxy_pass}})
+
+	# Get the dispatcher to register handlers
+	dp = updater.dispatcher
+
+	# on different commands - answer in Telegram
+	for command in language['commands']['start_command']:
+		dp.add_handler(CommandHandler(command.replace(" ", "_"), start))
+	for command in language['commands']['help_command']:
+		dp.add_handler(CommandHandler(command.replace(" ", "_"), help))
+	dp.add_handler(CommandHandler("info", start))
+
+	# my custom commands
+	dp.add_handler(CommandHandler("user_id", user_id))
+	for command in language['commands']['block_count_command']:
+		dp.add_handler(CommandHandler(command.replace(" ", "_"), block_count))
+	dp.add_handler(CommandHandler("ping", ping))
+	for command in language['commands']['account_command']:
+		dp.add_handler(CommandHandler(command.replace(" ", "_"), account))
+	for command in language['commands']['account_add']:
+		dp.add_handler(CommandHandler(command.replace(" ", "_"), account_add))
+	for command in language['commands']['account_list']:
+		dp.add_handler(CommandHandler(command.replace(" ", "_"), account_list))
+	for command in (language['commands']['accounts_hide'] + language['commands']['accounts_expand']):
+		dp.add_handler(CommandHandler(command.replace(" ", "_"), accounts_hide))
+	for command in language['commands']['send_command']:
+		dp.add_handler(CommandHandler(command.replace(" ", "_"), send, pass_args=True))
+	for command in language['commands']['send_from']:
+		dp.add_handler(CommandHandler(command.replace(" ", "_"), send_from, pass_args=True))
+	for command in language['commands']['send_all']:
+		dp.add_handler(CommandHandler(command.replace(" ", "_"), send_all))
+	dp.add_handler(CommandHandler("password", password, pass_args=True))
+	dp.add_handler(CommandHandler("Password", password, pass_args=True)) # symlink
+	dp.add_handler(CommandHandler("secret", password, pass_args=True)) # symlink
+	dp.add_handler(CommandHandler("password_delete", password_delete, pass_args=True))
+	dp.add_handler(CommandHandler("secret_delete", password_delete, pass_args=True)) # symlink
+	for command in language['commands']['price_command']:
+		dp.add_handler(CommandHandler(command.replace(" ", "_"), price))
+	for command in language['commands']['price_above']:
+		dp.add_handler(CommandHandler(command, price_above, pass_args=True))
+	for command in language['commands']['price_below']:
+		dp.add_handler(CommandHandler(command, price_below, pass_args=True))
+	for command in language['commands']['price_flush']:
+		dp.add_handler(CommandHandler(command, price_flush))
+	dp.add_handler(CommandHandler("version", version))
+	for command in language['common']['lang_command']:
+		dp.add_handler(CommandHandler(command.replace(" ", "_"), language_select, pass_args=True))
+	dp.add_handler(CommandHandler("seed", seed, pass_args=True))
+	dp.add_handler(CommandHandler("check", check, pass_args=True))
+	#for command in language['commands']['faucet']:
+	#	dp.add_handler(CommandHandler(command, faucet, pass_args=True))
+
+	
+	# admin commands
+	dp.add_handler(CommandHandler("broadcast", broadcast))
+	dp.add_handler(CommandHandler("bootstrap", bootstrap))
+	dp.add_handler(CommandHandler("restart", restart))
+	dp.add_handler(CommandHandler("stats", stats))
+	dp.add_handler(CommandHandler("unlock", unlock_command))
+
+	# on noncommand i.e message - return not found
+	dp.add_handler(MessageHandler(Filters.text, text_filter))
+	dp.add_handler(MessageHandler(Filters.photo, photo_filter))
+	dp.add_handler(MessageHandler(Filters.command, unknown_ddos))
+
+	# On messages that include passport data call passport_processor
+	dp.add_handler(MessageHandler(Filters.passport_data, passport_processor))
+
+	# log all errors
+	dp.add_error_handler(error)
+
+	# Start the Bot
+	#updater.start_polling()
+	updater.start_webhook(listen='127.0.0.1', port=int(listen_port), url_path=api_key)
+	updater.bot.setWebhook('https://{0}/{1}'.format(domain, api_key))
+	# Run the bot until the you presses Ctrl-C or the process receives SIGINT,
+	# SIGTERM or SIGABRT. This should be used most of the time, since
+	# start_polling() is non-blocking and will stop the bot gracefully.
+	updater.idle()
+
+
+if __name__ == '__main__':
+	try:
+		print('Starting bot server')
+		main()
+	except(urllib3.exceptions.ReadTimeoutError):
+		logging.info('urllib3.exceptions.ReadTimeoutError')
+		print('urllib3.exceptions.ReadTimeoutError')
+	except(urllib3.exceptions.HTTPError):
+		logging.info('urllib3.exceptions.HTTPError')
+		print('urllib3.exceptions.HTTPError')
+	except(socket.timeout):
+		logging.info('socket.timeout')
+		print('socket.timeout')

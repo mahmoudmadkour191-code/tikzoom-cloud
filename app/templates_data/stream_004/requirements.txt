@@ -1,0 +1,6 @@
+# auto-added by TikZoom curator
+fastapi
+pydantic-settings
+rich
+uvicorn
+websockets

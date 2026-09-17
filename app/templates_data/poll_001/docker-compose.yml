@@ -1,0 +1,32 @@
+version: '3.7'
+
+volumes:
+  multi_vote_bot:
+    external: true
+
+services:
+  bot:
+    image: ratijas/multi_vote_bot
+
+    build: .
+
+    volumes:
+      - "multi_vote_bot:/root/.local/share/multi_vote_bot"
+
+    environment:
+      - LISTEN=0.0.0.0
+      - PORT=80
+
+    env_file:
+      - ".env"
+
+    ports:
+      - '127.0.0.1:${PORT:-8080}:80'
+
+    restart: always
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

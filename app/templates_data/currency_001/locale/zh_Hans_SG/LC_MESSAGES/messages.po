@@ -1,0 +1,344 @@
+
+msgid ""
+msgstr ""
+"Project-Id-Version: Telegram Exchange Rates Bot\n"
+"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
+"POT-Creation-Date: 2019-04-04 13:38+0700\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language: zh_sg\n"
+"Language-Team: zh_sg <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.6.0\n"
+
+#: app/tasks_notifications.py:61
+#, python-format
+msgid ""
+"Your notification has been disabled, due to one of the currencies "
+"%(from_currency)s %(to_currency)s has been deactivated."
+msgstr ""
+
+#: app/tasks_notifications.py:179
+msgid "_One-time reminder. Set up a new reminder._"
+msgstr ""
+
+#: app/callbacks/disclaimers.py:13
+msgid ""
+"Data is provided by financial exchanges and may be delayed as specified "
+"by financial exchanges or our data providers. Bot does not verify any "
+"data and disclaims any obligation to do so. Bot cannot guarantee the "
+"accuracy of the exchange rates displayed. You should confirm current "
+"rates before making any transactions that could be affected by changes in"
+" the exchange rates."
+msgstr "提供的数据可能有一定延时。我们并不校验数据，也免除相关的义务。我们不保证显示汇率的准确性。在您进行相关交易之前请先确认相关汇率。"
+
+#: app/callbacks/feedback.py:17 app/callbacks/personal_settings/main.py:38
+msgid "The command is not available for group chats"
+msgstr "该命令不适用于群聊"
+
+#: app/callbacks/feedback.py:22
+msgid "What do you want to tell? Or nothing?"
+msgstr "您想说什么？"
+
+#: app/callbacks/feedback.py:30
+msgid "Message sent, thank you."
+msgstr "消息已发送，谢谢！"
+
+#: app/callbacks/help.py:12
+msgid "*Commands*"
+msgstr "*命令*"
+
+#: app/callbacks/help.py:15
+msgid "/start - Start to enslave mankind"
+msgstr "/start - 订阅"
+
+#: app/callbacks/help.py:17
+msgid "/tutorial - Tutorial, how to talk with me"
+msgstr "/tutorial - 教程"
+
+#: app/callbacks/help.py:19
+msgid "/currencies - All currencies that I support"
+msgstr "/currencies - 支持的货币对列表"
+
+#: app/callbacks/help.py:21
+msgid "/feedback - If you have suggestions, text me"
+msgstr "/feedback - 反馈"
+
+#: app/callbacks/help.py:23
+msgid "/p - Command for group chats, get exchange rate"
+msgstr "/p - 群聊中获取汇率的命令"
+
+#: app/callbacks/help.py:25
+msgid "/sources - Currency rates sources"
+msgstr "/sources - 汇率数据源"
+
+#: app/callbacks/help.py:27
+msgid "/settings - Bot personal settings"
+msgstr ""
+
+#: app/callbacks/help.py:29
+msgid "/disclaimers - Disclaimers"
+msgstr "/disclaimers - 免责声明"
+
+#: app/callbacks/help.py:31
+msgid "/stop - Unsubscribe"
+msgstr "/stop - 退订"
+
+#: app/callbacks/help.py:34
+#, python-format
+msgid ""
+"Don't have your localization? Any translation errors? Help fix it 👉 "
+"[poeditor.com](%(trans_link)s)"
+msgstr "没有您的语言？翻译错误？帮助修正 👉 [poeditor.com](%(trans_link)s)"
+
+#: app/callbacks/price.py:60
+msgid "The message must contain currencies or amounts 👉 /tutorial"
+msgstr "消息应包含货币或者货币量 👉 /tutorial"
+
+#: app/callbacks/price.py:65
+msgid "I don't understand you 😞 Take a look here 👉 /help"
+msgstr "恕我无知 😞 点此看我能干什么 👉 /help"
+
+#: app/callbacks/price.py:70
+msgid ""
+"I understood that you asked, but at the moment I don't have actual "
+"exchange rates for your request. Try later. Sorry. 😭"
+msgstr "吾知汝所言，然未能查得君所求汇率。请君晚些再试，抱歉。😭"
+
+#: app/callbacks/start.py:21
+msgid "humans"
+msgstr "人"
+
+#: app/callbacks/start.py:24
+#, python-format
+msgid "Hello, %(name)s!"
+msgstr "您好，%(name)s！"
+
+#: app/callbacks/start.py:38
+msgid "Have any question how to talk with me? 👉 /tutorial"
+msgstr "如对使用有疑问，请点击 👉 /tutorial"
+
+#: app/callbacks/stop.py:23
+msgid "You're unsubscribed. You always can subscribe again 👉 /start"
+msgstr "您已退订。您可点 👉 /start 随时订阅"
+
+#: app/callbacks/tutorial.py:11
+msgid "I am bot. I will help you to know a current exchange rates."
+msgstr "我是一个机器人。我将帮助您了解货币的兑换汇率"
+
+#: app/callbacks/tutorial.py:13
+msgid ""
+"Send me a message like this:\n"
+"*BTC USD* - to see the current exchange rate for pair\n"
+"*100 USD EUR* - to convert the amount from 100 USD to EUR"
+msgstr ""
+"给我发一个消息：\n"
+"*BTC USD* - 查看货币对的汇率\n"
+"*100 USD EUR* - 计算100美元可以兑换多少欧元"
+
+#: app/callbacks/tutorial.py:17
+msgid "Just text me message in private chat."
+msgstr "发送一个私信给我"
+
+#: app/callbacks/tutorial.py:19
+msgid "In group chats use commands like this: 👉 /p USD EUR 👈 or simply /USDEUR"
+msgstr "在群聊中，使用诸如 👉 /p USD EUR 👈 或者 /USDEUR 的命令"
+
+#: app/callbacks/tutorial.py:21
+#, python-format
+msgid "Inline mode is available. See how to use [here](%(link)s)."
+msgstr "行内模式已启用。[点此](%(link)s)查看用法"
+
+#: app/callbacks/tutorial.py:24
+msgid "Also take a look here 👉 /help"
+msgstr "亦请参阅 👉 /help"
+
+#: app/callbacks/personal_settings/default_currency.py:18
+#, python-format
+msgid ""
+"*%(default_currency)s* is your default currency.\n"
+"You can set any currency by default, e.g. *EUR*. When you send only USD -"
+" will get *EUR USD*"
+msgstr ""
+
+#: app/callbacks/personal_settings/default_currency.py:53
+#, python-format
+msgid "*%(default_currency)s* is your default currency."
+msgstr ""
+
+#: app/callbacks/personal_settings/default_currency_position.py:22
+#: app/callbacks/personal_settings/default_currency_position.py:63
+#, python-format
+msgid "*%(position)s* - position where your default currency will be added."
+msgstr ""
+
+#: app/callbacks/personal_settings/language.py:24
+#: app/callbacks/personal_settings/language.py:54
+#, python-format
+msgid "*%(language)s* is your language now."
+msgstr ""
+
+#: app/callbacks/personal_settings/main.py:23
+msgid "Language"
+msgstr ""
+
+#: app/callbacks/personal_settings/main.py:24
+msgid "Default currency"
+msgstr ""
+
+#: app/callbacks/personal_settings/main.py:25
+msgid "Default currency position"
+msgstr ""
+
+#: app/callbacks/personal_settings/main.py:26
+msgid "On-screen menu below"
+msgstr ""
+
+#: app/callbacks/personal_settings/main.py:29
+msgid "What do you want to set up?"
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:17
+msgid "Here you can customize on-screen menu with a history requests."
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:22
+msgid "Visibility"
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:23
+msgid "Size"
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:24
+msgid "Delete from a history requests"
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:42
+msgid "On-screen menu below with a history requests *always shows* at the moment."
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:44
+msgid "On-screen menu below with a history requests *never shows* at the moment."
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:48
+msgid ""
+"You can choose. Show always on-screen menu below with a history requests "
+"or never show."
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:53
+msgid "Always show"
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:54
+msgid "Never show"
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:69
+msgid "On-screen menu below with a history requests will *always shows*."
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:71
+msgid "On-screen menu below with a history requests will *never shows*."
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:97
+msgid "Delete hidden"
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:97
+msgid "Delete all"
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:105
+msgid "You can *delete* a request from a history requests."
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:117
+msgid "Your history requests is empty for deletion."
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:149
+#, python-format
+msgid "*%(first)s %(second)s* was deleted."
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:191
+msgid "History of hidden requests has been cleared."
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:211
+msgid "History requests has been cleared fully."
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:231
+#, python-format
+msgid ""
+"%(keyboard_size)s - size of on-screen menu with a history requests at the"
+" moment.\n"
+"You can customize the size. *width x height*"
+msgstr ""
+
+#: app/callbacks/personal_settings/onscreen_menu.py:251
+#, python-format
+msgid ""
+"%(keyboard_size)s - size of on-screen menu with a history requests was "
+"changed."
+msgstr ""
+
+#~ msgid ""
+#~ "[ExchangeRatesBotNews](%(link)s) - subscribe to "
+#~ "channel, stay tuned news."
+#~ msgstr ""
+
+#~ msgid "/keyboard - Hide / show a keyboard with request history"
+#~ msgstr "/keyboard - 显示查询历史"
+
+#~ msgid "Keyboard is shown."
+#~ msgstr "键盘已显示"
+
+#~ msgid "Keyboard is hidden."
+#~ msgstr "键盘已隐藏"
+
+#~ msgid "Close settings"
+#~ msgstr ""
+
+#~ msgid "If you'd like to change send me new or /back"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "\n"
+#~ "_One-time reminder. Set up a new reminder._"
+#~ msgstr ""
+
+#~ msgid ""
+#~ "Your language has no translation. Help"
+#~ " fix it 👉 [poeditor.com](%(trans_link)s)"
+#~ msgstr ""
+
+#~ msgid "1: Visibility"
+#~ msgstr ""
+
+#~ msgid "2: Delete request from a history"
+#~ msgstr ""
+
+#~ msgid "1: Always show"
+#~ msgstr ""
+
+#~ msgid "2: Never show"
+#~ msgstr ""
+
+#~ msgid "Delete request from a history"
+#~ msgstr ""
+
+#~ msgid "Delete old"
+#~ msgstr ""
+
+#~ msgid "History of old requests has been cleared."
+#~ msgstr ""
+

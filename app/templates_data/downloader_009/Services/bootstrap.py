@@ -1,0 +1,321 @@
+import json
+import logging
+import os
+import platform
+import shutil
+import stat
+import sys
+import urllib.request
+from pathlib import Path
+
+from App.config import Settings
+from Services.commands import CommandError, run_process
+from Services.downloader import DownloadError
+
+ALLTECH_REPO_URL = "https://github.com/alltechdev/gplay-apk-downloader.git"
+APKEDITOR_RELEASE_API = "https://api.github.com/repos/REAndroid/APKEditor/releases/latest"
+APKSIGNER_RELEASE_API = "https://api.github.com/repos/patrickfav/uber-apk-signer/releases/latest"
+APKEEP_RELEASE_API = "https://api.github.com/repos/EFForg/apkeep/releases/latest"
+logger = logging.getLogger(__name__)
+
+
+async def ensure_tools(settings: Settings) -> None:
+    if not settings.auto_install_tools:
+        logger.info("Auto tool install disabled")
+        return
+
+    backend = settings.play_downloader_backend.strip().lower()
+    logger.info("Checking downloader tools for backend=%s", backend)
+    if backend in {"auto", "alltech-gplay"}:
+        await _ensure_alltech(settings)
+        await _ensure_apkeep(settings)
+    elif backend == "gplaydl":
+        await _ensure_gplaydl()
+    elif backend == "apkeep":
+        await _ensure_apkeep(settings)
+
+    if _needs_apkeditor(settings):
+        await _ensure_apkeditor(settings.apkeditor_jar)
+    if settings.auto_sign_apk and not settings.sign_apk_cmd:
+        await _ensure_apksigner(settings.apksigner_jar)
+    logger.info("Tool check finished")
+
+
+async def _ensure_alltech(settings: Settings) -> None:
+    gplay_path = settings.alltech_gplay_path
+    if gplay_path.exists():
+        await _ensure_alltech_venv(gplay_path.parent)
+        await _ensure_alltech_auth(settings)
+        logger.info("alltech-gplay found: %s", gplay_path)
+        return
+
+    repo_dir = gplay_path.parent
+    repo_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    if repo_dir.exists() and any(repo_dir.iterdir()):
+        raise DownloadError(f"ALLTECH_GPLAY_PATH parent exists but gplay missing: {repo_dir}")
+
+    if not shutil.which("git"):
+        raise DownloadError("git پیدا نشد. برای نصب خودکار alltech-gplay باید git نصب باشد.")
+
+    logger.info("Cloning alltech-gplay into %s", repo_dir)
+    await run_process(["git", "clone", "--depth", "1", ALLTECH_REPO_URL, str(repo_dir)])
+
+    requirements = repo_dir / "requirements.txt"
+    await _ensure_alltech_venv(repo_dir)
+
+    if not gplay_path.exists():
+        raise DownloadError(f"بعد از clone، فایل gplay پیدا نشد: {gplay_path}")
+
+    if os.name != "nt":
+        mode = gplay_path.stat().st_mode
+        gplay_path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    await _ensure_alltech_auth(settings)
+    logger.info("alltech-gplay ready: %s", gplay_path)
+
+
+async def _ensure_alltech_auth(settings: Settings) -> None:
+    if not settings.alltech_auto_auth:
+        return
+
+    auth_file = settings.alltech_auth_file.expanduser()
+    if auth_file.exists():
+        logger.info("alltech-gplay auth found: %s", auth_file)
+        return
+
+    gplay_path = settings.alltech_gplay_path
+    logger.info("alltech-gplay auth missing; running gplay auth")
+    if gplay_path.suffix.lower() == ".py":
+        await run_process([sys.executable, str(gplay_path), "auth"])
+    else:
+        await run_process([str(gplay_path), "auth"])
+
+    if not auth_file.exists():
+        raise DownloadError(
+            f"فایل auth ساخته نشد: {auth_file}. دستور را دستی اجرا کن: {gplay_path} auth"
+        )
+
+
+async def _ensure_alltech_venv(repo_dir: Path) -> None:
+    venv_python = repo_dir / ".venv" / "bin" / "python"
+    venv_activate = repo_dir / ".venv" / "bin" / "activate"
+    if os.name == "nt":
+        venv_python = repo_dir / ".venv" / "Scripts" / "python.exe"
+        venv_activate = repo_dir / ".venv" / "Scripts" / "activate"
+
+    requirements = repo_dir / "requirements.txt"
+    if venv_python.exists() and venv_activate.exists():
+        return
+
+    logger.info("Creating alltech-gplay venv in %s", repo_dir / ".venv")
+    await run_process([sys.executable, "-m", "venv", str(repo_dir / ".venv")])
+
+    if requirements.exists():
+        logger.info("Installing alltech-gplay requirements into its venv")
+        await _install_python_packages(["-r", str(requirements)], python_path=venv_python)
+
+
+async def _ensure_gplaydl() -> None:
+    if shutil.which("gplaydl"):
+        logger.info("gplaydl found")
+        return
+    logger.info("Installing gplaydl")
+    await _install_python_packages(["gplaydl>=2.1,<3"])
+
+
+async def _ensure_apkeep(settings) -> None:
+    binary_path = settings.apkeep_path
+    if binary_path.exists():
+        logger.info("apkeep found: %s", binary_path)
+        return
+    if shutil.which("apkeep"):
+        logger.info("apkeep found on PATH")
+        return
+
+    asset_name = _apkeep_asset_name()
+    if asset_name is None:
+        logger.warning(
+            "apkeep auto-install unsupported on platform=%s machine=%s; install manually if you need fallback",
+            platform.system(),
+            platform.machine(),
+        )
+        return
+
+    binary_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("Resolving apkeep release asset %s", asset_name)
+    try:
+        url = await _find_apkeep_asset_url(asset_name)
+    except Exception as exc:
+        logger.warning("apkeep release lookup failed: %s", exc)
+        return
+
+    logger.info("Downloading apkeep binary from %s", url)
+    try:
+        await _download_file(url, binary_path)
+    except Exception as exc:
+        logger.warning("apkeep binary download failed: %s", exc)
+        return
+
+    if os.name != "nt":
+        mode = binary_path.stat().st_mode
+        binary_path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    logger.info("apkeep ready: %s", binary_path)
+
+
+def _apkeep_asset_name() -> str | None:
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    if system == "linux":
+        if machine in {"x86_64", "amd64"}:
+            return "apkeep-x86_64-unknown-linux-gnu"
+        if machine in {"aarch64", "arm64"}:
+            return "apkeep-aarch64-unknown-linux-gnu"
+        return None
+    if system == "darwin":
+        if machine in {"arm64", "aarch64"}:
+            return "apkeep-aarch64-apple-darwin"
+        if machine in {"x86_64", "amd64"}:
+            return "apkeep-x86_64-apple-darwin"
+        return None
+    if system == "windows":
+        if machine in {"x86_64", "amd64"}:
+            return "apkeep-x86_64-pc-windows-msvc.exe"
+        return None
+    return None
+
+
+async def _find_apkeep_asset_url(asset_name: str) -> str:
+    def fetch() -> str:
+        request = urllib.request.Request(
+            APKEEP_RELEASE_API,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "PlayDL"},
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        for asset in payload.get("assets", []):
+            if asset.get("name") == asset_name and asset.get("browser_download_url"):
+                return asset["browser_download_url"]
+        raise DownloadError(f"apkeep asset {asset_name} در release پیدا نشد.")
+
+    import asyncio
+
+    return await asyncio.to_thread(fetch)
+
+
+async def _install_python_packages(args: list[str], python_path: Path | None = None) -> None:
+    python = str(python_path or sys.executable)
+    pip_command = [python, "-m", "pip", "install", *args]
+    try:
+        await run_process(pip_command)
+        return
+    except CommandError as exc:
+        if "No module named pip" not in str(exc):
+            raise
+
+    if not shutil.which("uv"):
+        raise DownloadError("pip داخل venv وجود ندارد و uv هم پیدا نشد.")
+
+    logger.info("pip missing; falling back to uv pip")
+    uv_args = ["uv", "pip", "install", *args]
+    if python_path:
+        uv_args.extend(["--python", str(python_path)])
+    await run_process(uv_args)
+
+
+async def _ensure_apkeditor(jar_path: Path) -> None:
+    if jar_path.exists():
+        logger.info("APKEditor found: %s", jar_path)
+        return
+    jar_path.parent.mkdir(parents=True, exist_ok=True)
+
+    logger.info("Finding latest APKEditor release")
+    asset_url = await _latest_apkeditor_asset_url()
+    logger.info("Downloading APKEditor jar to %s", jar_path)
+    await _download_file(asset_url, jar_path)
+
+    if not jar_path.exists():
+        raise DownloadError(f"APKEditor دانلود شد اما فایل پیدا نشد: {jar_path}")
+    logger.info("APKEditor ready: %s", jar_path)
+
+
+async def _ensure_apksigner(jar_path: Path) -> None:
+    if jar_path.exists():
+        logger.info("uber-apk-signer found: %s", jar_path)
+        return
+    jar_path.parent.mkdir(parents=True, exist_ok=True)
+
+    logger.info("Finding latest uber-apk-signer release")
+    asset_url = await _latest_github_jar_asset(APKSIGNER_RELEASE_API)
+    logger.info("Downloading uber-apk-signer jar to %s", jar_path)
+    await _download_file(asset_url, jar_path)
+
+    if not jar_path.exists():
+        raise DownloadError(f"uber-apk-signer دانلود شد اما فایل پیدا نشد: {jar_path}")
+    logger.info("uber-apk-signer ready: %s", jar_path)
+
+
+async def _latest_github_jar_asset(api_url: str) -> str:
+    def fetch() -> str:
+        request = urllib.request.Request(
+            api_url,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "PlayDL"},
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        for asset in payload.get("assets", []):
+            name = asset.get("name", "")
+            url = asset.get("browser_download_url")
+            if name.endswith(".jar") and url:
+                return url
+        raise DownloadError("jar asset در latest release پیدا نشد.")
+
+    import asyncio
+
+    return await asyncio.to_thread(fetch)
+
+
+async def _latest_apkeditor_asset_url() -> str:
+    def fetch() -> str:
+        request = urllib.request.Request(
+            APKEDITOR_RELEASE_API,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "PlayDL"},
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        for asset in payload.get("assets", []):
+            name = asset.get("name", "")
+            url = asset.get("browser_download_url")
+            if name.endswith(".jar") and url:
+                return url
+        raise DownloadError("APKEditor jar در latest release پیدا نشد.")
+
+    import asyncio
+
+    return await asyncio.to_thread(fetch)
+
+
+async def _download_file(url: str, destination: Path) -> None:
+    def download() -> None:
+        with urllib.request.urlopen(url, timeout=180) as response:
+            destination.write_bytes(response.read())
+
+    import asyncio
+
+    try:
+        await asyncio.to_thread(download)
+    except OSError as exc:
+        raise CommandError(str(exc)) from exc
+
+
+def _needs_apkeditor(settings: Settings) -> bool:
+    if settings.apks_to_apk_cmd:
+        return False
+    return settings.play_downloader_backend.strip().lower() in {
+        "auto",
+        "alltech-gplay",
+        "gplaydl",
+        "apkeep",
+        "custom",
+    }

@@ -1,0 +1,232 @@
+# companies.yaml
+# ─────────────────────────────────────────────────────────────────────
+# HOW TO FIND THE CORRECT SLUG FOR A COMPANY:
+#   1. Go to the company's Careers page
+#   2. Click on any open job posting
+#   3. Look at the URL of the job or application page:
+#      - job-boards.greenhouse.io/...     → add slug to 'greenhouse' list (US)
+#      - job-boards.eu.greenhouse.io/...  → add slug to 'greenhouse_eu' list (EU)
+#      - jobs.lever.co/...               → add slug to 'lever' list
+#      - jobs.ashbyhq.com/...            → add slug to 'ashby' list
+#      - apply.workable.com/...          → add slug to 'workable' list
+#
+# VERIFIED slugs (tested against live API, return 200 + jobs):
+#   Razorpay → Greenhouse US: boards.greenhouse.io/v1/boards/razorpaysoftwareprivatelimited/jobs?content=true
+#   Groww    → Greenhouse EU: boards.eu.greenhouse.io/v1/boards/groww/jobs?content=true
+#   Meesho   → Lever:         api.lever.co/v0/postings/meesho
+#   Hevo Data→ Lever:         api.lever.co/v0/postings/hevodata
+#   Stable $ → Lever:         api.lever.co/v0/postings/stable-money1
+# ─────────────────────────────────────────────────────────────────────
+
+# Greenhouse US — endpoint: boards.greenhouse.io/v1/boards/{SLUG}/jobs?content=true
+greenhouse:
+  - razorpaysoftwareprivatelimited  # ✅ verified — 57 jobs
+  - phonepe
+  - twitch
+  - airbnb
+  - postman
+  # - spacex
+  - faire
+  - duolingo
+  - scaleai
+  # - doordashmexico
+  - appian
+  - blenheimchalcot
+  - nasuni
+  - crunchyroll
+  - slice
+  - highradius
+  - pine
+  - karbon
+  - loop
+  - glance
+  - inmobi
+  - druva
+  - zenoti
+  - route
+  - hackerrank
+  - zscaler
+  - cloudflare
+  - stripe
+  - twilio
+  - mongodb
+  - elastic
+  - databricks
+  - grafanalabs
+  - datadog
+  - newrelic
+  - sumologic
+  - pagerduty
+  - cribl
+  - jfrog
+  - orcasecurity
+  - gitlab
+  - circleci
+  - buildkite
+  - airtable
+  - figma
+  - coursera
+  - udemy
+  - canonical
+  - remotecom
+  - turing
+  - upwork
+  - planetscale
+  - newton
+  - stage
+  - stripe
+
+# Greenhouse EU — endpoint: boards.eu.greenhouse.io/v1/boards/{SLUG}/jobs?content=true
+# Companies that use the European Greenhouse instance
+greenhouse_eu:
+  - groww                           # ✅ verified — Groww uses EU Greenhouse (NOT US!)
+
+# Lever — endpoint: api.lever.co/v0/postings/{SLUG}
+lever:
+  - meesho                          # ✅ verified — 53 jobs
+  - hevodata                        # ✅ verified — Hevo Data
+  - stable-money1                   # ✅ verified — Stable Money
+  - linkedin
+  # - palantir
+  - paytm
+  - spotify
+  - binance
+  - nium
+  - 100ms
+  - GoToGroup
+  - cred
+  - fi
+  - capital
+  - porter
+  - mindtickle
+  - belong
+  - whereby
+  - toptal
+
+
+# Ashby — endpoint: api.ashbyhq.com/posting-api/job-board/{SLUG}
+ashby:
+  - navi
+  - ditto
+  - bounce
+  - clarisights
+  - confluent
+  - linear
+  - notion
+  - zapier
+  - buffer
+  - deel
+  - oyster
+  - andela
+  - supabase
+  - railway
+  - render
+  - infisical
+  - triggerdev
+  - mintlify
+  - resend
+  - stytch
+  - workos
+  - scaler
+
+# Workable — endpoint: apply.workable.com/api/v3/accounts/{SLUG}/jobs
+workable:
+  - juspay             # returned 0 jobs (may have no open roles right now)
+  # sarvam-ai returned 404 — verify correct slug at apply.workable.com/{SLUG}
+  - gridlines
+  - apna
+
+
+# ─────────────────────────────────────────────────────────────────────
+# NEW ATS PLATFORMS (from companies_found.yaml)
+# ─────────────────────────────────────────────────────────────────────
+
+# SmartRecruiters — list: api.smartrecruiters.com/v1/companies/{SLUG}/postings
+#                   detail: api.smartrecruiters.com/v1/companies/{SLUG}/postings/{JOB_ID}
+#                   page: careers.smartrecruiters.com/{SLUG}
+#   NOTE: SmartRecruiters slugs are case-sensitive (use the exact company identifier)
+smartrecruiters:
+  - Upstox             # Upstox
+  - Lendingkart        # Lendingkart
+  - Turtlemint         # Turtlemint
+  - Lokal              # Lokal
+  - Cars24             # Cars24
+  - ixigo              # ixigo
+  - Freshworks         # Freshworks
+  - Whatfix            # Whatfix
+  - MercerMettl        # Mercer Mettl
+  - InterviewMocha     # Interview Mocha
+  - Skillate           # Skillate
+  - ServiceNow         # ServiceNow India
+  - Canva              # Canva India
+  - Unacademy          # Unacademy
+  - Dailymotion        # Dailymotion India
+
+# Rippling ATS — list:   ats.rippling.com/api/v2/board/{SLUG}/jobs?pageSize=100
+#                detail: ats.rippling.com/api/v2/board/{SLUG}/jobs/{JOB_UUID}
+#                page:   ats.rippling.com/{SLUG}/jobs
+rippling:
+  - axio               # Axio
+  - multiplier         # Multiplier
+  - dub                # Dub
+
+# BambooHR — list:   {SLUG}.bamboohr.com/careers/list  (JSON)
+#             detail: {SLUG}.bamboohr.com/careers/{JOB_ID}  (HTML, no public JSON detail)
+#             page:   {SLUG}.bamboohr.com/careers
+bamboohr:
+  - urban              # Urban Company
+  - shadowfax          # Shadowfax
+  - flyio              # Fly.io
+
+# Recruitee — list: {SLUG}.recruitee.com/api/offers/  (JSON, description inside)
+#             page: {SLUG}.recruitee.com/
+recruitee:
+  - salesforce         # Salesforce India
+
+# Personio — list: {SLUG}.jobs.personio.de/xml?language=en  (XML feed, no auth needed)
+#            page: {SLUG}.jobs.personio.de/
+personio:
+  - open               # Open Financial Technologies
+  - josh               # Josh
+  - amazon             # Amazon India
+  - basecamp           # Basecamp
+
+# Workday — list: POST {tenant}.{wd_server}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs
+#           detail: GET  {tenant}.{wd_server}.myworkdayjobs.com/wday/cxs/{tenant}/{site}{externalPath}
+#   NOTE: Each company needs tenant + wd_server + site (discovered via discover_workday.py, not guessable)
+#   NOTE: Entries are dicts, not plain slugs — Workday requires 3 parameters per company
+workday:
+  - name: Proofpoint
+    tenant: proofpoint
+    wd_server: wd5
+    site: proofpointcareers
+
+  - name: Adobe
+    tenant: adobe
+    wd_server: wd5
+    site: external_experienced
+
+  - name: Samsung
+    tenant: sec
+    wd_server: wd3
+    site: Samsung_Careers
+
+  - name: BrowserStack
+    tenant: browserstack
+    wd_server: wd3
+    site: External
+
+  - name: Sprinklr
+    tenant: sprinklr
+    wd_server: wd1
+    site: Careers
+
+  - name: Cisco
+    tenant: cisco
+    wd_server: wd5
+    site: cisco_careers
+
+  - name: Workday
+    tenant: workday
+    wd_server: wd5
+    site: workday

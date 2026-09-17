@@ -1,0 +1,21 @@
+repos:
+    - repo: https://github.com/astral-sh/uv-pre-commit
+      rev: 0.10.2
+      hooks:
+          - id: uv-export
+            args: ["--no-hashes", "--output-file=requirements.txt"]
+
+    - repo: https://github.com/astral-sh/ruff-pre-commit
+      rev: v0.15.0
+      hooks:
+          - id: ruff-check
+            args: [--fix]
+          - id: ruff-format
+
+#    - repo: local
+#      hooks:
+#          - id: auto-generate-config
+#            name: Auto-generate config
+#            entry: uv python ./core/scripts/config_generate.py
+#            language: python
+#            pass_filenames: false

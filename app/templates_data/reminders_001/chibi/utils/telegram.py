@@ -1,0 +1,947 @@
+import re
+import sys
+from collections import deque
+from io import BytesIO
+from typing import Any, Callable, Coroutine, Literal, ParamSpec, Type, TypeVar, cast
+from urllib.parse import parse_qs, urlparse
+
+import click
+import httpx
+import telegramify_markdown
+from loguru import logger
+from telegram import (
+    Chat as TelegramChat,
+)
+from telegram import (
+    InputMediaDocument,
+    InputMediaPhoto,
+    Update,
+    constants,
+)
+from telegram import (
+    Message as TelegramMessage,
+)
+from telegram import (
+    User as TelegramUser,
+)
+from telegram.constants import FileSizeLimit
+from telegram.error import BadRequest
+from telegram.ext import ContextTypes
+
+from chibi.config import gpt_settings, telegram_settings
+from chibi.constants import (
+    FILE_UPLOAD_TIMEOUT,
+    GROUP_CHAT_TYPES,
+    IMAGE_UPLOAD_TIMEOUT,
+    MARKDOWN_TOKENS,
+    PERSONAL_CHAT_TYPES,
+    UserAction,
+    UserContext,
+)
+from chibi.utils.rich_message import RichMessageBuilder
+
+R = TypeVar("R")
+P = ParamSpec("P")
+
+TABLE_ROW_PATTERN = re.compile(r"^\|.*\|$")
+TABLE_SEP_PATTERN = re.compile(r"^\|[\s\-:]+(\|[\s\-:]+)*\|?$")
+
+
+def get_telegram_user(update: Update) -> TelegramUser:
+    """Retrieve the Telegram user from the update.
+
+    Args:
+        update: The incoming Telegram update.
+
+    Returns:
+        The Telegram user associated with the update.
+
+    Raises:
+        ValueError: If the update does not contain valid user data.
+    """
+    if user := update.effective_user:
+        return user
+    raise ValueError(f"Telegram incoming update does not contain valid user data. Update ID: {update.update_id}")
+
+
+def get_telegram_chat(update: Update) -> TelegramChat:
+    """Retrieve the Telegram chat from the update.
+
+    Args:
+        update: The incoming Telegram update.
+
+    Returns:
+        The Telegram chat associated with the update.
+
+    Raises:
+        ValueError: If the update does not contain valid chat data.
+    """
+    if chat := update.effective_chat:
+        return chat
+    raise ValueError(f"Telegram incoming update does not contain valid chat data. Update ID: {update.update_id}")
+
+
+def user_data(update: Update) -> str:
+    """Get a string representation of the user for logging.
+
+    Args:
+        update: The incoming Telegram update.
+
+    Returns:
+        A string containing the user's name and ID.
+    """
+    user = get_telegram_user(update=update)
+    return f"{user.name} ({user.id})"
+
+
+def chat_data(update: Update) -> str:
+    """Get a string representation of the chat for logging.
+
+    Args:
+        update: The incoming Telegram update.
+
+    Returns:
+        A string containing the chat type and ID.
+    """
+    chat = get_telegram_chat(update=update)
+    return f"{chat.type.upper()} chat ({chat.id})"
+
+
+def get_telegram_message(update: Update) -> TelegramMessage:
+    """Retrieve the Telegram message from the update.
+
+    Args:
+        update: The incoming Telegram update.
+
+    Returns:
+        The Telegram message associated with the update.
+
+    Raises:
+        ValueError: If the update does not contain valid message data.
+    """
+    if message := update.effective_message:
+        return message
+    raise ValueError(f"Telegram incoming update does not contain valid message data. Update ID: {update.update_id}")
+
+
+def _get_next_token(text: str, pos: int, escaped: bool) -> tuple[str | None, int]:
+    """Find the next Markdown token at the given position.
+
+    Args:
+        text: The string to search within.
+        pos: The starting position in the text.
+        escaped: Whether the character at pos is escaped.
+
+    Returns:
+        A tuple with the found token and its length.
+    """
+    if escaped:
+        return None, 0
+    for token in MARKDOWN_TOKENS:
+        if text.startswith(token, pos):
+            return token, len(token)
+    return None, 0
+
+
+def split_markdown_v2(
+    text: str,
+    limit: int = constants.MessageLimit.MAX_TEXT_LENGTH,
+    recommended_margin: int = 400,
+    safety_margin: int = 50,
+) -> list[str]:
+    """Split a Markdown text into chunks.
+
+    Args:
+        text: The Markdown string to split.
+        limit: The maximum desired length for each chunk.
+        recommended_margin: The preferred distance from the limit at which to split.
+        safety_margin: The absolute minimum distance from the limit at which a split must occur.
+
+    Returns:
+        A list of string chunks.
+    """
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    buffer: list[str] = []
+    stack: deque[str] = deque()
+
+    i = 0
+    escaped: bool = False
+
+    while i < len(text):
+        token, shift = _get_next_token(text=text, pos=i, escaped=escaped)
+        escaped = text[i] == "\\"
+        if token:
+            buffer.append(token)
+            if stack and stack[-1] == token:
+                stack.pop()
+            else:
+                stack.append(token)
+            i += shift
+        else:
+            buffer.append(text[i])
+            i += 1
+
+        if len("".join(buffer)) >= limit - recommended_margin:
+            if text[i] == "\n":
+                closing_sequence = "\n".join(reversed(stack))
+                chunks.append("".join(buffer) + closing_sequence)
+                buffer = list(stack)
+
+        elif len("".join(buffer)) >= limit - safety_margin:
+            closing_sequence = "\n".join(reversed(stack))
+            chunks.append("".join(buffer) + closing_sequence)
+            buffer = list(stack)
+
+    if buffer:
+        chunks.append("".join(buffer))
+    return chunks
+
+
+async def send_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    reply: bool = True,
+    thread_id: int | None = None,
+    **kwargs: Any,
+) -> TelegramMessage:
+    """Send a message via Telegram.
+
+    Args:
+        update: The incoming Telegram update.
+        context: The update context.
+        reply: Whether to reply to the message.
+        thread_id: The message thread ID.
+        **kwargs: Additional arguments for send_message.
+
+    Returns:
+        The sent Telegram message.
+    """
+    telegram_chat = get_telegram_chat(update=update)
+    telegram_message = get_telegram_message(update=update)
+
+    target_thread_id = thread_id if thread_id is not None else telegram_message.message_thread_id
+
+    if reply:
+        return await context.bot.send_message(
+            chat_id=telegram_chat.id,
+            reply_to_message_id=telegram_message.message_id,
+            message_thread_id=target_thread_id,
+            **kwargs,
+        )
+    return await context.bot.send_message(chat_id=telegram_chat.id, message_thread_id=target_thread_id, **kwargs)
+
+
+def detect_markdown_table(text: str) -> list[list[str]] | None:
+    """Detect the first Markdown table in the text.
+
+    Args:
+        text: The message text to scan.
+
+    Returns:
+        A list of rows (each row a list of cell strings) for the first table
+        found, or None if the text contains no Markdown table.
+    """
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        if not TABLE_ROW_PATTERN.match(lines[i].strip()):
+            i += 1
+            continue
+        block: list[str] = []
+        while i < len(lines) and TABLE_ROW_PATTERN.match(lines[i].strip()):
+            block.append(lines[i])
+            i += 1
+        if _is_valid_table_block(block):
+            return _parse_table_block(block)
+    return None
+
+
+def _parse_table_block(block: list[str]) -> list[list[str]]:
+    """Parse a contiguous block of pipe-delimited lines into table rows.
+
+    Args:
+        block: Consecutive lines that match the table row pattern.
+
+    Returns:
+        Parsed rows with whitespace-stripped cells; separator rows are skipped.
+    """
+    rows: list[list[str]] = []
+    for line in block:
+        stripped = line.strip()
+        if TABLE_SEP_PATTERN.match(stripped):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        rows.append(cells)
+    return rows
+
+
+def _is_valid_table_block(block: list[str]) -> bool:
+    """Return True if a pipe-delimited block qualifies as a Markdown table.
+
+    Args:
+        block: Consecutive lines that match the table row pattern.
+
+    Returns:
+        True when the block has at least two lines and yields at least one row.
+    """
+    return len(block) >= 2 and bool(_parse_table_block(block))
+
+
+def _split_table_parts(text: str) -> list[tuple[str | None, list[list[str]] | None]]:
+    """Split a message into alternating text and Markdown table parts.
+
+    Args:
+        text: The message text to split.
+
+    Returns:
+        A list of parts, each a ``(text, table)`` tuple where exactly one of the
+        fields is non-None. Tables preserve their original order relative to the
+        surrounding text.
+    """
+    parts: list[tuple[str | None, list[list[str]] | None]] = []
+    lines = text.splitlines()
+    text_buffer: list[str] = []
+    i = 0
+    while i < len(lines):
+        if not TABLE_ROW_PATTERN.match(lines[i].strip()):
+            text_buffer.append(lines[i])
+            i += 1
+            continue
+        block: list[str] = []
+        while i < len(lines) and TABLE_ROW_PATTERN.match(lines[i].strip()):
+            block.append(lines[i])
+            i += 1
+        if _is_valid_table_block(block):
+            if text_buffer:
+                parts.append(("\n".join(text_buffer), None))
+                text_buffer = []
+            parts.append((None, _parse_table_block(block)))
+        else:
+            text_buffer.extend(block)
+    if text_buffer:
+        parts.append(("\n".join(text_buffer), None))
+    return parts
+
+
+def _render_ascii_table(table_rows: list[list[str]]) -> str:
+    """Render table rows as a plain-text ASCII table.
+
+    Args:
+        table_rows: Parsed table rows.
+
+    Returns:
+        A monospace-friendly ASCII representation of the table.
+    """
+    if not table_rows:
+        return ""
+    col_count = max(len(row) for row in table_rows)
+    padded_rows = [list(row) + [""] * (col_count - len(row)) for row in table_rows]
+    widths = [max(len(cell) for cell in col) for col in zip(*padded_rows)]
+    lines: list[str] = []
+    for row_idx, row in enumerate(padded_rows):
+        cells = " | ".join(cell.ljust(widths[col_idx]) for col_idx, cell in enumerate(row))
+        lines.append(f"| {cells} |")
+        if row_idx == 0 and len(padded_rows) > 1 and all(cell for cell in row):
+            lines.append("|" + "|".join("-" * (width + 2) for width in widths) + "|")
+    return "\n".join(lines)
+
+
+async def render_table_rich(
+    table_rows: list[list[str]],
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    thread_id: int | None,
+    reply_to_message_id: int | None = None,
+) -> None:
+    """Send a table as a Telegram Rich Message, falling back to ASCII text.
+
+    Args:
+        table_rows: Parsed table rows.
+        context: The update context.
+        chat_id: The target chat ID.
+        thread_id: The message thread ID, or None.
+        reply_to_message_id: ID of the message to reply to, or None.
+    """
+    headers: list[str] | None = None
+    data = table_rows
+    if table_rows and all(cell for cell in table_rows[0]):
+        headers = table_rows[0]
+        data = table_rows[1:]
+
+    payload = RichMessageBuilder.build_table_message(
+        table_data=data,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        headers=headers,
+    )
+    if reply_to_message_id is not None:
+        payload["reply_parameters"] = {"message_id": reply_to_message_id}
+    try:
+        await context.bot.do_api_request("sendRichMessage", api_kwargs=payload)
+    except Exception as e:
+        logger.warning(f"sendRichMessage failed: {e}, falling back to ASCII table")
+        kwargs: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": _render_ascii_table(table_rows),
+            "message_thread_id": thread_id,
+        }
+        if reply_to_message_id is not None:
+            kwargs["reply_to_message_id"] = reply_to_message_id
+        await context.bot.send_message(**kwargs)
+
+
+async def send_long_message(
+    message: str,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    parse_mode: str | None = None,
+    normalize_md: bool = True,
+    reply: bool = True,
+    thread_id: int | None = None,
+) -> None:
+    """Send a long message, splitting it if necessary.
+
+    Markdown tables are rendered as Rich Messages; the surrounding text goes
+    through the regular MarkdownV2 or plain-text pipeline.
+
+    Args:
+        message: The message text.
+        update: The incoming Telegram update.
+        context: The update context.
+        parse_mode: The parse mode for the message.
+        normalize_md: Whether to normalize Markdown.
+        reply: Whether to reply to the message.
+        thread_id: The message thread ID.
+    """
+    telegram_chat = get_telegram_chat(update=update)
+    telegram_message = get_telegram_message(update=update)
+    target_thread_id = thread_id if thread_id is not None else telegram_message.message_thread_id
+    parts = _split_table_parts(message)
+
+    if not any(table is not None for _, table in parts):
+        if normalize_md:
+            message = telegramify_markdown.markdownify(message)
+            chunks = split_markdown_v2(message)
+        else:
+            chunks = [
+                message[i : i + constants.MessageLimit.MAX_TEXT_LENGTH]
+                for i in range(0, len(message), constants.MessageLimit.MAX_TEXT_LENGTH)
+            ]
+
+        for chunk_number, chunk in enumerate(chunks):
+            await send_message(
+                update=update,
+                context=context,
+                text=chunk,
+                parse_mode=parse_mode,
+                reply=chunk_number == 0 if reply else False,
+                thread_id=target_thread_id,
+            )
+        return
+
+    reply_sent = False
+    reply_msg_id = telegram_message.message_id
+    for text_part, table in parts:
+        if table is not None:
+            await render_table_rich(
+                table_rows=table,
+                context=context,
+                chat_id=telegram_chat.id,
+                thread_id=target_thread_id,
+                reply_to_message_id=reply_msg_id if not reply_sent and reply else None,
+            )
+            reply_sent = True
+            continue
+        if not text_part or not text_part.strip():
+            continue
+        if normalize_md:
+            text_part = telegramify_markdown.markdownify(text_part)
+            chunks = split_markdown_v2(text_part)
+        else:
+            chunks = [
+                text_part[i : i + constants.MessageLimit.MAX_TEXT_LENGTH]
+                for i in range(0, len(text_part), constants.MessageLimit.MAX_TEXT_LENGTH)
+            ]
+        for chunk_number, chunk in enumerate(chunks):
+            await send_message(
+                update=update,
+                context=context,
+                text=chunk,
+                parse_mode=parse_mode,
+                reply=reply and not reply_sent and chunk_number == 0,
+                thread_id=target_thread_id,
+            )
+            reply_sent = True
+
+
+async def send_audio(
+    audio: bytes,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Send audio to the user.
+
+    Args:
+        audio: The audio data.
+        update: The incoming Telegram update.
+        context: The update context.
+    """
+    telegram_chat = get_telegram_chat(update=update)
+    telegram_message = get_telegram_message(update=update)
+    await context.bot.send_chat_action(chat_id=telegram_chat.id, action=constants.ChatAction.RECORD_VOICE)
+
+    await context.bot.send_audio(
+        chat_id=telegram_chat.id, audio=audio, title="voice", reply_to_message_id=telegram_message.message_id
+    )
+
+
+async def download_image(image_url: str) -> bytes:
+    """Download an image from a URL.
+
+    Args:
+        image_url: The URL of the image.
+
+    Returns:
+        The image data as bytes.
+    """
+    parsed_url = urlparse(image_url)
+    params = parse_qs(parsed_url.query)
+    image_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
+    response = await httpx.AsyncClient().get(url=image_url, params=params)
+    response.raise_for_status()
+    return response.content
+
+
+async def send_images(
+    images: list[str] | list[BytesIO],
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Send a list of images to the user.
+
+    Args:
+        images: A list of image URLs or BytesIO objects.
+        update: The incoming Telegram update.
+        context: The update context.
+    """
+    telegram_chat = get_telegram_chat(update=update)
+    telegram_message = get_telegram_message(update=update)
+    await context.bot.send_chat_action(chat_id=telegram_chat.id, action=constants.ChatAction.UPLOAD_PHOTO)
+
+    if isinstance(images[0], str):
+        logger.info(f"Downloading {len(images)} images for {user_data(update)} via URLs...")
+        image_files = [await download_image(image_url=cast(str, url)) for url in images]
+        try:
+            logger.info(f"Uploading {len(images)} images to {user_data(update)} in the {chat_data(update)}")
+            await context.bot.send_media_group(
+                chat_id=telegram_chat.id,
+                media=[InputMediaPhoto(url) for url in image_files],
+                reply_to_message_id=telegram_message.message_id,
+                message_thread_id=telegram_message.message_thread_id,
+                read_timeout=IMAGE_UPLOAD_TIMEOUT,
+                write_timeout=IMAGE_UPLOAD_TIMEOUT,
+            )
+        except Exception as e:
+            logger.error(
+                f"{user_data(update)} image generation request succeeded, but we couldn't send the image "
+                f"due to exception: {e}. Trying to send it via text message..."
+            )
+            image_urls = cast(list[str], images)
+            await send_message(
+                update=update,
+                context=context,
+                text="\n".join(image_urls),
+                disable_web_page_preview=False,
+                message_thread_id=telegram_message.message_thread_id,
+            )
+        return None
+
+    logger.info(f"Uploading {len(images)} image(s) to {user_data(update)} in the {chat_data(update)}")
+    media_photos: list[BytesIO] = []
+    media_docs: list[BytesIO] = []
+
+    for file in images:
+        if not isinstance(file, BytesIO):
+            continue
+
+        file.seek(0, 2)
+        size = file.tell()
+        file.seek(0)
+        if size < FileSizeLimit.PHOTOSIZE_UPLOAD:
+            media_photos.append(file)
+        elif size < FileSizeLimit.FILESIZE_UPLOAD:
+            media_docs.append(file)
+        else:
+            logger.error(f"{user_data(update)} File size ({size}) exceeds file size limit, skipping it..")
+            continue
+
+    if media_photos:
+        await context.bot.send_media_group(
+            chat_id=telegram_chat.id,
+            media=[InputMediaPhoto(img) for img in media_photos],
+            reply_to_message_id=telegram_message.message_id,
+            message_thread_id=telegram_message.message_thread_id,
+            write_timeout=IMAGE_UPLOAD_TIMEOUT,
+        )
+
+    if media_docs:
+        logger.info(f"Uploading {len(images)} image(s) as file(s) to {user_data(update)} in the {chat_data(update)}")
+
+        await context.bot.send_media_group(
+            chat_id=telegram_chat.id,
+            media=[InputMediaDocument(media=img, filename="file.jpeg") for img in media_docs],
+            reply_to_message_id=telegram_message.message_id,
+            message_thread_id=telegram_message.message_thread_id,
+            write_timeout=FILE_UPLOAD_TIMEOUT,
+        )
+
+
+async def send_text_file(file_content: str, file_name: str, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a text file to the user.
+
+    Args:
+        file_content: The content of the file.
+        file_name: The name of the file.
+        update: The incoming Telegram update.
+        context: The update context.
+    """
+    telegram_chat = get_telegram_chat(update=update)
+    telegram_message = get_telegram_message(update=update)
+    text_file = BytesIO(file_content.encode("utf-8"))
+    text_file.name = file_name
+
+    await context.bot.send_document(
+        chat_id=telegram_chat.id,
+        document=text_file,
+        filename=file_name,
+        reply_to_message_id=telegram_message.message_id,
+        message_thread_id=telegram_message.message_thread_id,
+        read_timeout=FILE_UPLOAD_TIMEOUT,
+        write_timeout=FILE_UPLOAD_TIMEOUT,
+    )
+
+
+async def send_message_in_plain_text_and_file(
+    message: str,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    reply: bool = True,
+    thread_id: int | None = None,
+) -> None:
+    """Send a message as plain text and as a file.
+
+    Args:
+        message: The message text.
+        update: The incoming Telegram update.
+        context: The update context.
+        reply: Whether to reply to the message.
+        thread_id: The message thread ID.
+    """
+    telegram_chat = get_telegram_chat(update=update)
+    telegram_message = get_telegram_message(update=update)
+
+    target_thread_id = thread_id or telegram_message.message_thread_id
+
+    await send_long_message(
+        message=message, update=update, context=context, normalize_md=False, reply=reply, thread_id=target_thread_id
+    )
+    file = BytesIO()
+    file.write(message.encode("utf-8"))
+    file.seek(0)
+    explain_message_text = (
+        "Oops! 😯It looks like your answer contains some code, but Telegram can't display it properly. "
+        "I'll additionally add your answer to the markdown file. 👇"
+    )
+
+    await send_message(
+        update=update, context=context, text=explain_message_text, reply=False, thread_id=target_thread_id
+    )
+    await context.bot.send_document(
+        chat_id=telegram_chat.id,
+        document=file,
+        filename="answer.md",
+        message_thread_id=target_thread_id,
+    )
+
+
+async def send_answer_message(
+    message: str, update: Update, context: ContextTypes.DEFAULT_TYPE, reply: bool = True, thread_id: int | None = None
+) -> None:
+    """Send an answer message, handling potential Markdown errors.
+
+    Args:
+        message: The message text.
+        update: The incoming Telegram update.
+        context: The update context.
+        reply: Whether to reply to the message.
+        thread_id: The message thread ID.
+    """
+    try:
+        await send_long_message(
+            message=message,
+            update=update,
+            context=context,
+            parse_mode=constants.ParseMode.MARKDOWN_V2,
+            reply=reply,
+            thread_id=thread_id,
+        )
+    except BadRequest as e:
+        logger.error(
+            f"{user_data(update)} got a Telegram Bad Request error in the {chat_data(update)} "
+            f"while receiving GPT answer: {e}. Trying to re-send it in plain text mode."
+        )
+        await send_message_in_plain_text_and_file(
+            message=message, update=update, context=context, reply=reply, thread_id=thread_id
+        )
+
+
+def current_user_action(context: ContextTypes.DEFAULT_TYPE) -> UserAction:
+    """Get the current action state associated with the user.
+
+    Args:
+        context: The update context.
+
+    Returns:
+        The current UserAction.
+    """
+    if context.user_data is None:
+        return UserAction.NONE
+    return context.user_data.get(UserContext.ACTION, UserAction.NONE)
+
+
+def set_user_action(context: ContextTypes.DEFAULT_TYPE, action: UserAction) -> None:
+    """Set the current action state for the user.
+
+    Args:
+        context: The update context.
+        action: The UserAction to set.
+    """
+    if context.user_data is not None:
+        context.user_data[UserContext.ACTION] = action
+    return None
+
+
+def user_interacts_with_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Check if the user is interacting with the bot.
+
+    Args:
+        update: The incoming Telegram update.
+        context: The update context.
+
+    Returns:
+        True if the user is interacting with the bot, False otherwise.
+    """
+    telegram_message = get_telegram_message(update=update)
+    # Check entities for mentions (e.g. @botname in Telegram UI)
+    if telegram_message.entities:
+        for entity in telegram_message.entities:
+            if entity.type == "mention" and entity.user:
+                if entity.user.id == context.bot.id:
+                    return True
+
+    prompt = telegram_message.text or ""
+    if context.bot.first_name in prompt or context.bot.username in prompt:
+        return True
+
+    reply_message = telegram_message.reply_to_message
+    if not reply_message or not reply_message.from_user:
+        return False
+
+    return reply_message.from_user.id == context.bot.id
+
+
+def get_user_context(context: ContextTypes.DEFAULT_TYPE, key: UserContext, expected_type: Type[R]) -> R | None:
+    """Retrieve a specific value from the user's context data.
+
+    Args:
+        context: The update context.
+        key: The key for the data to retrieve.
+        expected_type: The expected type of the value.
+
+    Returns:
+        The value associated with the key, or None.
+    """
+    if context.user_data is not None:
+        return cast(R, context.user_data.get(key, None))
+    return None
+
+
+def set_user_context(context: ContextTypes.DEFAULT_TYPE, key: UserContext, value: object | None) -> None:
+    """Set or update a specific value in the user's context data.
+
+    Args:
+        context: The update context.
+        key: The key under which to store the value.
+        value: The value to store.
+    """
+    if context.user_data is not None:
+        context.user_data[key] = value
+    return None
+
+
+def user_is_allowed(tg_user: TelegramUser) -> bool:
+    """Check if the user is allowed to interact with the bot.
+
+    Args:
+        tg_user: The Telegram user.
+
+    Returns:
+        True if the user is allowed, False otherwise.
+    """
+    if not telegram_settings.users_whitelist:
+        return True
+    return any(identifier in telegram_settings.users_whitelist for identifier in (str(tg_user.id), tg_user.username))
+
+
+def group_is_allowed(tg_chat: TelegramChat) -> bool:
+    """Check if the group is allowed.
+
+    Args:
+        tg_chat: The Telegram chat.
+
+    Returns:
+        True if the group is allowed, False otherwise.
+    """
+    return tg_chat.id in telegram_settings.groups_whitelist
+
+
+def check_user_allowance(
+    func: Callable[P, Coroutine[Any, Any, R]],
+) -> Callable[P, Coroutine[Any, Any, R | None]]:
+    """Decorator controlling access to the chatbot.
+
+    Args:
+        func: The async function to decorate.
+
+    Returns:
+        The wrapper function.
+    """
+
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R | None:
+        update: Update = cast(Update, kwargs.get("update", None) or args[1])
+        context: ContextTypes.DEFAULT_TYPE = cast(ContextTypes.DEFAULT_TYPE, kwargs.get("context") or args[2])
+        telegram_chat = get_telegram_chat(update=update)
+        telegram_user = get_telegram_user(update=update)
+
+        if telegram_user.is_bot and not telegram_settings.allow_bots:
+            logger.warning(f"Bots are not allowed. Request from {user_data(update)} was ignored.")
+            return None
+
+        if telegram_chat.type in PERSONAL_CHAT_TYPES and not user_is_allowed(tg_user=telegram_user):
+            logger.warning(f"{user_data(update)} is not allowed to work with me. Request rejected.")
+            await send_message(
+                update=update,
+                context=context,
+                text=telegram_settings.message_for_disallowed_users,
+            )
+            return None
+
+        if telegram_chat.type in GROUP_CHAT_TYPES and not group_is_allowed(tg_chat=telegram_chat):
+            message = (
+                f"The group {telegram_chat.effective_name} (id: {telegram_chat.id}, link: {telegram_chat.link}) "
+                f"does not exist in the whitelist. Leaving it..."
+            )
+            logger.warning(message)
+            await context.bot.send_message(chat_id=telegram_chat.id, text=message, disable_web_page_preview=True)
+            await telegram_chat.leave()
+            return None
+
+        return await func(*args, **kwargs)
+
+    return wrapper
+
+
+def show_message(header: str, message: str, message_type: Literal["err", "warn", "inf"]) -> None:
+    """Show a formatted message to the user.
+
+    Args:
+        header: The message header.
+        message: The message text.
+        message_type: The type of the message ("err", "warn", "inf").
+    """
+    if message_type == "err":
+        text_color = "red"
+    elif message_type == "warn":
+        text_color = "yellow"
+    else:
+        text_color = "green"
+
+    click.echo()
+    click.secho(f" {header.upper()} ".center(80, "="), fg=text_color, bold=True)
+    click.echo(message)
+    click.echo()
+    click.echo("If you're using Chibi installed via pip, please update settings using")
+    click.secho("$ chibi config", fg="green", bold=True)
+    click.echo()
+    click.echo(
+        "Otherwise, please check the config file manually  or ensure "
+        "that you've exported\nenvironment variables properly.",
+    )
+    click.secho("=" * 80, fg=text_color, bold=True)
+    click.echo()
+
+
+def _var(env_name: str) -> str:
+    """Format an environment variable name.
+
+    Args:
+        env_name: The environment variable name.
+
+    Returns:
+        The formatted environment variable name.
+    """
+    return click.style(env_name, fg="yellow", bold=True)
+
+
+def telegram_security_pre_start_check() -> None:
+    """Perform security checks before starting the bot."""
+    security_error_header = "SECURITY CHECK FAILURE"
+    security_warning_header = "SECURITY CHECK WARNING"
+
+    security_error: bool = False
+    msg = ""
+
+    # Private mode requires users whitelist
+    if not gpt_settings.public_mode and not telegram_settings.users_whitelist:
+        security_error = True
+        msg = (
+            f"Chibi is running in PRIVATE mode, but the {_var('USERS_WHITELIST')} setting\nis not configured.  "
+            "This is EXTREMELY dangerous, as it allows ANY Telegram user\nto use YOUR bot with your API tokens.  "
+            f"Please specify your Telegram username or\nID in {_var('USERS_WHITELIST')} by running the command:"
+        )
+
+    # Public mode is not compatible with the file system access
+    if gpt_settings.filesystem_access and gpt_settings.public_mode:
+        security_error = True
+        msg = (
+            "Chibi is running in PUBLIC mode with access to the computer’s file system!\nThis is an  EXTREMELY  "
+            "dangerous combination of settings, allowing ANY Telegram\nuser to interact with data on your computer "
+            "via the Agent.\n\nYou must either disable public mode "
+            f"({_var('PUBLIC_MODE=false')}) or disable the Agent's\naccess to the file system "
+            f"({_var('FILESYSTEM_ACCESS=false')})."
+        )
+
+    if security_error:
+        show_message(header=security_error_header, message=msg, message_type="err")
+        sys.exit(1)
+
+    # Having an Agent with access to the file system in a Telegram group can be dangerous
+    if gpt_settings.filesystem_access and telegram_settings.groups_whitelist:
+        msg = (
+            "Having an Agent with access to the file system in a Telegram group can be\ndangerous. "
+            "We hope you know what you are doing!\nThe settings involved: "
+            f"{_var('FILESYSTEM_ACCESS')}, {_var('GROUPS_WHITELIST')}."
+        )
+        show_message(header=security_warning_header, message=msg, message_type="warn")
+
+
+def telegram_setting_pre_start_check() -> None:
+    """Perform configuration checks before starting the bot."""
+    if not telegram_settings.token:
+        header = "CONFIGURATION ERROR"
+        msg = f"Telegram token not set. Setting name: {_var('TELEGRAM_BOT_TOKEN')}."
+        show_message(header=header, message=msg, message_type="err")
+        sys.exit(1)

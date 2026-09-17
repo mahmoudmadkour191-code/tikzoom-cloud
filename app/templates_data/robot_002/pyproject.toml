@@ -1,0 +1,100 @@
+[project]
+name = "llmkira"
+version = "1.0.5"
+description = "A chain message bot based on OpenAI"
+authors = [
+    { name = "sudoskys", email = "me@dianas.cyou" },
+    { name = "llmkira", email = "me@dianas.cyou" },
+]
+dependencies = [
+    "pathlib>=1.0.1",
+    "pydantic>=2.0.0",
+    "loguru>=0.5.3",
+    "httpx>=0.24.1",
+    "socksio<2.0.0,>=1.0.0",
+    "python-dotenv<2.0.0,>=1.0.0",
+    "redis>=4.5.4",
+    "aio-pika<10.0.0,>=9.3.0",
+    "arclet-alconna<2.0.0,>=1.7.26",
+    "shortuuid<2.0.0,>=1.0.11",
+    "contextvars<3.0,>=2.4",
+    "pytz<2024.0.0,>=2023.3.post1",
+    "tenacity<9.0.0,>=8.2.3",
+    "pysocks<2.0.0,>=1.7.1",
+    "flask-sqlalchemy<4.0.0,>=3.1.1",
+    "emoji<3.0.0,>=2.8.0",
+    "websocket<1.0.0,>=0.2.1",
+    "wrapt<2.0.0,>=1.11.0",
+    "dynaconf<4.0.0,>=3.2.3",
+    "rich<14.0.0,>=13.6.0",
+    "importlib-metadata<7.0.0,>=6.8.0",
+    "sentry-sdk<2.0.0,>=1.34.0",
+    "boltons<24.0.0,>=23.1.1",
+    "orjson<4.0.0,>=3.9.10",
+    "pydantic-settings<3.0.0,>=2.0.3",
+    "docstring-parser<1.0,>=0.15",
+    "polling<1.0.0,>=0.3.2",
+    "elara<1.0.0,>=0.5.5",
+    "tzlocal<6.0,>=5.2",
+    "requests[socks]<3.0.0,>=2.31.0",
+    "pillow<11.0.0,>=10.1.0",
+    "inscriptis<3.0.0,>=2.3.2",
+    "aiohttp<4.0.0,>=3.8.6",
+    "pytelegrambotapi<5.0.0,>=4.14.0",
+    "ffmpeg-python<1.0.0,>=0.2.0",
+    "duckduckgo-search>=6.2.0",
+    "telegramify-markdown>=0.3.0",
+    "json-repair>=0.13.0",
+    "curl-cffi>=0.6.2",
+    "deprecated>=1.2.14",
+    "aiofile>=3.8.8",
+    "file-read-backwards>=3.0.0",
+    "apscheduler>=3.10.4",
+    "montydb[lmdb]>=2.5.2",
+    "pymongo>=4.6.3",
+    "fast-langdetect>=0.2.1",
+    "lmdb>=1.4.1",
+    "e2b>=0.14.14",
+    "e2b-code-interpreter>=0.0.3",
+    "gTTS>=2.5.1",
+    "matplotlib>=3.9.2",
+]
+requires-python = "<3.12,>=3.9"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+keywords = ["llmbot", "llmkira", "openai", "chatgpt", "llm"]
+classifiers = ["Programming Language :: Python :: 3", "Programming Language :: Python :: 3.9"]
+
+[project.urls]
+homepage = "https://llmkira.github.io/Docs/"
+repository = "https://github.com/LlmKira/Openaibot"
+
+
+[project.optional-dependencies]
+bot = [
+    "hikari>=2.0.0.dev121",
+    # FIXME code not compatible with hikari 2.0.0.dev121
+    "hikari-crescent>=0.6.5",
+    "khl-py<1.0.0,>=0.3.17",
+    "slack-bolt<2.0.0,>=1.18.0"
+]
+testing = [
+    "hikari==2.0.0.dev121",
+    # FIXME code not compatible with hikari 2.0.0.dev121
+    "hikari-crescent<1.0.0,>=0.6.4",
+    "khl-py<1.0.0,>=0.3.17",
+    "slack-bolt<2.0.0,>=1.18.0",
+    "pre-commit<3.5.0,>=2.15.0",
+]
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "pytest<7.0.0,>=6.2.5",
+]
+
+[tool.pdm.build]
+includes = ["llmkira"]
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"

@@ -1,0 +1,17 @@
+# Secrets & live data — never commit
+data/
+bots_storage/
+.env
+*.log
+
+# Encrypted runtime state IS committed (runtime_state/*.enc + manifest.json)
+runtime_state/*
+!runtime_state/*.enc
+!runtime_state/manifest.json
+
+# Python cruft
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/

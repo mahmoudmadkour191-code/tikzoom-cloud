@@ -1,0 +1,99 @@
+{
+    "language_name": "فارسی 🇮🇷",
+    "language_icon": "🇮🇷",
+    "language_select_error": "❌ خطا در انتخاب زبان!\n\n{error_text}",
+    "language_select": "لطفاً یک زبان رابط انتخاب کنید",
+    "language_changed": "🇮🇷 شما فارسی را انتخاب کرده اید\n\nمی توانید زبان را در هر زمان با تایپ کردن این دستور تغییر دهید /lang",
+    "start_message": "سلام, 👋 درود! 👋\n\n📄 GPT-Telegramus version {version}\n\n💜 سازنده GPT-Telegramus: Fern (aka F3RNI)\n💻 همکاران:\n🤍 Keepalove (Azarell) (Sprav04ka)\n🤍 Hanssen\n🤍 https://github.com/F33RNI/GPT-Telegramus#-contributors\n\n😺 صفحه GitHub: https://github.com/F33RNI/GPT-Telegramus\n\n🎵 با خرید آهنگ من از پروژه حمایت کنید: https://f3rni.bandcamp.com",
+    "help_message": "📄 /start - پیام خوش آمد گویی و نسخه ربات\n❓ /help - نمایش این پیام\n↕ /module - ماژول را برای چت با آن تغییر دهید\n🧹 /clear - پاک کردن تاریخچه پیام\n🌎 /lang - زبان را تغییر دهید\n🆔 /chatid - شناسه چت خود را نشان دهید\n\nاکنون برای شروع هر پیامی را برای من ارسال کنید 💬",
+    "help_message_admin": "دستورات ادمین:\n\n💬 /queue - نمایش صف درخواست ها\n🔃 /restart [ماژول، اختیاری] - راه‌اندازی مجدد ماژول (یا همه آنها)، بارگذاری مجدد تنظیمات، زبان‌ها و دستورات\n👤 /users - نمایش لیست همه کاربران\n🔨 /ban <id> [reason] - ممنوعیت کاربر با کد شناسایی به دلیل (اختیاری)\n🔓 /unban <id> - لغو ممنوعیت یک کاربر با کد شناسایی آن\n📢 /broadcast <message> - برای همه به جز کاربران ممنوعه پیام ارسال کنید",
+    "empty_request_module_changed": "✅ ماژول شما تغییر یافت به {module_name}\nاکنون درخواست خود را به عنوان پیام برای من ارسال کنید",
+    "media_group_response": "تولید تصاویر برای \"{request_text}\" درخواست",
+    "permissions_deny": "❌ شما مجوز این دستور را ندارید!",
+    "queue_overflow": "صف پر است بعدا دوباره تلاش کنید ⏳",
+    "queue_empty": "🗑 صف خالی است",
+    "queue_accepted": "✅ درخواست برای {module_name} ماژول به صف اضافه شد.\nموقعیت: {queue_size}/{queue_max} ⏳",
+    "response_error": "❌ خطا: {error_text}\n\nتاریخچه را پاک کنید و درخواست دیگری بدهید یا بعداً دوباره امتحان کنید",
+    "empty_message": "⚠️ خالی! برای جزئیات بیشتر به گزارش‌ها مراجعه کنید",
+    "regenerate_error_not_last": "❌ خطا! فقط می تواند آخرین درخواست را بازسازی کند!",
+    "regenerate_error_empty": "❌ خطا! درخواست خالی!",
+    "continue_error_not_last": "❌ خطا! فقط آخرین درخواست را می توان ادامه داد!",
+    "stop_error_not_last": "❌ خطا! فقط می توان آخرین درخواست را لغو کرد!",
+    "stop_error": "❌ خطا! نمی توان تولید را متوقف کرد!",
+    "response_link_format": "\n📄 {source_name}: {link}",
+    "suggestion_format": "💡 {suggestion}",
+    "suggestion_error": "❌ ممکن است از درخواست ارائه شده فقط از آخرین پیام استفاده شود!",
+    "users_read_error": "❌ خطا در خواندن یا تجزیه لیست کاربران!",
+    "users_admin": "ممنوع شد؟ مدیر؟ شناسه کاربری ماژول زبان نام - درخواست ها\n\n{users_data}",
+    "users_total_stats": "کاربران: {users_num}، مسدود‌شده‌ها: {banned_num}، مدیران: {admins_num}",
+    "restarting": "🙏 شروع مجدد در حال انجام است...\nلطفا صبور باشید",
+    "restarting_done": "{reload_logs}\n✅ راه اندازی مجدد کامل شد",
+    "chat_cleared": "✅ سابقه چت پاک شد برای  {module_name}",
+    "clear_error": "❌ خطا در پاک کردن سابقه چت!\n\n{error_text}",
+    "clear_select_module": "ماژولی را انتخاب کنید که تاریخچه چت آن را می خواهید پاک کنید,\nیا این پیام را نادیده بگیرید",
+    "module_select_module": "ماژول فعلی شما: {current_module}\nماژول مورد نظر برای چت را انتخاب کنید,\nیا این پیام را نادیده بگیرید",
+    "user_cooldown_error": "❌ لطفا صبور باشید {time_formatted} قبل از ارسال درخواست به {module_name} ماژول!",
+    "hours": "h",
+    "minutes": "m",
+    "seconds": "s",
+    "ban_message_admin": "✅ کاربر ممنوعه: {banned_user}\n\nدلیل: {ban_reason}",
+    "ban_no_user_id": "❌ خطا! لطفا مشخص کنید user_id",
+    "ban_message_user": "❌ شما در لیست سفید قرار نگرفته اید یا تحریم شده اید!\n\nدلیل: {ban_reason}",
+    "ban_reason_default": "دلیل مشخص نشده است",
+    "unban_message_admin": "✅ کاربر ممنوع نشده: {unbanned_user}",
+    "broadcast_no_message": "❌ پیامی برای پخش وجود ندارد!",
+    "broadcast": "📢 {message}",
+    "broadcast_initiated": "⏳ پخش در حال انجام است... لطفاً صبر کنید و پیام جدید نفرستید!",
+    "broadcast_done": "✅ پخش تمام شد! پیام های ارسالی به کاربران:\n{broadcast_ok_users}",
+    "style_changed": "✅ تغیر نوع مکالمه به {changed_style}",
+    "style_change_error": "❌ خطا در تغییر سبک مکالمه!\n\n{error_text}",
+    "style_select": "سبک مکالمه شما: {current_style}\nسبک مکالمه جدید Bing  را انتخاب کنید,\nیا این پیام را نادیده بگیرید",
+    "style_precise": "📏 دقیق",
+    "style_balanced": "⚖️ متعادل",
+    "style_creative": "🎨 خلاق",
+    "model_changed": "✅ مدل از ماژول {module_name} به {changed_model} تغییر کرد",
+    "model_select": "مدل فعلی شما از ماژول {module_name}: {current_model}\nمدل جدید ماژول {module_name} را انتخاب کنید،\nیا این پیام را نادیده بگیرید",
+    "model_change_error": "❌ خطا در تغییر مدل!\n\n{error_text}",
+    "model_no_models": "❌ شما نمی‌توانید مدل ماژول فعلی را تغییر دهید!",
+    "button_model_change": "⚙️ تغییر مدل",
+    "button_stop_generating": "🛑 تولید را متوقف کنید",
+    "button_continue": "⏩ ادامه",
+    "button_regenerate": "🔄 بازسازی کنید",
+    "button_clear": "🧹 پاک کردن تاریخچه",
+    "button_module": "↕️ تغیر ماژول",
+    "button_style_change": "⚙️ تغیر استایل",
+    "modules": {
+        "lmao_chatgpt": {
+            "icon": "💬",
+            "name": "ChatGPT (LMAO API)"
+        },
+        "lmao_ms_copilot": {
+            "icon": "🟦",
+            "name": "MS Copilot (LMAO API)"
+        },
+        "chatgpt": {
+            "icon": "💬",
+            "name": "ChatGPT"
+        },
+        "dalle": {
+            "icon": "🖼",
+            "name": "DALL-E"
+        },
+        "ms_copilot": {
+            "icon": "🔵",
+            "name": "MS Copilot"
+        },
+        "ms_copilot_designer": {
+            "icon": "🎨",
+            "name": "MS Copilot designer"
+        },
+        "gemini": {
+            "icon": "♊",
+            "name": "Gemini"
+        },
+        "groq": {
+            "icon": "🔴",
+            "name": "Groq"
+        }
+    }
+}

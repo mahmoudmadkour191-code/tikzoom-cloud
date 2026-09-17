@@ -1,0 +1,270 @@
+import inspect
+import json
+import os
+import platform
+from typing import Any, Callable, Coroutine, ParamSpec, Type, TypeAlias, TypeVar
+
+from anthropic.types import (
+    Message as AnthropicMessage,
+)
+from google.genai.types import GenerateContentResponse
+from mistralai import ChatCompletionResponse
+from openai.types import CompletionUsage
+from openai.types.chat import ChatCompletion
+from openai.types.responses import Response
+
+from chibi.config import application_settings, gpt_settings
+from chibi.constants import PERSISTENT_MEMORY_PROMPT
+from chibi.models import Message
+from chibi.schemas.app import ModelChangeSchema, UsageSchema
+from chibi.schemas.suno import SunoGetGenerationDetailsSchema
+from chibi.services.interface import UserInterface
+from chibi.services.usage_cache import UsageCacheStore
+from chibi.services.user import get_chibi_user
+from chibi.storage.files import get_file_storage
+from chibi.storage.files.file_storage import FileStorage
+from chibi.utils.app import convert_list_of_models_to_str, get_builtin_skill_names
+
+T = TypeVar("T")
+P = ParamSpec("P")
+M = TypeVar("M", bound=Callable[..., Coroutine[Any, Any, Any]])
+AsyncFunc: TypeAlias = Callable[P, Coroutine[Any, Any, T]]
+
+
+def decorate_async_methods(decorator: Callable[[M], M]) -> Callable[[Type[T]], Type[T]]:
+    def decorate(cls: Type[T]) -> Type[T]:
+        for attr in cls.__dict__:
+            if inspect.iscoroutinefunction(getattr(cls, attr)):
+                original_func = getattr(cls, attr)
+                decorated_func = decorator(original_func)
+                setattr(cls, attr, decorated_func)
+        return cls
+
+    return decorate
+
+
+def escape_and_truncate(message: str | dict[str, Any] | list[dict[str, Any]] | None, limit: int = 50) -> str:
+    if not message:
+        return "no data"
+
+    if isinstance(message, dict):
+        return json.dumps({k: escape_and_truncate(message=v, limit=limit) for k, v in message.items()})
+
+    if isinstance(message, list):
+        return json.dumps([escape_and_truncate(message=m, limit=limit) for m in message])
+
+    escaped_message = str(message).replace("<", r"\<").replace(">", r"\>")
+    if len(escaped_message) < limit + 20:
+        return escaped_message
+    return f"{escaped_message[:limit]}... (truncated)"
+
+
+async def prepare_system_prompt(
+    base_system_prompt: str,
+    user_id: int,
+    interface: UserInterface | None,
+    conversation_messages: list[Message] | None = None,
+    thread_id: int | None = None,
+) -> str:
+    """Prepare the system prompt payload sent to the LLM.
+
+    Args:
+        base_system_prompt: The base system prompt text.
+        user_id: The user identifier used to fetch user metadata and to key
+            the real context-size cache.
+        interface: The user interface for the current request, or None.
+        conversation_messages: Retained for caller compatibility; no longer
+            used to compute the context size (the real provider-reported value
+            from ``UsageCacheStore`` is used instead).
+        thread_id: Session thread ID used when the interface is absent (e.g.
+            sub-agent requests) so the effective working directory resolves to
+            the same thread-scoped value as the parent request.
+
+    Returns:
+        JSON-encoded system prompt payload.
+    """
+    user = await get_chibi_user(user_id=user_id)
+    session_thread_id = interface.thread_id if interface else thread_id
+    prompt: dict[str, Any] = {
+        "system_prompt": base_system_prompt,
+        "available_builtin_skills": get_builtin_skill_names(),
+    }
+
+    if application_settings.is_chroma_configured:
+        prompt["system_prompt"] += PERSISTENT_MEMORY_PROMPT
+
+    if gpt_settings.filesystem_access:
+        system_data = {
+            "current_working_dir": user.get_effective_working_dir(session_thread_id),
+            "platform": platform.platform(),
+            "shell": os.environ.get("SHELL", "unknown"),
+            "running_inside_container": application_settings.running_in_container,
+        }
+        if application_settings.running_in_container:
+            system_data["container_type"] = application_settings.runtime_environment
+
+        prompt["system"] = system_data
+
+    if interface:
+        if getattr(interface, "uses_uploaded_file_storage", True):
+            storage: FileStorage = get_file_storage(interface=interface)
+            prompt["last_uploaded_files"] = await storage.get_available_files(limit=10)
+
+        thread_id = interface.thread_id
+        real_context_size = UsageCacheStore().get(user_id=user_id, thread_id=thread_id)
+        max_history_tokens = gpt_settings.max_history_tokens
+        if real_context_size is not None:
+            context_percentage = round(real_context_size / max_history_tokens * 100) if max_history_tokens else 0
+            prompt["approximate_context_size"] = (
+                f"{real_context_size:,} tokens ({context_percentage}% of {max_history_tokens:,} limit)"
+            )
+            if context_percentage > gpt_settings.context_size_warning_threshold:
+                prompt["context_size_warning"] = (
+                    f"The context size is more than {gpt_settings.context_size_warning_threshold}% of the "
+                    f"maximum allowed ({max_history_tokens}) tokens. It is STRONGLY RECOMMENDED to reduce "
+                    f"the context by calling 'summarize_history' or 'clear_tool_call_history' and "
+                    f"generating the most detailed summary possible."
+                )
+        else:
+            prompt["approximate_context_size"] = "n/a"
+
+    llms_data: list[ModelChangeSchema] = await user.get_available_models()
+    prompt["available_models_to_delegate"] = convert_list_of_models_to_str(models=llms_data)
+
+    prompt.update({"user_id": user.id, "user_info": user.info, "activated_skills": user.llm_skills})
+    return json.dumps(prompt)
+
+
+async def send_llm_thoughts(thoughts: str, interface: UserInterface | None = None) -> None:
+    if not gpt_settings.show_llm_thoughts:
+        return None
+
+    if not interface:
+        return None
+
+    if thoughts == "No content":
+        return None
+
+    await interface.send_llm_thoughts(thoughts)
+    return None
+
+
+def get_usage_from_anthropic_response(response_message: AnthropicMessage) -> UsageSchema:
+    output_tokens = response_message.usage.output_tokens
+    input_tokens = response_message.usage.input_tokens
+    cache_creation_input_tokens = getattr(response_message.usage, "cache_creation_input_tokens", None) or 0
+    cache_read_input_tokens = getattr(response_message.usage, "cache_read_input_tokens", None) or 0
+    return UsageSchema(
+        completion_tokens=output_tokens,
+        prompt_tokens=input_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+        total_tokens=output_tokens + input_tokens + cache_creation_input_tokens + cache_read_input_tokens,
+    )
+
+
+def get_usage_from_openai_response(response_message: ChatCompletion) -> UsageSchema:
+    if response_message.usage is None:
+        return UsageSchema()
+    response_usage = response_message.usage
+    usage = UsageSchema(
+        completion_tokens=response_usage.completion_tokens,
+        prompt_tokens=response_usage.prompt_tokens,
+        total_tokens=response_usage.total_tokens,
+    )
+    if prompt_cache := response_usage.prompt_tokens_details:
+        usage.cache_read_input_tokens = prompt_cache.cached_tokens or 0
+    return usage
+
+
+def get_usage_from_responses_response(response_message: Response) -> UsageSchema:
+    """Extract usage statistics from an OpenAI Responses API Response object.
+
+    Args:
+        response_message: The Response object returned by the OpenAI Responses API.
+
+    Returns:
+        A UsageSchema populated with token counts from the response.
+    """
+    if response_message.usage is None:
+        return UsageSchema()
+
+    usage = response_message.usage
+    return UsageSchema(
+        prompt_tokens=usage.input_tokens or 0,
+        completion_tokens=usage.output_tokens or 0,
+        total_tokens=usage.total_tokens or 0,
+    )
+
+
+def get_usage_from_google_response(response_message: GenerateContentResponse) -> UsageSchema:
+    if not response_message.usage_metadata:
+        return UsageSchema()
+
+    return UsageSchema(
+        total_tokens=response_message.usage_metadata.total_token_count or 0,
+        completion_tokens=response_message.usage_metadata.candidates_token_count or 0,
+        prompt_tokens=response_message.usage_metadata.prompt_token_count or 0,
+        cache_read_input_tokens=response_message.usage_metadata.cached_content_token_count or 0,
+    )
+
+
+def get_usage_from_mistral_response(response_message: ChatCompletionResponse) -> UsageSchema:
+    return UsageSchema(
+        completion_tokens=response_message.usage.completion_tokens or 0,
+        prompt_tokens=response_message.usage.prompt_tokens or 0,
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0,
+        total_tokens=response_message.usage.total_tokens or 0,
+    )
+
+
+def get_usage_msg(usage: UsageSchema | CompletionUsage | None) -> str:
+    if usage is None:
+        return ""
+    cache_read = getattr(usage, "cache_read_input_tokens", None)
+    cache_create = getattr(usage, "cache_creation_input_tokens", None)
+    return (
+        f"Tokens used: {getattr(usage, 'total_tokens', None) or 'n/a'} "
+        f"({getattr(usage, 'prompt_tokens', None)} prompt, "
+        f"{getattr(usage, 'completion_tokens', None)} completion, "
+        f"{cache_read or 0} cached read/prompt, "
+        f"{cache_create or 0} cached creation)"
+    )
+
+
+def suno_task_still_processing(task_data_response: SunoGetGenerationDetailsSchema) -> bool:
+    return task_data_response.is_in_progress
+
+
+# def limit_recursion(
+#     max_depth: int = application_settings.max_consecutive_tool_calls,
+# ) -> Callable[[AsyncFunc[P], T]], AsyncFunc[P, T]]:
+#     def decorator(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
+#         depth_var: ContextVar[int] = ContextVar(f"{func.__name__}_depth", default=0)
+#
+#         @wraps(func)
+#         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+#             current_depth = depth_var.get()
+#             depth_var.set(current_depth + 1)
+#             if depth_var.get() > max_depth + 1:
+#                 depth_var.set(current_depth)
+#                 class_name = ""
+#                 if args and hasattr(args[0], "__class__"):
+#                     class_name = f"{args[0].__class__.__name__}."
+#                 raise RecursionLimitExceeded(
+#                     provider=class_name,
+#                     model=cast(str, kwargs.get("model", "unknown")),
+#                     detail=f"Recursion depth exceeded: {max_depth} (function: {class_name}{func.__name__})",
+#                     exceeded_limit=max_depth,
+#                 )
+#
+#             try:
+#                 result = await func(*args, **kwargs)
+#                 return result
+#             finally:
+#                 depth_var.set(current_depth)
+#
+#         return async_wrapper
+#
+#     return decorator

@@ -1,0 +1,391 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+from aiogram.enums import ChatType
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import CallbackQuery, InlineQuery, Message
+
+import middlewares
+from middlewares import antiflood
+from middlewares import ban_middleware
+from middlewares import private_chat_guard
+
+
+def _monotonic_sequence(*values: float):
+    iterator = iter(values)
+    last = values[-1]
+
+    def _next():
+        nonlocal iterator
+        return next(iterator, last)
+
+    return _next
+
+
+@pytest.mark.asyncio
+async def test_antiflood_blocks_messages_over_limit(monkeypatch):
+    monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 0.2, 0.4, 0.4, 0.4))
+
+    middleware = antiflood.AntifloodMiddleware(max_messages=2, message_window_seconds=1, cooldown_seconds=2)
+    handler = AsyncMock(return_value="handled")
+    event = SimpleNamespace(
+        from_user=SimpleNamespace(id=7),
+        chat=SimpleNamespace(type=ChatType.PRIVATE),
+        answer=AsyncMock(),
+    )
+
+    assert await middleware(handler, event, {}) == "handled"
+    assert await middleware(handler, event, {}) == "handled"
+    assert await middleware(handler, event, {}) is None
+    assert handler.await_count == 2
+    event.answer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_antiflood_expires_old_timestamps(monkeypatch):
+    monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 2.0, 2.0, 2.0))
+
+    middleware = antiflood.AntifloodMiddleware(max_messages=1, message_window_seconds=1)
+    handler = AsyncMock(return_value="ok")
+    event = SimpleNamespace(
+        from_user=SimpleNamespace(id=99),
+        chat=SimpleNamespace(type=ChatType.PRIVATE),
+        answer=AsyncMock(),
+    )
+
+    assert await middleware(handler, event, {}) == "ok"
+    assert await middleware(handler, event, {}) == "ok"
+    assert handler.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_antiflood_tracks_message_limits_per_user_and_chat(monkeypatch):
+    monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 0.2, 0.4, 0.4))
+
+    middleware = antiflood.AntifloodMiddleware(max_messages=1, message_window_seconds=1, cooldown_seconds=2)
+    handler = AsyncMock(return_value="handled")
+
+    first_chat_event = SimpleNamespace(
+        from_user=SimpleNamespace(id=21),
+        chat=SimpleNamespace(id=-1001, type=ChatType.SUPERGROUP),
+        answer=AsyncMock(),
+    )
+    second_chat_event = SimpleNamespace(
+        from_user=SimpleNamespace(id=21),
+        chat=SimpleNamespace(id=-1002, type=ChatType.SUPERGROUP),
+        answer=AsyncMock(),
+    )
+    same_first_chat_event = SimpleNamespace(
+        from_user=SimpleNamespace(id=21),
+        chat=SimpleNamespace(id=-1001, type=ChatType.SUPERGROUP),
+        answer=AsyncMock(),
+    )
+
+    assert await middleware(handler, first_chat_event, {}) == "handled"
+    assert await middleware(handler, second_chat_event, {}) == "handled"
+    assert await middleware(handler, same_first_chat_event, {}) is None
+    assert handler.await_count == 2
+    same_first_chat_event.answer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_antiflood_blocks_callback_queries_over_limit(monkeypatch):
+    monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 0.2, 0.4, 0.4, 0.4))
+
+    middleware = antiflood.AntifloodMiddleware(max_callbacks=2, callback_window_seconds=1, cooldown_seconds=2)
+    handler = AsyncMock(return_value="handled")
+    event = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        data="tap",
+        answer=AsyncMock(),
+    )
+
+    assert await middleware(handler, event, {}) == "handled"
+    assert await middleware(handler, event, {}) == "handled"
+    assert await middleware(handler, event, {}) is None
+    assert handler.await_count == 2
+    event.answer.assert_awaited_once_with("Too many requests. Please slow down for a few seconds.", show_alert=False)
+
+
+@pytest.mark.asyncio
+async def test_antiflood_blocks_inline_queries_over_limit(monkeypatch):
+    monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 0.5, 0.8, 0.8, 0.8))
+
+    middleware = antiflood.AntifloodMiddleware(max_inline_queries=2, inline_window_seconds=1, cooldown_seconds=2)
+    handler = AsyncMock(return_value="handled")
+    event = SimpleNamespace(
+        from_user=SimpleNamespace(id=77),
+        query="https://youtube.com/watch?v=test",
+        answer=AsyncMock(),
+    )
+
+    assert await middleware(handler, event, {}) == "handled"
+    assert await middleware(handler, event, {}) == "handled"
+    assert await middleware(handler, event, {}) is None
+    assert handler.await_count == 2
+    event.answer.assert_awaited_once_with([], cache_time=1, is_personal=True)
+
+
+@pytest.mark.asyncio
+async def test_antiflood_prunes_stale_users(monkeypatch):
+    monkeypatch.setattr(antiflood.time, "monotonic", _monotonic_sequence(0.0, 10.0, 20.0, 20.0, 20.0, 20.0))
+
+    middleware = antiflood.AntifloodMiddleware(user_ttl_seconds=5, max_tracked_users=10, cleanup_every=1)
+    handler = AsyncMock(return_value="ok")
+
+    first = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        chat=SimpleNamespace(type=ChatType.PRIVATE),
+        answer=AsyncMock(),
+    )
+    second = SimpleNamespace(
+        from_user=SimpleNamespace(id=2),
+        chat=SimpleNamespace(type=ChatType.PRIVATE),
+        answer=AsyncMock(),
+    )
+    third = SimpleNamespace(
+        from_user=SimpleNamespace(id=3),
+        chat=SimpleNamespace(type=ChatType.PRIVATE),
+        answer=AsyncMock(),
+    )
+
+    await middleware(handler, first, {})
+    await middleware(handler, second, {})
+    await middleware(handler, third, {})
+
+    tracked_user_ids = {scope_key.user_id for scope_key in middleware._users}
+
+    assert 1 not in tracked_user_ids
+    assert 2 not in tracked_user_ids
+    assert 3 in tracked_user_ids
+
+
+def test_middleware_order_puts_antiflood_first():
+    assert middlewares.__all__[0].__name__ == "AntifloodMiddleware"
+
+
+@pytest.mark.asyncio
+async def test_ban_middleware_caches_status(monkeypatch):
+    status = AsyncMock(return_value="ban")
+    monkeypatch.setattr(ban_middleware, "db", SimpleNamespace(status=status))
+    monkeypatch.setattr(ban_middleware.time, "monotonic", lambda: 100.0)
+
+    middleware = ban_middleware.UserBannedMiddleware(ttl_seconds=10.0)
+
+    assert await middleware._get_status(1) == "ban"
+    assert await middleware._get_status(1) == "ban"
+    status.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ban_middleware_fails_closed_when_status_lookup_fails(monkeypatch):
+    status = AsyncMock(side_effect=RuntimeError("db offline"))
+    monkeypatch.setattr(ban_middleware, "db", SimpleNamespace(status=status))
+    monkeypatch.setattr(ban_middleware.time, "monotonic", lambda: 200.0)
+
+    middleware = ban_middleware.UserBannedMiddleware()
+
+    assert await middleware._get_status(1) == "active"
+
+
+@pytest.mark.asyncio
+async def test_ban_middleware_blocks_banned_events(monkeypatch):
+    middleware = ban_middleware.UserBannedMiddleware()
+    monkeypatch.setattr(middleware, "_get_status", AsyncMock(return_value="ban"))
+
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        chat=SimpleNamespace(type="private"),
+        answer=AsyncMock(),
+    )
+    callback = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        answer=AsyncMock(),
+    )
+    inline_query = SimpleNamespace(from_user=SimpleNamespace(id=1))
+
+    result = await middleware.on_pre_process_message(message, {})
+    assert result is None
+    message.answer.assert_awaited_once()
+
+    result = await middleware.on_pre_process_callback_query(callback, {})
+    assert result is None
+    callback.answer.assert_awaited_once()
+
+    result = await middleware.on_pre_process_inline_query(inline_query, {})
+    assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event", "method_name"),
+    [
+        (Mock(spec=Message), "on_pre_process_message"),
+        (Mock(spec=CallbackQuery), "on_pre_process_callback_query"),
+        (Mock(spec=InlineQuery), "on_pre_process_inline_query"),
+    ],
+)
+async def test_ban_middleware_dispatches_by_event_type(monkeypatch, event, method_name):
+    middleware = ban_middleware.UserBannedMiddleware()
+    handler = AsyncMock(return_value="ok")
+    hook = AsyncMock()
+    monkeypatch.setattr(middleware, method_name, hook)
+
+    assert await middleware(handler, event, {}) == "ok"
+    hook.assert_awaited_once_with(event, {})
+    handler.assert_awaited_once_with(event, {})
+
+
+@pytest.mark.asyncio
+async def test_private_chat_guard_passes_through_non_message_events():
+    middleware = private_chat_guard.PrivateChatGuardMiddleware()
+    handler = AsyncMock(return_value="handled")
+
+    assert await middleware(handler, object(), {}) == "handled"
+    handler.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_private_chat_guard_allows_private_messages_and_irrelevant_group_messages():
+    middleware = private_chat_guard.PrivateChatGuardMiddleware()
+    handler = AsyncMock(return_value="ok")
+
+    private_event = Mock(spec=Message)
+    private_event.chat = SimpleNamespace(type=ChatType.PRIVATE)
+    private_event.from_user = SimpleNamespace(id=1, is_bot=False)
+    private_event.text = "https://youtube.com/watch?v=demo"
+    private_event.caption = None
+
+    group_event = Mock(spec=Message)
+    group_event.chat = SimpleNamespace(type=ChatType.SUPERGROUP)
+    group_event.from_user = SimpleNamespace(id=1, is_bot=False)
+    group_event.text = "hello there"
+    group_event.caption = None
+
+    assert await middleware(handler, private_event, {}) == "ok"
+    assert await middleware(handler, group_event, {}) == "ok"
+    assert handler.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://youtube.com/watch?v=demo",
+        "https://soundcloud.com/artist/track",
+        "https://pin.it/demo123",
+    ],
+)
+async def test_private_chat_guard_sends_typing_and_calls_handler_when_dm_is_open(text):
+    middleware = private_chat_guard.PrivateChatGuardMiddleware()
+    handler = AsyncMock(return_value="handled")
+    bot = SimpleNamespace(send_chat_action=AsyncMock())
+    event = Mock(spec=Message)
+    event.chat = SimpleNamespace(type=ChatType.SUPERGROUP)
+    event.from_user = SimpleNamespace(id=8, is_bot=False)
+    event.text = text
+    event.caption = None
+
+    result = await middleware(handler, event, {"bot": bot})
+
+    assert result == "handled"
+    bot.send_chat_action.assert_awaited_once_with(chat_id=8, action="typing")
+    handler.assert_awaited_once_with(event, {"bot": bot})
+
+
+@pytest.mark.asyncio
+async def test_private_chat_guard_creates_pending_request_when_user_has_no_dm(monkeypatch):
+    private_chat_guard._can_dm_cache.clear()
+
+    middleware = private_chat_guard.PrivateChatGuardMiddleware()
+    handler = AsyncMock()
+    sent_requests = []
+    existing_pending = private_chat_guard.PendingRequest(
+        service="youtube",
+        url="https://youtu.be/old",
+        notice_chat_id=-100,
+        notice_message_id=555,
+    )
+    bot = SimpleNamespace(
+        send_chat_action=AsyncMock(
+            side_effect=TelegramBadRequest(
+                method=SimpleNamespace(__api_method__="sendChatAction"),
+                message="chat not found",
+            )
+        ),
+        delete_message=AsyncMock(),
+        get_me=AsyncMock(return_value=SimpleNamespace(username="maxloadbot")),
+    )
+    event = Mock(spec=Message)
+    event.chat = SimpleNamespace(type=ChatType.SUPERGROUP)
+    event.from_user = SimpleNamespace(id=42, is_bot=False)
+    event.text = "https://tiktok.com/@demo/video/1"
+    event.caption = None
+    event.reply = AsyncMock(
+        return_value=SimpleNamespace(
+            chat=SimpleNamespace(id=-200),
+            message_id=777,
+        )
+    )
+
+    monkeypatch.setattr(private_chat_guard, "_bot_username", None)
+    monkeypatch.setattr(private_chat_guard, "get_pending", lambda user_id: existing_pending)
+    monkeypatch.setattr(private_chat_guard, "set_pending", lambda user_id, request: sent_requests.append((user_id, request)))
+    monkeypatch.setattr(private_chat_guard.bm, "dm_start_required", lambda: "Open DM")
+    monkeypatch.setattr(
+        private_chat_guard.kb,
+        "start_private_chat_keyboard",
+        lambda username: f"keyboard:{username}",
+    )
+
+    result = await middleware(handler, event, {"bot": bot})
+
+    assert result is None
+    bot.delete_message.assert_awaited_once_with(-100, 555)
+    bot.get_me.assert_awaited_once()
+    event.reply.assert_awaited_once_with("Open DM", reply_markup="keyboard:maxloadbot")
+    handler.assert_not_awaited()
+    assert sent_requests[0][0] == 42
+    assert sent_requests[0][1].service == "tiktok"
+    assert sent_requests[0][1].url == "https://tiktok.com/@demo/video/1"
+    assert sent_requests[0][1].notice_chat_id == -200
+    assert sent_requests[0][1].notice_message_id == 777
+
+
+@pytest.mark.asyncio
+async def test_private_chat_guard_does_not_recreate_same_pending_request(monkeypatch):
+    middleware = private_chat_guard.PrivateChatGuardMiddleware()
+    handler = AsyncMock()
+    existing_pending = private_chat_guard.PendingRequest(
+        service="youtube",
+        url="https://youtu.be/demo",
+        notice_chat_id=-100,
+        notice_message_id=555,
+    )
+    bot = SimpleNamespace(
+        send_chat_action=AsyncMock(
+            side_effect=TelegramBadRequest(
+                method=SimpleNamespace(__api_method__="sendChatAction"),
+                message="chat not found",
+            )
+        ),
+        delete_message=AsyncMock(),
+        get_me=AsyncMock(),
+    )
+    event = Mock(spec=Message)
+    event.chat = SimpleNamespace(type=ChatType.SUPERGROUP)
+    event.from_user = SimpleNamespace(id=42, is_bot=False)
+    event.text = "https://www.youtube.com/watch?v=demo"
+    event.caption = None
+    event.reply = AsyncMock()
+
+    monkeypatch.setattr(private_chat_guard, "get_pending", lambda user_id: existing_pending)
+    monkeypatch.setattr(private_chat_guard, "set_pending", Mock())
+
+    result = await middleware(handler, event, {"bot": bot})
+
+    assert result is None
+    bot.delete_message.assert_not_awaited()
+    event.reply.assert_not_awaited()
+    handler.assert_not_awaited()

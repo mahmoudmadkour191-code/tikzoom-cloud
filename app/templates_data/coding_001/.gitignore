@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+
+# Environment
+.env
+.env.*
+!.env.example
+config.json
+
+# Data (Docker Volume, not tracked)
+data/raw/*
+data/knowledge/*
+data/wiki/*
+data/inbox/*
+data/activity/*
+data/workspace/*
+!data/raw/.gitkeep
+!data/knowledge/.gitkeep
+!data/wiki/.gitkeep
+!data/inbox/.gitkeep
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Internal design/implementation docs — public repo; these live in Notion instead
+docs/design/
+docs/workspace/
+docs/implementation/
+docs/internal/
+
+# Playwright
+.playwright-mcp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.db
+*.sqlite3
+
+# Logs
+*.log
+logs/
+.git-backup
+knowledge-login.png
+knowledge-page.png
+login-page-ok.png
+output/
+data/log.md
+data/log_archive/

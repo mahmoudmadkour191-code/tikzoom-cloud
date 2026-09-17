@@ -1,0 +1,9 @@
+*Выжимка за {{duration_hours}} часов:*
+{% for topic in topics %}
+{{topic.emojis}} *{{topic.name}}*
+{%- for title in topic["titles"] %}
+- {{title}}{% endfor %}
+{% endfor %}
+Канал с выжимками: [@nyannews_summary](https://t.me/nyannews_summary)
+
+_Сделано автоматически с помощью языковой модели. Сообщение совсем не достоверно. Правдивость информации не проверяется._

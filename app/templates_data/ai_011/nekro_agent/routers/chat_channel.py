@@ -1,0 +1,1089 @@
+import asyncio
+import random
+import shutil
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import json5
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
+from tortoise.expressions import Q
+
+from nekro_agent.adapters import get_adapter
+from nekro_agent.core.logger import get_sub_logger
+from nekro_agent.core.os_env import SANDBOX_SHARED_HOST_DIR, USER_UPLOAD_DIR
+from nekro_agent.models.db_chat_channel import DBChatChannel
+from nekro_agent.models.db_chat_message import DBChatMessage
+from nekro_agent.models.db_mem_episode import DBMemEpisode
+from nekro_agent.models.db_mem_paragraph import DBMemParagraph
+from nekro_agent.models.db_plugin_data import DBPluginData
+from nekro_agent.models.db_recurring_timer_job import DBRecurringTimerJob
+from nekro_agent.models.db_user import DBUser
+from nekro_agent.schemas.agent_message import AgentMessageSegment, AgentMessageSegmentType
+from nekro_agent.schemas.errors import AdapterUnavailableError, NotFoundError, ValidationError
+from nekro_agent.services.channel_broadcaster import channel_broadcaster
+from nekro_agent.services.config_resolver import config_resolver
+from nekro_agent.services.message_service import message_service
+from nekro_agent.services.user.deps import get_current_active_user
+from nekro_agent.services.user.perm import Role, require_role
+from nekro_agent.tools.path_convertor import sanitize_chat_key_for_path
+
+router = APIRouter(prefix="/chat-channel", tags=["ChatChannel"])
+
+logger = get_sub_logger("chat_channel_api")
+
+
+class ChatChannelItem(BaseModel):
+    id: int
+    chat_key: str
+    channel_name: Optional[str]
+    custom_channel_name: Optional[str]
+    is_active: bool
+    status: str
+    chat_type: str
+    message_count: int
+    create_time: str
+    update_time: str
+    last_message_time: Optional[str]
+
+
+class ChatChannelListResponse(BaseModel):
+    total: int
+    items: List[ChatChannelItem]
+
+
+class ChatChannelDirectoryItem(BaseModel):
+    id: int
+    chat_key: str
+    channel_name: Optional[str]
+    custom_channel_name: Optional[str]
+    is_active: bool
+    status: str
+    chat_type: str
+
+
+class ChatChannelDirectoryResponse(BaseModel):
+    items: List[ChatChannelDirectoryItem]
+
+
+class ChatChannelDetail(ChatChannelItem):
+    unique_users: int
+    conversation_start_time: str
+    preset_id: Optional[int]
+    can_send: bool = False
+    ai_always_include_msg_id: bool = False
+
+
+class ChatMessage(BaseModel):
+    id: int
+    sender_id: str
+    sender_name: str
+    sender_nickname: str
+    platform_userid: str
+    content: str
+    content_data: List[Dict[str, Any]]
+    chat_key: str
+    create_time: str
+    message_id: str = ""
+    ref_msg_id: str = ""
+
+
+class ChatMessageListResponse(BaseModel):
+    total: int
+    items: List[ChatMessage]
+
+
+class ActionResponse(BaseModel):
+    ok: bool = True
+
+
+class UpdateCustomChannelNameRequest(BaseModel):
+    custom_channel_name: Optional[str] = None
+
+
+class ChannelDeletePreview(BaseModel):
+    message_count: int
+    timer_job_count: int
+    plugin_data_count: int
+    mem_paragraph_count: int
+    mem_episode_count: int
+    upload_dir_exists: bool
+    sandbox_dir_exists: bool
+
+
+@router.get("/list", summary="获取聊天频道列表")
+@require_role(Role.Admin)
+async def get_chat_channel_list(
+    page: int = 1,
+    page_size: int = 20,
+    search: Optional[str] = None,
+    chat_type: Optional[str] = None,
+    status: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ChatChannelListResponse:
+    """获取聊天频道列表"""
+    query = DBChatChannel
+
+    if search:
+        query = query.filter(
+            Q(chat_key__contains=search) | Q(channel_name__contains=search) | Q(data__contains=search),
+        )
+    if chat_type:
+        query = query.filter(channel_type=chat_type)
+    if status is not None:
+        if status == "active":
+            query = query.filter(is_active=True, observe_mode=False)
+        elif status == "observe":
+            query = query.filter(is_active=True, observe_mode=True)
+        elif status == "disabled":
+            query = query.filter(is_active=False)
+        else:
+            raise ValidationError(reason="无效的频道状态筛选值")
+    elif is_active is not None:
+        query = query.filter(is_active=is_active)
+
+    channels = await query.all()
+
+    channel_info_list = []
+    for channel in channels:
+        message_count = await DBChatMessage.filter(
+            chat_key=channel.chat_key,
+            create_time__gte=channel.conversation_start_time,
+        ).count()
+
+        last_message = await DBChatMessage.filter(chat_key=channel.chat_key).order_by("-create_time").first()
+
+        conversation_start_time = channel.conversation_start_time
+        if conversation_start_time.tzinfo is not None:
+            conversation_start_time = conversation_start_time.replace(tzinfo=None)
+
+        if last_message:
+            last_message_time = last_message.create_time
+            if last_message_time.tzinfo is not None:
+                last_message_time = last_message_time.replace(tzinfo=None)
+            last_active_time = max(conversation_start_time, last_message_time)
+        else:
+            last_active_time = conversation_start_time
+
+        channel_info_list.append(
+            {
+                "channel": channel,
+                "message_count": message_count,
+                "last_active_time": last_active_time,
+                "last_message_time": last_message_time if last_message else None,
+            },
+        )
+
+    channel_info_list.sort(key=lambda x: x["last_active_time"], reverse=True)
+
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    paged_channels = channel_info_list[start_idx:end_idx]
+
+    result: List[ChatChannelItem] = []
+    for info in paged_channels:
+        channel = info["channel"]
+        result.append(
+            ChatChannelItem(
+                id=channel.id,
+                chat_key=channel.chat_key,
+                channel_name=channel.channel_name,
+                custom_channel_name=channel.get_custom_channel_name(),
+                is_active=channel.is_active,
+                status=channel.channel_status,
+                chat_type=channel.chat_type.value,
+                message_count=info["message_count"],
+                create_time=channel.create_time.strftime("%Y-%m-%d %H:%M:%S"),
+                update_time=channel.update_time.strftime("%Y-%m-%d %H:%M:%S"),
+                last_message_time=(
+                    info["last_message_time"].strftime("%Y-%m-%d %H:%M:%S") if info["last_message_time"] is not None else None
+                ),
+            ),
+        )
+
+    return ChatChannelListResponse(
+        total=len(channels),
+        items=result,
+    )
+
+
+@router.get("/directory", summary="获取聊天频道目录")
+@require_role(Role.Admin)
+async def get_chat_channel_directory(
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ChatChannelDirectoryResponse:
+    """获取全量频道目录。
+
+    用于前端全局复用 chat_key -> 频道显示信息映射，不包含消息统计等重字段。
+    """
+    channels = await DBChatChannel.all().order_by("-update_time")
+    items = [
+        ChatChannelDirectoryItem(
+            id=channel.id,
+            chat_key=channel.chat_key,
+            channel_name=channel.channel_name,
+            custom_channel_name=channel.get_custom_channel_name(),
+            is_active=channel.is_active,
+            status=channel.channel_status,
+            chat_type=channel.chat_type.value,
+        )
+        for channel in channels
+    ]
+    return ChatChannelDirectoryResponse(items=items)
+
+
+@router.get("/list/stream", summary="获取聊天频道列表实时流")
+@require_role(Role.Admin)
+async def stream_chat_channel_list(
+    request: Request,
+    _current_user: DBUser = Depends(get_current_active_user),
+):
+    """获取聊天频道列表的实时更新流，使用 Server-Sent Events (SSE)
+
+    Returns:
+        StreamingResponse: SSE 流，每条频道事件作为一个数据
+
+    Events:
+        - created: 新频道创建
+        - updated: 频道信息更新
+        - deleted: 频道被删除
+        - activated: 频道被激活
+        - deactivated: 频道被停用
+    """
+    import json
+
+    from nekro_agent.services.channel_broadcaster import channel_broadcaster
+    from nekro_agent.services.runtime_state import is_shutting_down
+
+    subscription = channel_broadcaster.subscribe()
+
+    def cleanup_subscription() -> None:
+        subscription.close()
+
+    async def handle_client_disconnect(_: object) -> None:
+        cleanup_subscription()
+
+    async def event_generator():
+        """生成 SSE 事件流"""
+        try:
+            while not is_shutting_down():
+                if await request.is_disconnected():
+                    return
+                try:
+                    event = await subscription.get(timeout=1.0)
+                except asyncio.TimeoutError:
+                    yield {"comment": "ping"}
+                    continue
+
+                yield {"data": json.dumps(event.model_dump())}
+        finally:
+            cleanup_subscription()
+
+    return EventSourceResponse(
+        event_generator(),
+        client_close_handler_callable=handle_client_disconnect,
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def _build_chat_channel_detail(channel: DBChatChannel) -> ChatChannelDetail:
+    """构建聊天频道详情响应"""
+    message_count = await DBChatMessage.filter(
+        chat_key=channel.chat_key, create_time__gte=channel.conversation_start_time
+    ).count()
+    last_message = await DBChatMessage.filter(chat_key=channel.chat_key).order_by("-create_time").first()
+    last_message_time = last_message.create_time if last_message else None
+    unique_users = await DBChatMessage.filter(chat_key=channel.chat_key).distinct().values_list("sender_id", flat=True)
+
+    # 检测适配器是否支持 WebUI 发送
+    can_send = False
+    try:
+        adapter = get_adapter(channel.adapter_key)
+        can_send = adapter.supports_webui_send
+    except Exception:
+        pass
+
+    # 获取频道有效配置
+    ai_always_include_msg_id = False
+    try:
+        effective_config = await config_resolver.get_effective_config(channel.chat_key)
+        ai_always_include_msg_id = effective_config.AI_ALWAYS_INCLUDE_MSG_ID
+    except Exception:
+        pass
+
+    return ChatChannelDetail(
+        id=channel.id,
+        chat_key=channel.chat_key,
+        channel_name=channel.channel_name,
+        custom_channel_name=channel.get_custom_channel_name(),
+        is_active=channel.is_active,
+        status=channel.channel_status,
+        chat_type=channel.chat_type.value,
+        message_count=message_count,
+        unique_users=len(unique_users),
+        create_time=channel.create_time.strftime("%Y-%m-%d %H:%M:%S"),
+        update_time=channel.update_time.strftime("%Y-%m-%d %H:%M:%S"),
+        last_message_time=last_message_time.strftime("%Y-%m-%d %H:%M:%S") if last_message_time else None,
+        conversation_start_time=channel.conversation_start_time.strftime("%Y-%m-%d %H:%M:%S"),
+        preset_id=channel.preset_id,
+        can_send=can_send,
+        ai_always_include_msg_id=ai_always_include_msg_id,
+    )
+
+
+@router.get("/detail/{chat_key}", summary="获取聊天频道详情")
+@require_role(Role.Admin)
+async def get_chat_channel_detail(chat_key: str, _current_user: DBUser = Depends(get_current_active_user)) -> ChatChannelDetail:
+    """获取聊天频道详情"""
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+    return await _build_chat_channel_detail(channel)
+
+
+@router.post("/detail/{chat_key}/refresh", summary="刷新聊天频道信息", response_model=ChatChannelDetail)
+@require_role(Role.Admin)
+async def refresh_chat_channel_detail(
+    chat_key: str, _current_user: DBUser = Depends(get_current_active_user)
+) -> ChatChannelDetail:
+    """从平台实时同步频道名称并返回最新详情（适配器不支持或获取失败时保留原名称）"""
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+    # sync_channel_name 成功时更新内存实例并持久化（含 update_time），失败时不改动，实例始终与数据库一致
+    await channel.sync_channel_name()
+    return await _build_chat_channel_detail(channel)
+
+
+@router.post("/{chat_key}/active", summary="设置聊天频道激活状态")
+@require_role(Role.Admin)
+async def set_chat_channel_active(
+    chat_key: str,
+    is_active: bool,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ActionResponse:
+    """设置聊天频道激活状态（兼容旧接口）"""
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+
+    await channel.set_channel_status("active" if is_active else "disabled")
+    await channel_broadcaster.publish_update(
+        event_type="updated",
+        chat_key=channel.chat_key,
+        channel_name=channel.channel_name,
+        custom_channel_name=channel.get_custom_channel_name(),
+        is_active=channel.is_active,
+        status=channel.channel_status,
+    )
+    return ActionResponse(ok=True)
+
+
+@router.post("/{chat_key}/status", summary="设置聊天频道状态")
+@require_role(Role.Admin)
+async def set_chat_channel_status(
+    chat_key: str,
+    status: str,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ActionResponse:
+    """设置聊天频道状态
+
+    Args:
+        status: 频道状态，可选值: active（激活）, observe（旁观）, disabled（停用）
+    """
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+
+    from nekro_agent.models.db_chat_channel import ChannelStatus
+
+    try:
+        ChannelStatus(status)
+    except ValueError:
+        return ActionResponse(ok=False)
+
+    await channel.set_channel_status(status)
+    await channel_broadcaster.publish_update(
+        event_type="updated",
+        chat_key=channel.chat_key,
+        channel_name=channel.channel_name,
+        custom_channel_name=channel.get_custom_channel_name(),
+        is_active=channel.is_active,
+        status=channel.channel_status,
+    )
+    return ActionResponse(ok=True)
+
+
+@router.put("/{chat_key}/custom-name", summary="设置聊天频道自定义名称")
+@require_role(Role.Admin)
+async def set_chat_channel_custom_name(
+    chat_key: str,
+    payload: UpdateCustomChannelNameRequest,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ActionResponse:
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+
+    custom_channel_name = payload.custom_channel_name.strip() if payload.custom_channel_name else ""
+    if len(custom_channel_name) > 64:
+        raise ValidationError(reason="频道自定义名称不能超过 64 个字符")
+
+    await channel.set_custom_channel_name(custom_channel_name or None)
+    await channel_broadcaster.publish_update(
+        event_type="updated",
+        chat_key=channel.chat_key,
+        channel_name=channel.channel_name,
+        custom_channel_name=channel.get_custom_channel_name(),
+        is_active=channel.is_active,
+        status=channel.channel_status,
+    )
+    return ActionResponse(ok=True)
+
+
+@router.post("/{chat_key}/reset", summary="重置聊天频道状态")
+@require_role(Role.Admin)
+async def reset_chat_channel(
+    chat_key: str,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ActionResponse:
+    """重置聊天频道状态"""
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+
+    await channel.reset_channel()
+    return ActionResponse(ok=True)
+
+
+@router.get("/{chat_key}/messages", summary="获取聊天频道消息列表")
+@require_role(Role.Admin)
+async def get_chat_channel_messages(
+    chat_key: str,
+    before_id: Optional[int] = None,
+    page_size: int = 32,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ChatMessageListResponse:
+    """获取聊天频道消息列表"""
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+
+    query = DBChatMessage.filter(chat_key=chat_key, create_time__gte=channel.conversation_start_time)
+    if before_id:
+        query = query.filter(id__lt=before_id)
+
+    total = await query.count()
+    messages = await query.order_by("-id").limit(page_size)
+
+    def _parse_content_data(raw: str) -> List[Dict[str, Any]]:
+        try:
+            return json5.loads(raw) if raw else []
+        except Exception:
+            return []
+
+    def _safe_ref_msg_id(msg: DBChatMessage) -> str:
+        try:
+            return msg.ext_data_obj.ref_msg_id or ""
+        except (AttributeError, KeyError, ValueError) as e:
+            logger.debug(f"Failed to parse ref_msg_id for msg {msg.id}: {e}")
+            return ""
+
+    items: List[ChatMessage] = []
+    for msg in messages:
+        try:
+            items.append(
+                ChatMessage(
+                    id=msg.id,
+                    sender_id=str(msg.sender_id),
+                    sender_name=msg.sender_name,
+                    sender_nickname=msg.sender_nickname or msg.sender_name,
+                    platform_userid=msg.platform_userid or "",
+                    content=msg.content_text,
+                    content_data=_parse_content_data(msg.content_data),
+                    chat_key=msg.chat_key,
+                    create_time=msg.create_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    message_id=getattr(msg, "message_id", "") or "",
+                    ref_msg_id=_safe_ref_msg_id(msg),
+                )
+            )
+        except Exception:
+            logger.warning(f"构建消息响应失败, msg_id={msg.id}, 跳过")
+
+    return ChatMessageListResponse(total=total, items=items)
+
+
+@router.post("/{chat_key}/preset", summary="设置聊天频道人设")
+@require_role(Role.Admin)
+async def set_chat_channel_preset(
+    chat_key: str,
+    preset_id: Optional[int] = None,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ActionResponse:
+    """设置聊天频道人设，传入 preset_id=None 则使用默认人设"""
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+
+    await channel.set_preset(preset_id)
+    return ActionResponse(ok=True)
+
+
+class ChatChannelUser(BaseModel):
+    """聊天频道用户"""
+
+    platform_userid: str
+    nickname: str
+
+
+class ChatChannelUsersResponse(BaseModel):
+    """聊天频道用户列表"""
+
+    total: int
+    items: List[ChatChannelUser]
+
+
+@router.get("/{chat_key}/users", summary="获取聊天频道用户列表")
+async def get_chat_channel_users(
+    chat_key: str,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ChatChannelUsersResponse:
+    """获取聊天频道内的所有用户（按昵称）"""
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+
+    # 从消息表查询该频道的所有独特用户
+    messages = await DBChatMessage.filter(chat_key=chat_key).distinct().values_list('platform_userid', 'sender_nickname')
+
+    # 去重并排序
+    users_dict: Dict[str, str] = {}
+    for userid, nickname in messages:
+        if userid and userid != '-1' and nickname and nickname != 'SYSTEM':
+            users_dict[userid] = nickname
+
+    # 按昵称排序
+    items = [
+        ChatChannelUser(platform_userid=uid, nickname=nickname)
+        for uid, nickname in sorted(users_dict.items(), key=lambda x: x[1])
+    ]
+
+    return ChatChannelUsersResponse(total=len(items), items=items)
+
+
+class PokeRequest(BaseModel):
+    target_user_id: str
+
+
+@router.post("/{chat_key}/poke", summary="发送戳一戳")
+@require_role(Role.Admin)
+async def send_poke(
+    chat_key: str,
+    req: PokeRequest,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ActionResponse:
+    """双击头像触发戳一戳"""
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+
+    try:
+        adapter = get_adapter(channel.adapter_key)
+    except AdapterUnavailableError:
+        return ActionResponse(ok=False)
+
+    if not hasattr(adapter, "send_poke"):
+        return ActionResponse(ok=False)
+
+    ok = await adapter.send_poke(chat_key, req.target_user_id)
+    return ActionResponse(ok=ok)
+
+
+class ChatPluginDataItem(BaseModel):
+    id: int
+    plugin_key: str
+    data_key: str
+    data_value: str
+    target_user_id: str
+    create_time: str
+    update_time: str
+
+
+class ChatPluginDataResponse(BaseModel):
+    total: int
+    items: List[ChatPluginDataItem]
+    plugin_keys: List[str]
+    plugin_names: Dict[str, str]
+
+
+class UpdatePluginDataRequest(BaseModel):
+    data_value: str
+
+
+@router.get("/{chat_key}/plugin-data", summary="获取聊天频道的插件数据")
+@require_role(Role.Admin)
+async def get_chat_plugin_data(
+    chat_key: str,
+    plugin_key: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ChatPluginDataResponse:
+    """获取指定聊天频道下所有插件存储的数据"""
+    from nekro_agent.models.db_plugin_data import DBPluginData
+
+    query = DBPluginData.filter(target_chat_key=chat_key)
+    if plugin_key:
+        query = query.filter(plugin_key=plugin_key)
+
+    total = await query.count()
+    items = await query.order_by("-update_time").offset((page - 1) * page_size).limit(page_size)
+
+    # 获取该频道涉及的所有插件 key（用于前端筛选下拉）
+    all_keys = await DBPluginData.filter(target_chat_key=chat_key).distinct().values_list("plugin_key", flat=True)
+
+    # 构建 plugin_key → 插件显示名称的映射
+    from nekro_agent.services.plugin.collector import plugin_collector
+
+    plugin_names: Dict[str, str] = {}
+    for pk in all_keys:
+        plugin = plugin_collector.get_plugin(pk)
+        plugin_names[pk] = plugin.name if plugin else pk
+
+    return ChatPluginDataResponse(
+        total=total,
+        items=[
+            ChatPluginDataItem(
+                id=item.id,
+                plugin_key=item.plugin_key,
+                data_key=item.data_key,
+                data_value=item.data_value,
+                target_user_id=item.target_user_id,
+                create_time=item.create_time.strftime("%Y-%m-%d %H:%M:%S"),
+                update_time=item.update_time.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            for item in items
+        ],
+        plugin_keys=list(all_keys),
+        plugin_names=plugin_names,
+    )
+
+
+@router.put("/{chat_key}/plugin-data/{data_id}", summary="修改插件数据")
+@require_role(Role.Admin)
+async def update_chat_plugin_data(
+    chat_key: str,
+    data_id: int,
+    body: UpdatePluginDataRequest,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ActionResponse:
+    """修改指定聊天频道下的某条插件数据"""
+    from nekro_agent.models.db_plugin_data import DBPluginData
+
+    data = await DBPluginData.filter(id=data_id, target_chat_key=chat_key).first()
+    if not data:
+        raise NotFoundError(resource="插件数据")
+    data.data_value = body.data_value
+    await data.save(update_fields=["data_value"])
+    return ActionResponse(ok=True)
+
+
+@router.delete("/{chat_key}/plugin-data/{data_id}", summary="删除插件数据")
+@require_role(Role.Admin)
+async def delete_chat_plugin_data(
+    chat_key: str,
+    data_id: int,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ActionResponse:
+    """删除指定聊天频道下的某条插件数据"""
+    from nekro_agent.models.db_plugin_data import DBPluginData
+
+    data = await DBPluginData.filter(id=data_id, target_chat_key=chat_key).first()
+    if not data:
+        raise NotFoundError(resource="插件数据")
+    await data.delete()
+    return ActionResponse(ok=True)
+
+
+class SendMessageRequest(BaseModel):
+    message: str
+
+
+class SendMessageResponse(BaseModel):
+    ok: bool = True
+    error: str = ""
+
+
+class AnnouncementSendRequest(BaseModel):
+    chat_keys: List[str]
+    message: str
+
+
+class AnnouncementSendResultItem(BaseModel):
+    chat_key: str
+    channel_name: Optional[str]
+    ok: bool = True
+    error: str = ""
+
+
+class AnnouncementSendResponse(BaseModel):
+    ok: bool = True
+    total: int
+    success_count: int
+    failure_count: int
+    results: List[AnnouncementSendResultItem]
+
+
+async def _send_message_via_webui(
+    channel: DBChatChannel,
+    message: str,
+    file: Optional[UploadFile] = None,
+    sender_type: str = "bot",
+) -> SendMessageResponse:
+    """复用 WebUI 消息发送逻辑，供单发与批量发送共用。"""
+    chat_key = channel.chat_key
+
+    if sender_type not in {"bot", "system", "none"}:
+        return SendMessageResponse(ok=False, error="不支持的发送身份")
+
+    # system 类型不需要适配器转发，直接写入数据库
+    if sender_type == "system":
+        text = message.strip()
+        if not text:
+            return SendMessageResponse(ok=False, error="SYSTEM 消息内容不能为空")
+        try:
+            await message_service.push_system_message(
+                chat_key=chat_key,
+                agent_messages=text,
+                trigger_agent=True,
+                db_chat_channel=channel,
+            )
+            return SendMessageResponse(ok=True)
+        except Exception as e:
+            logger.error(f"WebUI 发送 SYSTEM 消息到 {chat_key} 失败: {e}")
+            return SendMessageResponse(ok=False, error=str(e))
+
+    # bot / none 类型需要适配器转发
+    try:
+        adapter = get_adapter(channel.adapter_key)
+        if not adapter.supports_webui_send:
+            return SendMessageResponse(ok=False, error="当前适配器不支持从 WebUI 发送消息")
+    except AdapterUnavailableError as e:
+        return SendMessageResponse(ok=False, error=str(e))
+
+    text = message.strip()
+
+    # none 类型：添加命令输出前缀，确保不进入上下文
+    if sender_type == "none" and text:
+        effective_config = await config_resolver.get_effective_config(chat_key)
+        text = f"{effective_config.AI_COMMAND_OUTPUT_PREFIX}{text}"
+
+    if not text and not file:
+        return SendMessageResponse(ok=False, error="消息内容不能为空")
+
+    try:
+        from nekro_agent.services.chat.universal_chat_service import universal_chat_service
+
+        segments: list[AgentMessageSegment] = []
+
+        if text:
+            segments.append(AgentMessageSegment(type=AgentMessageSegmentType.TEXT, content=text))
+
+        is_file_mode = False
+        if file and file.filename:
+            safe_chat_key = sanitize_chat_key_for_path(Path(chat_key).name)
+            safe_filename = Path(file.filename).name
+            upload_dir = Path(USER_UPLOAD_DIR) / safe_chat_key
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            save_path = upload_dir / safe_filename
+            max_upload_size = 100 * 1024 * 1024
+            total_size = 0
+            with save_path.open("wb") as f:
+                while chunk := await file.read(1024 * 1024):
+                    total_size += len(chunk)
+                    if total_size > max_upload_size:
+                        save_path.unlink(missing_ok=True)
+                        return SendMessageResponse(ok=False, error="文件大小超过 100MB 限制")
+                    f.write(chunk)
+            segments.append(AgentMessageSegment(type=AgentMessageSegmentType.FILE, content=f"/app/uploads/{safe_filename}"))
+            is_file_mode = not (file.content_type or "").startswith("image/")
+
+        await universal_chat_service.send_agent_message(
+            chat_key=chat_key,
+            messages=segments,
+            adapter=adapter,
+            record=sender_type != "none",
+            file_mode=is_file_mode,
+        )
+        return SendMessageResponse(ok=True)
+    except Exception as e:
+        logger.error(f"WebUI 发送消息到 {chat_key} 失败: {e}")
+        return SendMessageResponse(ok=False, error=str(e))
+
+
+@router.post("/announcement/send", summary="批量发送机器人公告消息")
+@require_role(Role.Admin)
+async def send_bot_announcement(
+    body: AnnouncementSendRequest,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> AnnouncementSendResponse:
+    """批量向多个聊天频道发送机器人公告。"""
+    chat_keys = list(dict.fromkeys(chat_key.strip() for chat_key in body.chat_keys if chat_key.strip()))
+    if not chat_keys:
+        raise ValidationError(reason="至少选择一个聊天频道")
+
+    message = body.message.strip()
+    if not message:
+        raise ValidationError(reason="消息内容不能为空")
+
+    channels = await DBChatChannel.filter(chat_key__in=chat_keys)
+    channel_map = {channel.chat_key: channel for channel in channels}
+    results: List[AnnouncementSendResultItem] = []
+
+    for index, chat_key in enumerate(chat_keys):
+        channel = channel_map.get(chat_key)
+        if not channel:
+            results.append(
+                AnnouncementSendResultItem(
+                    chat_key=chat_key,
+                    channel_name=None,
+                    ok=False,
+                    error="聊天频道不存在",
+                )
+            )
+            continue
+
+        if index > 0:
+            delay_seconds = random.uniform(1, 5)
+            logger.info(f"批量公告等待 {delay_seconds:.2f}s 后发送到 {chat_key}")
+            await asyncio.sleep(delay_seconds)
+
+        result = await _send_message_via_webui(
+            channel=channel,
+            message=message,
+            sender_type="none",
+        )
+        results.append(
+            AnnouncementSendResultItem(
+                chat_key=chat_key,
+                channel_name=channel.channel_name,
+                ok=result.ok,
+                error=result.error,
+            )
+        )
+
+    success_count = sum(1 for item in results if item.ok)
+    failure_count = len(results) - success_count
+
+    return AnnouncementSendResponse(
+        ok=failure_count == 0,
+        total=len(results),
+        success_count=success_count,
+        failure_count=failure_count,
+        results=results,
+    )
+
+
+@router.post("/{chat_key}/send", summary="向聊天频道发送消息")
+@require_role(Role.Admin)
+async def send_message_to_channel(
+    chat_key: str,
+    message: str = Form(default=""),
+    file: Optional[UploadFile] = File(default=None),
+    sender_type: str = Form(default="bot"),
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> SendMessageResponse:
+    """从 WebUI 向聊天频道发送消息（支持文本和/或文件）
+
+    sender_type:
+        - bot: 以机器人身份发送（默认）
+        - system: 以 SYSTEM 身份发送，类似节日祝福触发
+        - none: 消息带 ≡NA≡ 前缀，不进入上下文
+    """
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+
+    return await _send_message_via_webui(
+        channel=channel,
+        message=message,
+        file=file,
+        sender_type=sender_type,
+    )
+
+
+@router.get("/{chat_key}/stream", summary="获取聊天频道消息实时流")
+@require_role(Role.Admin)
+async def stream_chat_channel_messages(
+    chat_key: str,
+    request: Request,
+    _current_user: DBUser = Depends(get_current_active_user),
+):
+    """获取聊天频道消息的实时流，使用 Server-Sent Events (SSE)
+
+    Args:
+        chat_key: 聊天频道唯一标识
+
+    Returns:
+        StreamingResponse: SSE 流，每条新消息作为一个事件
+
+    Raises:
+        NotFoundError: 当频道不存在时
+    """
+    import json
+
+    from nekro_agent.services.message_broadcaster import message_broadcaster
+    from nekro_agent.services.runtime_state import is_shutting_down
+
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+
+    async def event_generator():
+        """生成 SSE 事件流"""
+        subscription = message_broadcaster.subscribe(chat_key)
+        try:
+            while not is_shutting_down():
+                if await request.is_disconnected():
+                    return
+                try:
+                    message = await subscription.get(timeout=1.0)
+                except asyncio.TimeoutError:
+                    yield {"comment": "ping"}
+                    continue
+
+                # 直接使用广播的消息对象，转换为可序列化的字典格式
+                try:
+                    content_data = []
+                    if message.content_data:
+                        if isinstance(message.content_data, str):
+                            try:
+                                content_data = json5.loads(message.content_data)
+                            except Exception:
+                                content_data = []
+                        elif isinstance(message.content_data, list):
+                            for item in message.content_data:
+                                if hasattr(item, 'model_dump'):
+                                    content_data.append(item.model_dump())
+                                elif isinstance(item, dict):
+                                    content_data.append(item)
+                                else:
+                                    content_data.append(str(item))
+
+                    message_dict = {
+                        "id": getattr(message, 'message_id', '') or str(hash(message.message_id + str(message.send_timestamp))),
+                        "sender_id": str(message.sender_id),
+                        "sender_name": message.sender_name,
+                        "sender_nickname": message.sender_nickname or message.sender_name,
+                        "platform_userid": message.platform_userid or "",
+                        "content": message.content_text,
+                        "content_data": content_data,
+                        "chat_key": message.chat_key,
+                        "create_time": "",
+                        "message_id": message.message_id or "",
+                        "ref_msg_id": getattr(message, "ref_msg_id", "") or "",
+                    }
+
+                    yield {"data": json.dumps(message_dict, ensure_ascii=False)}
+                except Exception as e:
+                    logger.error(f"SSE消息序列化失败: {e}")
+                    continue
+        finally:
+            subscription.close()
+
+    return EventSourceResponse(
+        event_generator(),
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/{chat_key}/delete-preview", summary="获取频道删除预览")
+@require_role(Role.Admin)
+async def get_channel_delete_preview(
+    chat_key: str,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ChannelDeletePreview:
+    """获取指定频道的删除预览信息，包含将被删除的各类资源统计"""
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+
+    msg_count, timer_count, plugin_count, para_count, ep_count = await asyncio.gather(
+        DBChatMessage.filter(chat_key=chat_key).count(),
+        DBRecurringTimerJob.filter(chat_key=chat_key).count(),
+        DBPluginData.filter(target_chat_key=chat_key).count(),
+        DBMemParagraph.filter(origin_chat_key=chat_key).count(),
+        DBMemEpisode.filter(origin_chat_key=chat_key).count(),
+    )
+
+    upload_dir = Path(USER_UPLOAD_DIR) / sanitize_chat_key_for_path(chat_key)
+    sandbox_dir = Path(SANDBOX_SHARED_HOST_DIR) / f"sandbox_{sanitize_chat_key_for_path(chat_key)}"
+
+    return ChannelDeletePreview(
+        message_count=msg_count,
+        timer_job_count=timer_count,
+        plugin_data_count=plugin_count,
+        mem_paragraph_count=para_count,
+        mem_episode_count=ep_count,
+        upload_dir_exists=upload_dir.exists(),
+        sandbox_dir_exists=sandbox_dir.exists(),
+    )
+
+
+@router.delete("/{chat_key}", summary="永久删除频道")
+@require_role(Role.Admin)
+async def delete_chat_channel(
+    chat_key: str,
+    _current_user: DBUser = Depends(get_current_active_user),
+) -> ActionResponse:
+    """永久删除指定频道及其所有关联数据，包括消息、定时任务、插件数据及文件目录"""
+    channel = await DBChatChannel.filter(chat_key=chat_key).first()
+    if not channel:
+        raise NotFoundError(resource="聊天频道")
+
+    # 1. 立即删除定时任务，防止继续消耗 token
+    await DBRecurringTimerJob.filter(chat_key=chat_key).delete()
+
+    # 2. 删除插件数据
+    await DBPluginData.filter(target_chat_key=chat_key).delete()
+
+    # 3. 记忆数据保留，仅清除来源频道标识
+    await DBMemParagraph.filter(origin_chat_key=chat_key).update(origin_chat_key=None)
+    await DBMemEpisode.filter(origin_chat_key=chat_key).update(origin_chat_key=None)
+
+    # 4. 分批删除消息，防止大频道超时
+    while await DBChatMessage.filter(chat_key=chat_key).limit(1000).delete():
+        pass
+
+    # 5. 删除频道主记录
+    await DBChatChannel.filter(chat_key=chat_key).delete()
+
+    # 6. 清理文件系统（容错处理）
+    upload_dir = Path(USER_UPLOAD_DIR) / sanitize_chat_key_for_path(chat_key)
+    if upload_dir.exists():
+        try:
+            shutil.rmtree(upload_dir)
+        except Exception as e:
+            logger.warning(f"清理频道上传目录失败 {upload_dir}: {e}")
+
+    sandbox_dir = Path(SANDBOX_SHARED_HOST_DIR) / f"sandbox_{sanitize_chat_key_for_path(chat_key)}"
+    if sandbox_dir.exists():
+        try:
+            shutil.rmtree(sandbox_dir)
+        except Exception as e:
+            logger.warning(f"清理频道沙盒目录失败 {sandbox_dir}: {e}")
+
+    # 7. 广播 SSE 删除事件，前端自动更新频道列表
+    from nekro_agent.services.channel_broadcaster import channel_broadcaster
+
+    await channel_broadcaster.publish_update(event_type="deleted", chat_key=chat_key)
+
+    return ActionResponse(ok=True)

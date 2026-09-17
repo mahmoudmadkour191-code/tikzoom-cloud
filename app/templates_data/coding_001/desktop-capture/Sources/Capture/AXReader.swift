@@ -1,0 +1,462 @@
+import AppKit
+import ApplicationServices
+
+/// Reads the currently focused app + window + element via the macOS
+/// Accessibility API. Returns nil when AX permission is denied or no app is
+/// frontmost (rare).
+///
+/// Text strategy:
+///   1. Poke the app element with the Chromium/WebKit "screen reader is
+///      active" flags so Electron/browser apps materialize their full AX
+///      tree. Cached per-pid to avoid paying the tree rebuild every poll.
+///   2. Grab the focused element's `AXValue` / `AXSelectedText` first — that's
+///      the highest-signal source (what the user is actively typing/selecting).
+///   3. Walk the focused *window* with a bounded budget (node count, depth,
+///      *and* wall-clock) to harvest visible text + an `AXURL` from any
+///      `AXWebArea` descendant. Decorative roles are skipped entirely.
+///   4. The persisted `textExcerpt` prefers the focused-element text when
+///      present; otherwise it falls back to the harvested window text.
+enum AXReader {
+    // Walk budgets — tuned for "responsive enough on a Comet/Chrome window
+    // with a real page loaded, but rich enough that Electron apps (Slack,
+    // Cursor, Notion, Discord) actually yield their content instead of
+    // running out of node budget on chrome before reaching the pane".
+    // Bigger DOMs simply truncate.
+    private static let maxTextChars = 4000
+    private static let maxNodes = 1500
+    private static let maxDepth = 20
+    /// Per-element AX messaging timeout. Default is ~6s, which is way too
+    /// long for our 5-10s capture cadence.
+    private static let messagingTimeoutSeconds: Float = 0.3
+    /// Total wall-clock budget for the window walk. A pathological slow app
+    /// could otherwise burn `maxNodes × messagingTimeoutSeconds` seconds on
+    /// the main thread. Screenpipe's equivalent default is 250ms — we give
+    /// ourselves a little more headroom.
+    private static let walkBudgetSeconds: CFTimeInterval = 0.3
+
+    /// Decorative AX roles whose subtrees never contain content the user
+    /// would want logged. Skipping these frees node budget for the real
+    /// content pane in Electron/Chromium apps that spam the AX tree with
+    /// scrollbars, images, toolbars, and progress indicators. Derived from
+    /// Screenpipe's `macos.rs` (crates/screenpipe-a11y).
+    private static let decorativeRoles: Set<String> = [
+        "AXScrollBar",
+        "AXImage",
+        "AXSplitter",
+        "AXGrowArea",
+        "AXMenuBar",
+        "AXMenu",
+        "AXToolbar",
+        "AXRuler",
+        "AXBusyIndicator",
+        "AXProgressIndicator",
+        "AXLayoutItem",
+    ]
+
+    /// Roles that actually carry user-visible content. Collecting text
+    /// ONLY from these (instead of every node) cuts noise dramatically:
+    /// container `AXTitle` / `AXDescription` strings often duplicate their
+    /// children's labels ("Memory usage - 186 MB" in every tab cell,
+    /// "Close" on every sidebar row, etc.). Screenpipe uses the same
+    /// allowlist. Everything else still gets walked (so we descend through
+    /// `AXGroup`, `AXWebArea`, etc. to reach these leaves), we just don't
+    /// harvest text *from* the container nodes.
+    private static let contentRoles: Set<String> = [
+        "AXStaticText",
+        "AXTextField",
+        "AXTextArea",
+        "AXButton",
+        "AXMenuItem",
+        "AXCell",
+        "AXHeading",
+        "AXLink",
+        "AXPopUpButton",
+        "AXComboBox",
+        "AXCheckBox",
+        "AXRadioButton",
+        "AXTab",
+    ]
+
+    /// Container title/description/role-description strings (lowercased)
+    /// that indicate a sidebar or navigation region whose descendant text
+    /// is chrome, not user content. Skipping the subtree under one of these
+    /// stops the left rail of Maestri / Bloome / Termius from dominating
+    /// the capture while the main pane contains the actual work.
+    /// Multi-lingual since Electron apps localize these strings.
+    private static let sidebarContainerLabels: Set<String> = [
+        "sidebar", "side bar", "navigator", "navigation", "nav",
+        "边栏", "侧边栏", "导航", "导航栏",
+        "サイドバー", "ナビゲーション",
+        "사이드바",
+        "barre latérale",
+        "seitenleiste",
+        "barra lateral",
+    ]
+
+    /// Per-pid TTL for the "enhanced UI" flag poke. Chromium-based apps
+    /// materialize their full AX tree when they see `AXEnhancedUserInterface`
+    /// go true, but rebuilding that tree is expensive, so we only poke once
+    /// every few minutes per pid. The flag stays on between pokes; the TTL
+    /// is just "don't re-set it every sample".
+    private static let enhanceTTL: TimeInterval = 180
+    private static var enhancedAt: [pid_t: Date] = [:]
+
+    static func currentSnapshot() -> ContextSnapshot? {
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            return nil
+        }
+
+        let appName = app.localizedName ?? "Unknown"
+        let bundleID = app.bundleIdentifier ?? ""
+        let pid = app.processIdentifier
+        let axApp = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(axApp, messagingTimeoutSeconds)
+        enhanceChromiumIfNeeded(axApp: axApp, pid: pid)
+
+        let window = copyElement(axApp, kAXFocusedWindowAttribute)
+        let title = window.flatMap { copyString($0, kAXTitleAttribute) } ?? ""
+
+        var role = ""
+        var focusedText = ""
+        if let focusedElement = copyElement(axApp, kAXFocusedUIElementAttribute) {
+            role = copyString(focusedElement, kAXRoleAttribute) ?? ""
+            focusedText = extractTextSafely(from: focusedElement, role: role) ?? ""
+        }
+
+        // Walk the window for richer context (page text + URL). Even when
+        // focusedText is non-empty we still want the URL, so the walk runs
+        // in both cases — it short-circuits on its own budget.
+        var url = ""
+        var harvested = ""
+        if let w = window {
+            AXUIElementSetMessagingTimeout(w, messagingTimeoutSeconds)
+            // Try the Safari/Chrome/Edge fast path: the window itself exposes
+            // `AXDocument` (a URL string) without having to descend into the
+            // web tree at all. Saves hundreds of nodes on browser windows.
+            if let docURL = copyString(w, "AXDocument") {
+                url = docURL
+            }
+            let deadline = CFAbsoluteTimeGetCurrent() + walkBudgetSeconds
+            // Browser mode: if the window has an AXWebArea descendant, only
+            // walk that subtree. Otherwise the tab strip / bookmarks bar /
+            // memory-usage labels dominate the 1500-node budget and the
+            // page content gets cut off. Chromium's tree is:
+            //   AXWindow → AXToolbar (tabs) → AXGroup → AXWebArea → page
+            // so we probe a few levels deep to find the web area before
+            // giving up and walking the whole window.
+            var collector = TextCollector(limit: maxTextChars, nodeBudget: maxNodes)
+            if let webArea = findWebArea(from: w, deadline: deadline) {
+                if url.isEmpty, let s = copyURLString(webArea, kAXURLAttribute) {
+                    url = s
+                }
+                walk(webArea, depth: 0, collector: &collector, urlOut: &url, deadline: deadline)
+            } else {
+                walk(w, depth: 0, collector: &collector, urlOut: &url, deadline: deadline)
+            }
+            harvested = collector.text
+        }
+
+        // Pick the source with more text. Previously we always preferred
+        // focused-element text on the theory that "active typing context"
+        // is highest signal — but a focused empty input exposes only its
+        // placeholder (Feishu's "发送给 Bloome", 16 chars of zero-width
+        // padding, a search box's "Search", etc.), which would beat a
+        // 1000-char harvested window walk. Whichever is longer is almost
+        // always the better work-log entry.
+        let text = harvested.count > focusedText.count ? harvested : focusedText
+
+        return ContextSnapshot(
+            app: appName,
+            bundleID: bundleID,
+            windowTitle: title,
+            url: url,
+            textExcerpt: text,
+            axRole: role,
+            capturedAt: Date()
+        )
+    }
+
+    /// Returns true if the app has been granted Accessibility access. Pass
+    /// `prompt: true` once at startup to nudge the user into System Settings.
+    static func isAccessibilityTrusted(prompt: Bool = false) -> Bool {
+        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        let options = [key: prompt] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
+    }
+
+    // MARK: - Chromium / WebKit tree materialization
+
+    /// The single biggest lever for Electron and WebKit-backed apps. Without
+    /// these flags Chromium returns a stripped AX tree with ~none of the
+    /// content; with them the full tree materializes. Refs:
+    ///   - Chromium codereview.chromium.org/6909013
+    ///   - electron/electron#7206
+    ///   - obsidianmd/obsidian-releases#3002 (needs AXManualAccessibility)
+    /// Safe to call on non-Chromium apps — they ignore unknown attributes.
+    private static func enhanceChromiumIfNeeded(axApp: AXUIElement, pid: pid_t) {
+        let now = Date()
+        if let last = enhancedAt[pid], now.timeIntervalSince(last) < enhanceTTL {
+            return
+        }
+        enhancedAt[pid] = now
+        setBool(axApp, "AXEnhancedUserInterface", true)
+        setBool(axApp, "AXManualAccessibility", true)
+    }
+
+    private static func setBool(_ element: AXUIElement, _ attribute: String, _ value: Bool) {
+        let cfValue = value as CFBoolean
+        _ = AXUIElementSetAttributeValue(element, attribute as CFString, cfValue)
+    }
+
+    // MARK: - Browser shortcut
+
+    /// BFS the first ~80 elements under `root` looking for an `AXWebArea`.
+    /// Chromium puts the web area 3-4 levels deep (AXWindow → AXGroup →
+    /// AXTabGroup → AXWebArea), so a shallow BFS finds it fast without
+    /// spending the main walk budget. Returns nil on non-browser windows.
+    private static func findWebArea(from root: AXUIElement, deadline: CFAbsoluteTime) -> AXUIElement? {
+        var queue: [AXUIElement] = [root]
+        var budget = 80
+        while !queue.isEmpty, budget > 0 {
+            if CFAbsoluteTimeGetCurrent() > deadline { return nil }
+            let el = queue.removeFirst()
+            budget -= 1
+            let role = copyString(el, kAXRoleAttribute) ?? ""
+            if role == "AXWebArea" { return el }
+            if decorativeRoles.contains(role) { continue }
+            if let kids = copyChildren(el) {
+                queue.append(contentsOf: kids)
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Tree walk
+
+    /// Bounded text accumulator with duplicate suppression. Stops once
+    /// `limit` chars or `nodeBudget` elements have been consumed so a
+    /// 50k-node browser DOM can't stall us.
+    ///
+    /// The `seen` set catches the "same label repeated across every row
+    /// of a list" problem — e.g. every Comet tab cell has a "Close" button
+    /// and a "Memory usage" `AXDescription`, and without dedup we collect
+    /// ~30 copies before running out of budget.
+    private struct TextCollector {
+        let limit: Int
+        var nodeBudget: Int
+        private var pieces: [String] = []
+        private var charCount = 0
+        private var seen: Set<String> = []
+
+        init(limit: Int, nodeBudget: Int) {
+            self.limit = limit
+            self.nodeBudget = nodeBudget
+        }
+
+        var text: String { pieces.joined(separator: " ") }
+        var done: Bool { charCount >= limit || nodeBudget <= 0 }
+
+        mutating func consumeNode() { nodeBudget -= 1 }
+
+        mutating func add(_ s: String?) {
+            guard let raw = s else { return }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Skip noise: single-char labels, glyphs, empty strings, and
+            // strings we've already recorded this walk (dedup).
+            guard trimmed.count > 1 else { return }
+            if seen.contains(trimmed) { return }
+            // Drop C++/Electron debug leaks like "ContentsView ClientView
+            // MainWidgetDelegateView TabContensView MultiWebView" — these
+            // are native view-class names bubbling up through AXDescription
+            // on Electron windows and contain zero user content.
+            if AXReader.looksLikeElectronClassNames(trimmed) { return }
+            let remaining = limit - charCount
+            if remaining <= 0 { return }
+            let slice = trimmed.count <= remaining ? trimmed : String(trimmed.prefix(remaining))
+            pieces.append(slice)
+            // Only dedup by full original string — partial slices of long
+            // text shouldn't block a future verbatim repeat. Cap the seen
+            // set size to bound memory on huge trees.
+            if seen.count < 2000 {
+                seen.insert(trimmed)
+            }
+            charCount += slice.count
+        }
+    }
+
+    private static func walk(
+        _ element: AXUIElement,
+        depth: Int,
+        collector: inout TextCollector,
+        urlOut: inout String,
+        deadline: CFAbsoluteTime
+    ) {
+        if collector.done || depth > maxDepth { return }
+        if CFAbsoluteTimeGetCurrent() > deadline { return }
+        collector.consumeNode()
+
+        let role = copyString(element, kAXRoleAttribute) ?? ""
+        // Don't descend into masked password fields, even structurally —
+        // their value is already nil but the role itself signals intent.
+        if PrivacyFilter.blockedAXRoles.contains(role) { return }
+        // Decorative subtrees: skip the whole branch, don't just skip this
+        // node. Their descendants are also noise.
+        if decorativeRoles.contains(role) { return }
+        // Sidebar / navigation subtrees. macOS native apps often expose
+        // `AXSubrole == AXSideBar` (Finder, Mail, Xcode) — trivial skip.
+        // Electron apps usually don't, but many DO label the container's
+        // `AXTitle` / `AXDescription` / `AXRoleDescription` with the
+        // localized word for "sidebar" / "navigation" (Maestri's "边栏",
+        // Bloome's "Navigator", etc.), which we match case-insensitively.
+        // Matching on the CONTAINER, not the text, means we only lose the
+        // chrome labels — legitimate mentions of "sidebar" elsewhere in
+        // the main content are unaffected.
+        if let subrole = copyString(element, kAXSubroleAttribute), subrole == "AXSideBar" {
+            return
+        }
+        if isSidebarContainer(element) { return }
+
+        // URL — most browsers expose AXWebArea with kAXURLAttribute. Only
+        // keep the first one we find; nested iframes can spam. Cheaper
+        // `AXDocument` on the window is tried before the walk even starts.
+        if urlOut.isEmpty, role == "AXWebArea" {
+            if let s = copyURLString(element, kAXURLAttribute) {
+                urlOut = s
+            }
+        }
+
+        // Text — only harvest from content-bearing roles. Container roles
+        // like AXGroup / AXWebArea / AXSplitGroup often carry AXTitle /
+        // AXDescription strings that duplicate their children's labels,
+        // which dominates the collected text with noise. The walk still
+        // descends through these roles — we just don't collect text *from*
+        // them. For text-leaf roles, AXValue is the most authoritative;
+        // fall back to AXTitle and then AXSelectedText (many Electron
+        // editors only expose text via the current selection).
+        if contentRoles.contains(role) {
+            if let v = copyString(element, kAXValueAttribute) {
+                collector.add(v)
+            } else if let t = copyString(element, kAXTitleAttribute) {
+                collector.add(t)
+            } else if let sel = copyString(element, kAXSelectedTextAttribute) {
+                collector.add(sel)
+            }
+            if let d = copyString(element, kAXDescriptionAttribute) {
+                collector.add(d)
+            }
+        }
+
+        // Always use kAXChildrenAttribute. The prior kAXVisibleChildrenAttribute
+        // pre-fetch cost an extra IPC round-trip per element and Electron apps
+        // routinely return [] for visible children even when the content IS
+        // visible, so it was net-negative. Screenpipe also walks children
+        // directly.
+        guard let kids = copyChildren(element) else { return }
+        for child in kids {
+            if collector.done { return }
+            if CFAbsoluteTimeGetCurrent() > deadline { return }
+            walk(child, depth: depth + 1, collector: &collector, urlOut: &urlOut, deadline: deadline)
+        }
+    }
+
+    // MARK: - Container / string heuristics
+
+    /// True when the element's title, description, or role-description
+    /// (lowercased) matches a known sidebar/navigation label in any of a
+    /// few major locales. Checked against a small fixed set; unknown
+    /// languages fall through and the subtree still gets walked normally.
+    private static func isSidebarContainer(_ element: AXUIElement) -> Bool {
+        let candidates = [
+            copyString(element, kAXTitleAttribute),
+            copyString(element, kAXDescriptionAttribute),
+            copyString(element, kAXRoleDescriptionAttribute),
+        ]
+        for raw in candidates {
+            guard let s = raw else { continue }
+            let norm = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if norm.isEmpty { continue }
+            if sidebarContainerLabels.contains(norm) { return true }
+        }
+        return false
+    }
+
+    /// Detects strings that are entirely whitespace-separated C++/Obj-C
+    /// view-class identifiers, e.g. "ContentsView ClientView MainWidget
+    /// DelegateView TabContensView MultiWebView". These leak out of
+    /// Electron / Chromium / Qt windows through `AXDescription` on the
+    /// root window or a top-level group, and are pure noise.
+    ///
+    /// A token qualifies if it is a CamelCase alphabetic identifier
+    /// ending in one of the common UI-class suffixes (View / Widget /
+    /// Delegate / Panel / Controller / Host / Container / Manager).
+    /// Requires ≥2 such tokens to avoid false-positives on ordinary
+    /// capitalized words like "PreView".
+    static func looksLikeElectronClassNames(_ s: String) -> Bool {
+        let tokens = s.split { $0.isWhitespace }
+        guard tokens.count >= 2 else { return false }
+        let suffixes = ["View", "Widget", "Delegate", "Panel", "Controller", "Host", "Container", "Manager"]
+        for tok in tokens {
+            let t = String(tok)
+            guard let first = t.first, first.isUppercase else { return false }
+            guard t.allSatisfy({ $0.isLetter }) else { return false }
+            var matched = false
+            for suf in suffixes where t.hasSuffix(suf) {
+                matched = true
+                break
+            }
+            if !matched { return false }
+        }
+        return true
+    }
+
+    // MARK: - Attribute helpers
+
+    private static func copyElement(_ parent: AXUIElement, _ attribute: String) -> AXUIElement? {
+        var value: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(parent, attribute as CFString, &value)
+        guard status == .success, let value else { return nil }
+        guard CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return (value as! AXUIElement)
+    }
+
+    private static func copyString(_ element: AXUIElement, _ attribute: String) -> String? {
+        var value: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard status == .success, let value else { return nil }
+        return value as? String
+    }
+
+    /// Read `kAXURLAttribute` style values which come back as CFURL, not String.
+    private static func copyURLString(_ element: AXUIElement, _ attribute: String) -> String? {
+        var value: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard status == .success, let value else { return nil }
+        if CFGetTypeID(value) == CFURLGetTypeID() {
+            return (value as! NSURL).absoluteString
+        }
+        return value as? String
+    }
+
+    private static func copyChildren(_ element: AXUIElement) -> [AXUIElement]? {
+        var value: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value)
+        guard status == .success, let value else { return nil }
+        guard CFGetTypeID(value) == CFArrayGetTypeID() else { return nil }
+        let arr = value as! [AXUIElement]
+        return arr.isEmpty ? nil : arr
+    }
+
+    /// Pull text from a focused element. Skips secure fields outright.
+    private static func extractTextSafely(from element: AXUIElement, role: String) -> String? {
+        if PrivacyFilter.blockedAXRoles.contains(role) {
+            return nil
+        }
+        if let v = copyString(element, kAXValueAttribute) {
+            return v
+        }
+        if let v = copyString(element, kAXSelectedTextAttribute) {
+            return v
+        }
+        return nil
+    }
+}

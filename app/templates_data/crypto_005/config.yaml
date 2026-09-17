@@ -1,0 +1,83 @@
+# invest-alert-bot — Author: Shijie Zheng (Kerry Zheng)
+# https://github.com/Formyselfonly/invest-alert-bot
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  chat_id: "${TELEGRAM_CHAT_ID}"
+
+symbols:
+  # ── 加密货币：Binance U 本位合约 ──
+  - symbol: BTC/USDT
+    source: binance
+    market: futures
+    intervals: [4h, 1d, 1wk]
+
+  - symbol: ETH/USDT
+    source: binance
+    market: futures
+    intervals: [4h, 1d, 1wk]
+
+  - symbol: SOL/USDT
+    source: binance
+    market: futures
+    intervals: [4h, 1d, 1wk]
+
+  - symbol: BNB/USDT
+    source: binance
+    market: futures
+    intervals: [4h, 1d, 1wk]
+
+  - symbol: HYPE/USDT
+    source: binance
+    market: futures
+    intervals: [4h, 1d, 1wk]
+
+  # ── 美股 / ETF / 黄金（Yahoo Finance）──
+  - symbol: MSTR
+    source: nasdaq
+    intervals: [4h, 1d, 1wk]
+
+  - symbol: CRCL
+    source: nasdaq
+    intervals: [4h, 1d, 1wk]
+
+  - symbol: QQQ
+    source: nasdaq
+    intervals: [4h, 1d, 1wk]
+
+  - symbol: VOO
+    source: nasdaq
+    intervals: [4h, 1d, 1wk]
+
+  - symbol: GOOGL
+    source: nasdaq
+    intervals: [4h, 1d, 1wk]
+
+  - symbol: NVDA
+    source: nasdaq
+    intervals: [4h, 1d, 1wk]
+
+  - symbol: MSFT
+    source: nasdaq
+    intervals: [4h, 1d, 1wk]
+
+  - symbol: XAU
+    source: nasdaq
+    ticker: GC=F
+    intervals: [4h, 1d, 1wk]
+
+thresholds:
+  cluster: 0.008    # 密集告警：0.8%
+  touch: 0.012     # 触碰告警：1.2%
+
+alert:
+  cooldown_seconds: 14400   # 4 小时：同一 (symbol, interval, alert_type) 不重复推送
+  dedupe_window_seconds: 60
+
+polling:
+  yfinance_interval_seconds: 300   # nasdaq / yfinance 轮询间隔（秒）
+
+logging:
+  level: INFO
+  file: logs/app.log
+  max_bytes: 10485760
+  backup_count: 5

@@ -1,0 +1,40 @@
+from enum import StrEnum
+
+from aiogram.filters.callback_data import CallbackData
+
+from .utils.periods import LastFMPeriod  # ruff: ignore[typing-only-first-party-import]
+
+
+class LastFMMode(StrEnum):
+    COMPACT = "c"
+    EXPANDED = "e"
+
+
+class LastFMViewCallback(CallbackData, prefix="lfmv"):
+    u: str
+    m: LastFMMode
+    uid: int
+
+
+class LastFMRefreshCallback(CallbackData, prefix="lfmr"):
+    u: str
+    m: LastFMMode
+    uid: int
+
+
+class LastFMAlbumRefreshCallback(CallbackData, prefix="lfmar"):
+    u: str
+    uid: int
+
+
+class LastFMArtistRefreshCallback(CallbackData, prefix="lfmtr"):
+    u: str
+    uid: int
+
+
+class LastFMCollageCallback(CallbackData, prefix="lfmco"):
+    uid: int
+    tid: int
+    s: int
+    p: LastFMPeriod
+    t: int

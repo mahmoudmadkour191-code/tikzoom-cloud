@@ -1,0 +1,1656 @@
+{
+  "status": {
+    "active": "Running",
+    "stopped": "Stopped",
+    "failed": "Error",
+    "deleting": "Deleting"
+  },
+  "policy": {
+    "agent": "Agent",
+    "relaxed": "Relaxed",
+    "strict": "Strict"
+  },
+  "statusChip": {
+    "active": "Claude Code Sandbox"
+  },
+  "list": {
+    "sectionTitle": "CC Workspaces",
+    "total": "{{count}} total",
+    "createBtn": "Create Workspace",
+    "loadError": "Failed to load workspaces: {{message}}",
+    "statCards": {
+      "total": "All Workspaces",
+      "active": "Running",
+      "stopped": "Stopped",
+      "failed": "Error"
+    },
+    "empty": {
+      "title": "No Workspaces",
+      "hint": "Click \"Create Workspace\" to get started"
+    },
+    "batchSelect": "Batch Select",
+    "selectAll": "Select All",
+    "deselectAll": "Deselect All",
+    "batchBar": {
+      "selected": "{{count}} selected",
+      "cancel": "Cancel",
+      "start": "Start",
+      "stop": "Stop",
+      "restart": "Restart",
+      "rebuild": "Rebuild",
+      "resetSession": "Reset Session",
+      "setPreset": "Set Model Group"
+    },
+    "batchConfirm": {
+      "title": "Confirm Batch Operation",
+      "content": "Apply \"{{op}}\" to {{count}} selected workspaces?",
+      "cancel": "Cancel",
+      "confirm": "Confirm"
+    },
+    "batchPreset": {
+      "title": "Batch Set CC Model Group",
+      "hint": "Apply the same CC model group to {{count}} selected workspaces. Leave empty to clear existing binding.",
+      "selectLabel": "CC Model Group",
+      "clearHint": "Leave empty to clear binding",
+      "noPresets": "No model groups available",
+      "cancel": "Cancel",
+      "confirm": "Apply",
+      "success": "Successfully updated model group for {{count}} workspaces"
+    }
+  },
+  "card": {
+    "noDescription": "No description",
+    "defaultImage": "Default Image",
+    "image": "Image",
+    "container": "Container",
+    "createdAt": "Created",
+    "enter": "Enter",
+    "delete": "Delete",
+    "channels": "Channels",
+    "channelMore": "+{{n}} more",
+    "model": "Model",
+    "skillMcp": "Skill/MCP",
+    "ccActive": "CC Running",
+    "runtime": {
+      "queued": "Queued",
+      "running": "Running",
+      "responding": "Responding",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "queue": "Queue {{count}}",
+      "blocks": "{{count}} blocks"
+    }
+  },
+  "createDialog": {
+    "title": "Create Workspace",
+    "nameLabel": "Workspace Name",
+    "descLabel": "Description",
+    "policyLabel": "Runtime Policy",
+    "policyAgent": "Agent (Proxy Mode)",
+    "policyRelaxed": "Relaxed (No Restrictions)",
+    "policyStrict": "Strict (Read-only)",
+    "randomNameTooltip": "Generate Random Name",
+    "cancel": "Cancel",
+    "create": "Create",
+    "nameRequired": "Workspace name is required",
+    "createSuccess": "Workspace \"{{name}}\" created successfully",
+    "createFailed": "Create failed: {{message}}"
+  },
+  "deleteDialog": {
+    "title": "Confirm Delete",
+    "content": "Are you sure you want to delete workspace {{name}}? This action cannot be undone.",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "deleteSuccess": "Workspace deleted",
+    "deleteFailed": "Delete failed: {{message}}"
+  },
+  "ccModels": {
+    "alert": {
+      "providerSupportBefore": "CC model groups work with any Anthropic-compatible provider (e.g. official Anthropic). If you don’t have a provider or want to support us, visit ",
+      "providerSupportLink": "NekroAI Relay",
+      "providerSupportAfter": " to get your dedicated key!"
+    },
+    "createBtn": "New Group",
+    "actions": {
+      "searchPlaceholder": "Search group, endpoint or description",
+      "clearSelection": "Clear selection",
+      "batchTest": "Batch model test ({{count}})"
+    },
+    "table": {
+      "headers": {
+        "name": "Group Name",
+        "desc": "Description",
+        "type": "Type",
+        "model": "Model",
+        "baseUrl": "Base URL",
+        "usage": "Workspace Usage",
+        "health": "Speed",
+        "actions": "Actions"
+      },
+      "empty": "No matching groups",
+      "defaultChip": "Default",
+      "typePreset": "Preset",
+      "typeManual": "Manual",
+      "multiModel": "(multi-model)",
+      "usageBound": "Bound by {{count}}",
+      "usageIdle": "Idle",
+      "tooltips": {
+        "edit": "Edit",
+        "copy": "Copy",
+        "test": "Test model",
+        "testDisabled": "Complete Base URL, Auth Token, and a testable model first",
+        "delete": "Delete",
+        "defaultCannotDelete": "Default group cannot be deleted",
+        "boundCannotDelete": "{{count}} workspaces are still bound"
+      }
+    },
+    "health": {
+      "notTested": "Not tested",
+      "testing": "Testing",
+      "ok": "{{ms}}ms",
+      "failed": "Failed",
+      "tooltipPassed": "Model test passed",
+      "tooltipFailed": "Model test failed",
+      "tooltipModel": "Actual model: {{model}}",
+      "tooltipLatency": "Latency: {{ms}}ms",
+      "tooltipTokens": "Tokens: input {{input}} / output {{output}}",
+      "tooltipReply": "Reply: {{text}}",
+      "tooltipError": "Error: {{error}}"
+    },
+    "dialog": {
+      "titleCreate": "New CC Model Group",
+      "titleEdit": "Edit CC Model Group",
+      "titleCopy": "Copy CC Model Group",
+      "name": "Group Name",
+      "nameReadonly": "Name cannot be changed after creation",
+      "desc": "Description",
+      "sectionApi": "API Config",
+      "sourcePreset": "Source Template",
+      "sourcePresetHint": "Auto-fill a vendor's official Base URL and recommended model mapping, then only enter the API key.",
+      "sourcePresetCustom": "Custom (no template)",
+      "timeout": "Timeout (ms)",
+      "sectionModel": "Model Config",
+      "modelType": "Model Type",
+      "modelTypePreset": "Preset mode (use preset name)",
+      "modelTypeManual": "Manual mode (specify each role model)",
+      "presetModel": "Preset Model",
+      "presetModelHint": "model field value",
+      "emptyMeans": "Leave blank to not set",
+      "sectionEnv": "Custom Extra Variables",
+      "envAdd": "Add",
+      "envEmpty": "No custom variables. Click \"Add\" to add key-value pairs.",
+      "sectionPreview": "Generated Config JSON Preview",
+      "cancel": "Cancel",
+      "save": "Save",
+      "create": "Create",
+      "test": "Test Model",
+      "testNeedsConfig": "Please fill in Base URL, Auth Token and at least one model name first",
+      "fetchModels": "Fetch Models",
+      "fetchingModels": "Fetching…",
+      "fetchModelsNeedConfig": "Please fill in Base URL and Auth Token first"
+    },
+    "deleteDialog": {
+      "title": "Confirm Delete Group",
+      "content": "Are you sure you want to delete group {{name}}? This action cannot be undone.",
+      "boundHint": "{{count}} workspaces are still bound: {{names}}",
+      "cancel": "Cancel",
+      "delete": "Delete"
+    },
+    "notifications": {
+      "created": "Group created",
+      "createFailed": "Create failed: {{message}}",
+      "saved": "Group saved",
+      "saveFailed": "Save failed: {{message}}",
+      "deleted": "Group deleted",
+      "deleteFailed": "Delete failed: {{message}}",
+      "noTestableGroups": "No testable CC model groups in the current selection",
+      "testNoResults": "Model test returned no results. Check the request path.",
+      "testAllPassed": "Model test passed",
+      "testCompleted": "Model test completed. Check the result.",
+      "testFailed": "Model test failed"
+    }
+  },
+  "skills": {
+    "pageTitle": "Skills Library",
+    "pageDesc": "Manage skills available to Claude Code. Skills marked as auto-inject will be enabled automatically when creating new workspaces",
+    "statBuiltin": "Built-in",
+    "statUser": "User Skills",
+    "statRepo": "Repo Skills",
+    "statAutoInject": "Auto-Inject",
+    "search": {
+      "placeholder": "Search skills by name or description..."
+    },
+    "filter": {
+      "all": "All",
+      "builtin": "Built-in",
+      "user": "User",
+      "repo": "Repo"
+    },
+    "toolbar": {
+      "cardView": "Card View",
+      "listView": "List View",
+      "refresh": "Refresh",
+      "uploadTooltip": "Upload Skill (.zip format)",
+      "uploadBtn": "Upload",
+      "addBtn": "Add Skill",
+      "clearFilters": "Clear Filters"
+    },
+    "empty": {
+      "title": "Skills library is empty",
+      "hint": "Click \"Add Skill\" to clone from a Git repo, or upload a ZIP package",
+      "noMatch": "No matching skills"
+    },
+    "content": {
+      "noContent": "No content",
+      "allowedTools": "Allowed tools:",
+      "loading": "Loading..."
+    },
+    "autoInject": {
+      "on": "Auto-Inject",
+      "off": "Not Auto-Inject",
+      "tooltip": "When enabled, this skill will be automatically added to new workspaces",
+      "badge": "Auto-Inject"
+    },
+    "card": {
+      "viewTooltip": "View Details",
+      "deleteTooltip": "Delete",
+      "pullTooltip": "Pull Updates",
+      "sourceBuiltin": "Built-in",
+      "sourceUser": "User",
+      "sourceRepo": "Repo"
+    },
+    "drawer": {
+      "title": "Skill Details",
+      "close": "Close",
+      "source": "Source",
+      "directory": "Directory",
+      "autoInject": "Auto-Inject",
+      "syncToWorkspaces": "Sync this skill to all workspaces using it",
+      "noContent": "No SKILL.md content",
+      "files": "Files",
+      "preview": "Preview",
+      "source_code": "Source",
+      "edit": "Edit",
+      "save": "Save",
+      "saving": "Saving...",
+      "cancel_edit": "Cancel",
+      "readOnly": "Read-only",
+      "modified": "Modified",
+      "saveSuccess": "File saved",
+      "saveFailed": "Save failed: {{message}}",
+      "loadFailed": "Failed to load file",
+      "binaryFile": "Binary file, cannot preview",
+      "emptyDir": "Empty directory",
+      "unsavedConfirm": "You have unsaved changes. Discard?",
+      "unsavedTitle": "Unsaved Changes",
+      "discard": "Discard",
+      "keepEditing": "Keep Editing",
+      "skillMd": "SKILL.md (main file)",
+      "fileCount": "{{count}} files"
+    },
+    "error": {
+      "loadFailed": "Failed to load skills library: {{message}}"
+    },
+    "cloneDialog": {
+      "title": "Add Skill",
+      "urlLabel": "Git Repository URL",
+      "dirLabel": "Save Directory Name",
+      "dirHintSaving": "Will be saved to: skills/{{dir}}",
+      "dirHintAuto": "Auto-generated from repo name, can be changed",
+      "cancel": "Cancel",
+      "cloneBtn": "Clone",
+      "cloning": "Cloning..."
+    },
+    "deleteDialog": {
+      "title": "Confirm Delete",
+      "content": "Are you sure you want to delete {{name}}? This action cannot be undone and all files in the directory will be permanently deleted.",
+      "cancel": "Cancel",
+      "delete": "Delete"
+    },
+    "notifications": {
+      "deleted": "Skill deleted",
+      "deleteFailed": "Delete failed: {{message}}",
+      "cloned": "Cloned to {{dir}}",
+      "cloneFailed": "Clone failed: {{message}}",
+      "uploaded": "Skill uploaded successfully",
+      "uploadFailed": "Upload failed: {{message}}",
+      "pullSuccess": "Updated: {{output}}",
+      "pullUpToDate": "Already up to date",
+      "pullFailed": "Update failed: {{message}}",
+      "invalidFile": "Please select a .zip file",
+      "autoInjectUpdated": "Auto-inject settings updated",
+      "autoInjectFailed": "Failed to update auto-inject: {{message}}",
+      "syncSuccess": "Synced to {{count}} workspaces",
+      "syncFailed": "Sync failed: {{message}}"
+    }
+  },
+  "mcpServices": {
+    "pageTitle": "MCP Services",
+    "pageDesc": "Manage MCP services auto-injected into new workspaces. These services are automatically added when creating workspaces.",
+    "stats": {
+      "total": "Auto-Inject Total",
+      "stdio": "STDIO",
+      "sse": "SSE",
+      "http": "HTTP"
+    },
+    "search": {
+      "placeholder": "Search service name or command..."
+    },
+    "filter": {
+      "all": "All",
+      "stdio": "STDIO",
+      "sse": "SSE",
+      "http": "HTTP"
+    },
+    "toolbar": {
+      "fromTemplate": "From Template",
+      "addManual": "Add Manually",
+      "refresh": "Refresh",
+      "cardView": "Card View",
+      "listView": "List View",
+      "clearFilters": "Clear Filters",
+      "jsonView": "JSON View",
+      "jsonViewTitle": "Auto-Inject Config (JSON)",
+      "jsonViewHint": "This view is read-only. It shows the current auto-inject MCP services as JSON, which you can copy to use with Claude Desktop or other tools.",
+      "readOnly": "Read-only",
+      "autoInjectTooltip": "When enabled, this MCP service will be automatically added to new workspaces",
+      "autoInjectOn": "Auto-Inject",
+      "autoInjectOff": "Not Auto-Inject",
+      "autoInject": "Auto-Inject",
+      "addBtn": "Add Service",
+      "importJson": "Import JSON"
+    },
+    "import": {
+      "title": "Import MCP Services from JSON",
+      "hint": "Paste Claude Desktop format MCP config JSON (JSONC comments supported). Servers will be parsed and added to the auto-inject list. Existing servers with the same name will be skipped.",
+      "importBtn": "Import",
+      "parseError": "Failed to parse JSON, please check the format",
+      "formatError": "Invalid format. Expected { mcpServers: { ... } } or { name: { ... } }",
+      "emptyError": "No services found to import",
+      "allLocalFileError": "All STDIO services reference local file paths and cannot be imported. Only package manager commands (npx/uvx) are supported.",
+      "success": "Successfully imported {{count}} services",
+      "successWithSkip": "Imported {{count}} services, skipped {{skipped}} existing"
+    },
+    "empty": {
+      "title": "No auto-inject MCP services",
+      "hint": "Click \"Add Manually\" or \"From Template\" to add the first auto-inject service",
+      "noMatch": "No matching services"
+    },
+    "notifications": {
+      "addSuccess": "MCP service added to auto-inject list",
+      "addFailed": "Failed to add: {{message}}",
+      "updateSuccess": "MCP service updated",
+      "updateFailed": "Failed to update: {{message}}",
+      "deleteSuccess": "MCP service removed from auto-inject list",
+      "deleteFailed": "Failed to remove: {{message}}",
+      "toggleSuccess": "Enabled status updated"
+    },
+    "deleteDialog": {
+      "title": "Remove Auto-Inject Service",
+      "content": "Remove \"{{name}}\" from the auto-inject list? Existing workspace configurations will not be affected."
+    },
+    "validate": {
+      "button": "Validate",
+      "pending": "Handshaking…",
+      "success": "{{name}} {{version}} handshake OK",
+      "toolsAndLatency": "{{count}} tools, {{latency}}ms",
+      "errorKind": {
+        "schema": "Invalid configuration",
+        "spawn_failed": "Failed to spawn process (check command and args)",
+        "handshake_timeout": "Handshake timed out (server not running or unreachable)",
+        "transport_error": "Transport error (connection failed / URL unreachable)",
+        "container_not_running": "Workspace container is not running; start it first for stdio validation",
+        "invalid_response": "Invalid handshake response (peer may not be an MCP server)"
+      },
+      "chip": {
+        "validated": "Verified",
+        "unvalidated": "Unverified",
+        "failed": "Failed",
+        "validatedTooltip": "Verified at {{time}} UTC · {{tools}} tools. Active in .mcp.json; CC will see it.",
+        "unvalidatedTooltip": "Not yet verified. Click ▶ to run a handshake. Unverified servers are skipped from .mcp.json and stay hidden from CC.",
+        "failedTooltip": "Last validation failed; not written to .mcp.json"
+      }
+    }
+  },
+  "detail": {
+    "header": {
+      "backTooltip": "Back to List",
+      "ccWorking": "CC Working",
+      "ccQueued": "Queued",
+      "ccRunning": "Running",
+      "ccResponding": "Responding",
+      "ccCompleted": "Completed",
+      "ccFailed": "Failed",
+      "ccCancelled": "Cancelled",
+      "ccElapsed": "{{seconds}}s",
+      "ccQueuedCount": "Queue {{count}}",
+      "ccBlockCount": "Blocks {{count}}",
+      "viewSandboxTooltip": "View Sandbox"
+    },
+    "tabs": {
+      "overview": "Overview",
+      "sandbox": "Sandbox",
+      "comm": "Comm",
+      "memory": "Memory Graph",
+      "knowledge": "Knowledge Base",
+      "extensions": "Extensions",
+      "mcp": "MCP Services",
+      "resources": "Resource Mounts",
+      "prompt": "Collab Context",
+      "config": "Config"
+    },
+    "overview": {
+      "noDescription": "No description",
+      "statCards": {
+        "channels": "Bound Channels",
+        "skills": "Enabled Skills",
+        "resources": "Mounted Resources",
+        "memory": "Memory Records",
+        "mcp": "MCP Services",
+        "comm": "Comm Records"
+      },
+      "suffixes": {
+        "count": "",
+        "messages": ""
+      },
+      "sections": {
+        "basicInfo": "Workspace Info",
+        "sandboxStatus": "Sandbox Status",
+        "naContext": "Collab Context Summary",
+        "channels": "Channel Summary"
+      },
+      "manage": "Manage",
+      "viewEdit": "View Edit",
+      "noContext": "No collaboration context summary yet.",
+      "noChannels": "No bound channels yet.",
+      "contextUpdated": "Updated: {{time}}",
+      "dynamicSkillSuffix": "{{count}} dynamic",
+      "reinforcement7dSuffix": "{{count}} reinforcements in 7d",
+      "memoryNotEnabled": "The memory system is currently disabled, so memory statistics are hidden from the overview.",
+      "commStatus": {
+        "active": "Running now",
+        "idle": "Idle"
+      },
+      "infoRows": {
+        "id": "ID",
+        "policy": "Policy",
+        "image": "Sandbox Image",
+        "createdAt": "Created",
+        "updatedAt": "Updated",
+        "sandboxStatus": "Runtime",
+        "containerName": "Container",
+        "hostPort": "Host Port",
+        "sessionId": "Session ID",
+        "versionInfo": "Version Info",
+        "ccVersion": "Sandbox Version",
+        "claudeCodeVersion": "Claude Code",
+        "modelGroup": "Model Group",
+        "ccRuntime": "CC Runtime",
+        "lastHeartbeat": "Last Heartbeat"
+      },
+      "defaultImage": "Default Image",
+      "notConfigured": "Not configured",
+      "loading": "Loading…",
+      "defaultTag": "(default)",
+      "tooltips": {
+        "switchConfig": "Switch in Config tab",
+        "managePresets": "Manage Model Presets"
+      },
+      "ccPluginAlert": {
+        "message": "The built-in \"Claude Code Collaboration\" plugin is currently disabled, so the main Agent cannot fully use CC Workspace delegation, file transfer, and status query capabilities. Enable the plugin first in Plugin Management to unlock the full CC sandbox collaboration workflow.",
+        "action": "Go Enable"
+      },
+      "channels": {
+        "title": "Bound Channels",
+        "searchPlaceholder": "Search and select a channel",
+        "noOptions": "No channels",
+        "bound": "Bound",
+        "bind": "Bind",
+        "noChannels": "No bound channels. Bind a channel to enable CC sandbox for those sessions.",
+        "channelHint": "Bind channels to provide CC sandbox capability for those sessions",
+        "disabled": "Disabled",
+        "unbindTooltip": "Unbind",
+        "bindSuccess": "Channel bound",
+        "bindFailed": "Bind failed: {{message}}",
+        "unbindSuccess": "Channel unbound",
+        "unbindFailed": "Unbind failed: {{message}}",
+        "annotationFailed": "Annotation update failed: {{message}}",
+        "primaryTag": "Primary",
+        "setPrimaryTooltip": "Set as primary channel",
+        "isPrimaryTooltip": "Current primary channel",
+        "primaryAutoTooltip": "Single channel is automatically the primary",
+        "descPlaceholder": "Add channel purpose description (optional)..."
+      }
+    },
+    "sandbox": {
+      "title": "Sandbox Container",
+      "transitioning": "Processing, please wait...",
+      "buttons": {
+        "start": "Start",
+        "starting": "Starting",
+        "stop": "Stop",
+        "stopping": "Stopping",
+        "restart": "Restart",
+        "restarting": "Restarting",
+        "rebuild": "Rebuild",
+        "resetSession": "Reset Session"
+      },
+      "statusRows": {
+        "containerName": "Container",
+        "hostPort": "Host Port",
+        "sessionId": "Session ID"
+      },
+      "logError": "Sandbox Error: ",
+      "notifications": {
+        "startSuccess": "Sandbox started",
+        "startFailed": "Start failed: {{message}}",
+        "stopSuccess": "Sandbox stopped",
+        "stopFailed": "Stop failed: {{message}}",
+        "restartSuccess": "Sandbox restarted",
+        "restartFailed": "Restart failed: {{message}}",
+        "rebuildSuccess": "Container rebuilding...",
+        "rebuildFailed": "Rebuild failed: {{message}}",
+        "resetSessionSuccess": "Session reset",
+        "resetSessionFailed": "Reset failed: {{message}}"
+      },
+      "rebuildDialog": {
+        "title": "Confirm Rebuild",
+        "content": "Rebuilding will destroy the current container and recreate it. All running state will be lost. Continue?",
+        "cancel": "Cancel",
+        "rebuild": "Rebuild"
+      },
+      "logs": {
+        "title": "Container Logs",
+        "clearTooltip": "Clear",
+        "waiting": "Waiting for log output...",
+        "disconnected": "[Log stream disconnected]",
+        "lines": "{{count}} lines"
+      },
+      "terminal": {
+        "title": "Sandbox Terminal",
+        "connected": "Connected",
+        "connecting": "Connecting...",
+        "disconnected": "Disconnected",
+        "notRunning": "Sandbox not running",
+        "connect": "Connect",
+        "reconnect": "Reconnect",
+        "startFirst": "Please start the sandbox to use the terminal",
+        "wsConnected": "Connected",
+        "wsDisconnected": "[Connection closed]",
+        "wsError": "[Connection error]"
+      }
+    },
+    "memory": {
+      "treeTitle": "Memory Files",
+      "contentTitle": "Edit Memory File",
+      "toggleTitleTooltip_title": "Switch to title view",
+      "toggleFileTooltip_filename": "Switch to filename view",
+      "refreshTooltip": "Refresh",
+      "newFileTooltip": "New Memory File",
+      "emptyHint": "No memory files",
+      "editorHint": "Select a file on the left to edit, or click \"+\" to create a new memory file",
+      "metadata": {
+        "title": "Title",
+        "shared": "Shared with NA",
+        "yes": "Yes",
+        "no": "No",
+        "category": "Category",
+        "tags": "Tags",
+        "sharedToNA": "Shared with NA"
+      },
+      "charCount": "{{count}}/600 chars",
+      "buttons": {
+        "save": "Save",
+        "delete": "Delete",
+        "cancel": "Cancel",
+        "resetMemory": "Reset Memory",
+        "confirmClear": "Confirm Clear",
+        "create": "Create"
+      },
+      "notifications": {
+        "saveSuccess": "Memory file saved",
+        "saveFailed": "Save failed",
+        "deleteSuccess": "Memory file deleted",
+        "deleteFailed": "Delete failed",
+        "resetSuccess": "Memory cleared",
+        "resetFailed": "Reset failed",
+        "createSuccess": "Memory file created",
+        "createFailed": "Create failed"
+      },
+      "newFileDialog": {
+        "title": "New Memory File",
+        "categoryLabel": "Category",
+        "fileNameLabel": "File Name (without .md)",
+        "fileNamePlaceholder": "e.g. python-style",
+        "willCreate": "Will create: {{path}}",
+        "cancel": "Cancel",
+        "create": "Create"
+      },
+      "deleteDialog": {
+        "title": "Confirm Delete",
+        "content": "Are you sure you want to delete memory file {{path}}? This action cannot be undone.",
+        "cancel": "Cancel",
+        "delete": "Delete"
+      },
+      "resetDialog": {
+        "title": "⚠ Reset Memory",
+        "warning": "This will permanently delete all memory files for this workspace and cannot be recovered!",
+        "content": "After clearing memory, the CC sandbox will lose all learned user preferences, task records, and knowledge. The workspace will start fresh.",
+        "hint": "Recommended when: workspace behavior is abnormal, or you need to fully reset the CC sandbox.",
+        "cancel": "Cancel",
+        "confirm": "Confirm Clear"
+      }
+    },
+    "extensions": {
+      "skillsTitle": "Skills ({{total}} available, {{enabled}} enabled)",
+      "skillsEmpty": "Skills library is empty. Please upload skill files in the \"Skills\" management page first.",
+      "skillsSave": "Save",
+      "skillsSaveSuccess": "Skills saved",
+      "skillsSaveFailed": "Save failed: {{message}}",
+      "readmeNoContent": "No README available",
+      "mcpTitle": "MCP Config",
+      "mcpSave": "Save",
+      "mcpSaveSuccess": "MCP config saved",
+      "mcpSaveFailed": "Save failed: {{message}}",
+      "mcpJsonError": "Invalid JSON",
+      "mcpJsonErrorFix": "Please fix JSON errors first",
+      "skillsCardTitle": "Extensions",
+      "syncBtn": "Sync to Sandbox",
+      "addSkillBtn": "Add Skill",
+      "deployedLabel": "Deployed ({{count}})",
+      "deployedEmpty": "No skills deployed yet. Click \"Add Skill\" to select from built-in or library.",
+      "skillChipBuiltin": "Built-in",
+      "skillChipUser": "Library",
+      "skillChipRepo": "Repo",
+      "skillChipPending": "Pending",
+      "skillChipAutoInject": "Auto-Inject",
+      "removeTooltip": "Remove from deployed list (click \"Sync to Sandbox\" to apply)",
+      "ccCreatedLabel": "CC Created ({{count}})",
+      "ccCreatedEmpty": "No dynamic skills",
+      "skillChipCC": "CC-created",
+      "skillChipPromoted": "Promoted",
+      "viewDetailTooltip": "View Details",
+      "editSkillTooltip": "Edit SKILL.md",
+      "promoteTooltip": "Promote to Library",
+      "updateLibraryTooltip": "Update to Library",
+      "deleteTooltip": "Delete",
+      "refreshDynamicTooltip": "Refresh dynamic skills list",
+      "ccDesignBtn": "Let CC Design a New Skill",
+      "mcpFormatHint": "Supports JSONC format (// and /* */ comments), automatically converted to JSON on save",
+      "fillTemplateTooltip": "Fill with common MCP service config template (will overwrite existing content)",
+      "fillTemplateBtn": "Fill Template",
+      "addSkillDialog": {
+        "title": "Add Skill",
+        "searchPlaceholder": "Search skill name or description…",
+        "filterAll": "All",
+        "filterBuiltin": "Built-in",
+        "filterUser": "Library",
+        "filterRepo": "Repo",
+        "allAdded": "All skills already added",
+        "noMatch": "No matching results",
+        "selectedCount": "{{count}} selected",
+        "cancel": "Cancel",
+        "addBtn": "Add to List"
+      },
+      "ccDesignDialog": {
+        "title": "Let CC Design a New Skill",
+        "info": "Clicking confirm will navigate to the Comm tab and pre-fill a design prompt.\nYou can add your specific requirements in the input box before sending.",
+        "desc": "CC will use the skill-creator guide to save the designed skill in the dynamic skills directory. You can view, edit, or promote it anytime from the Extensions tab.",
+        "cancel": "Cancel",
+        "confirmBtn": "Go to Comm"
+      },
+      "editDynamicDialog": {
+        "title": "Edit Dynamic Skill {{name}}",
+        "contentLabel": "SKILL.md Content",
+        "cancel": "Cancel",
+        "save": "Save"
+      },
+      "deleteDynamicDialog": {
+        "title": "Confirm Delete",
+        "content": "Are you sure you want to delete dynamic skill {{name}}? This action cannot be recovered.",
+        "cancel": "Cancel",
+        "delete": "Delete"
+      },
+      "mcpTemplateDialog": {
+        "title": "Fill MCP Config Template",
+        "warning": "This will overwrite the existing MCP config. Please confirm you have a backup or don't need to keep the current config.",
+        "desc": "The template includes JSONC examples for common MCP services (Filesystem, GitHub, Brave Search, Fetch, Memory, PostgreSQL), all commented out by default. Uncomment and fill in parameters as needed.",
+        "cancel": "Cancel",
+        "confirm": "Apply Template"
+      },
+      "notifications": {
+        "syncSuccess": "Synced to sandbox",
+        "syncFailed": "Sync failed: {{message}}",
+        "deleteDynamicSuccess": "Dynamic skill {{name}} deleted",
+        "deleteDynamicFailed": "Delete failed: {{message}}",
+        "promoteSuccess": "Dynamic skill {{name}} promoted to library",
+        "promoteFailed": "Promote failed: {{message}}",
+        "updateLibrarySuccess": "Dynamic skill {{name}} updated in library",
+        "saveDynamicSuccess": "Dynamic skill {{name}} saved",
+        "saveDynamicFailed": "Save failed: {{message}}",
+        "loadContentFailed": "Failed to load skill content: {{message}}"
+      }
+    },
+    "comm": {
+      "loadMore": "Load more history",
+      "noMoreMessages": "All history loaded",
+      "noRecords": "No comm records",
+      "noRecordsHint": "Records will appear here in real time when NA sends tasks to CC",
+      "inputPlaceholderMac": "Enter prompt (↩ send, ⇧↩ newline)",
+      "inputPlaceholderWin": "Enter prompt (Enter to send, Shift+Enter for newline)",
+      "sendWarning": "This sends directly to the CC sandbox; CC responses will not be processed by the NA Agent",
+      "sendTooltip": "Send",
+      "ccRunning": "CC is processing, please wait for the reply before sending…",
+      "ccRunningIndicator": "CC is working",
+      "forceCancel": "Force cancel current CC task",
+      "msgTypes": {
+        "USER_TO_CC": "User → CC",
+        "SYSTEM": "System"
+      },
+      "expandArgs": "View full args",
+      "collapseArgs": "Collapse args",
+      "toolRunning": "Running…",
+      "execFailed": "Exec failed",
+      "execDone": "Exec done",
+      "collapse": "Collapse",
+      "expand": "Expand ({{chars}} chars)",
+      "notifications": {
+        "sendFailed": "Send failed: {{message}}",
+        "cancelSuccess": "Force cancel command sent",
+        "cancelFailed": "Force cancel failed: {{message}}"
+      }
+    },
+    "mcp": {
+      "title": "MCP Services",
+      "empty": "No MCP servers attached to this workspace yet",
+      "emptyHint": "Click \"Add MCP Service\" to pick from the global library",
+      "workspaceHint": "{{total}} attached, {{validated}} verified",
+      "addBtn": "Add MCP Service",
+      "addSuccess": "MCP server attached to this workspace",
+      "addFailed": "Add failed: {{message}}",
+      "removeTooltip": "Remove from this workspace (does not delete the global library entry)",
+      "removeSuccess": "Removed {{name}} from this workspace",
+      "removeFailed": "Remove failed: {{message}}",
+      "manageLibrary": "Manage MCP Library",
+      "libraryEmpty": "The global MCP library is empty. Go to the MCP Services management page to add entries.",
+      "autoInjectTooltip": "Auto-injected into newly created workspaces",
+      "addDialog": {
+        "title": "Add MCP Service",
+        "empty": "All servers from the global library are already attached. Add new entries in the MCP library to extend it."
+      },
+      "fromTemplate": "From Template",
+      "addManual": "Add Manually",
+      "addServer": "Add Server",
+      "switchToJson": "Switch to JSON preview",
+      "switchToCards": "Switch to card view",
+      "switchToList": "Switch to list view",
+      "syncToSandbox": "Sync MCP config to sandbox",
+      "syncSuccess": "MCP config synced to sandbox",
+      "syncFailed": "Sync failed: {{message}}",
+      "save": "Save",
+      "saving": "Saving...",
+      "add": "Add",
+      "adding": "Adding...",
+      "edit": "Edit",
+      "delete": "Delete",
+      "enable": "Enable",
+      "disable": "Disable",
+      "addTitle": "Add MCP Server",
+      "editTitle": "Edit MCP Server",
+      "deleteTitle": "Delete MCP Server",
+      "deleteConfirm": "Are you sure you want to delete MCP server \"{{name}}\"?",
+      "addSuccess": "MCP server added",
+      "addFailed": "Failed to add: {{message}}",
+      "updateSuccess": "MCP server updated",
+      "updateFailed": "Failed to update: {{message}}",
+      "deleteSuccess": "MCP server deleted",
+      "deleteFailed": "Failed to delete: {{message}}",
+      "saveSuccess": "MCP configuration saved",
+      "saveFailed": "Failed to save: {{message}}",
+      "jsonError": "Invalid JSON format",
+      "jsonErrorFix": "Please fix JSON format errors first",
+      "jsonHint": "Supports JSONC format (// and /* */ comments), auto-converted to JSON on save",
+      "form": {
+        "name": "Server Name",
+        "command": "Command",
+        "args": "Arguments",
+        "argsHint": "Separate multiple arguments with spaces",
+        "envLabel": "Environment Variables",
+        "url": "Server URL",
+        "headersLabel": "HTTP Headers",
+        "cancel": "Cancel",
+        "stdioHint": "Only npx / uvx package manager commands are supported (CC sandbox ships Node.js 20 and astral-sh/uv). Local file paths on the host are not supported.",
+        "stdioCommandError": "Only npx and uvx commands are supported"
+      },
+      "registry": {
+        "title": "Add MCP Server from Template",
+        "search": "Search templates...",
+        "empty": "No matching templates"
+      },
+      "autoInject": "Auto-Inject",
+      "setAutoInject": "Set as Auto-Inject",
+      "removeAutoInject": "Remove Auto-Inject",
+      "autoInjectSuccess": "Auto-inject configuration updated",
+      "autoInjectFailed": "Failed to update auto-inject: {{message}}"
+    },
+    "resources": {
+      "searchPlaceholder": "Search by name, note, or resource tag",
+      "mountsTitle": "Mounted Resources",
+      "mountsHint": "Drag to reorder.",
+      "libraryTitle": "Resource Library",
+      "libraryHint": "Choose resources from the library and mount them into the current workspace.",
+      "emptyMounted": "No resources are mounted to this workspace yet.",
+      "emptyLibrary": "The resource library is empty. Create your first workspace resource.",
+      "noDescription": "No note",
+      "fieldCount": "{{count}} fields",
+      "boundCount": "{{count}} workspaces",
+      "stats": {
+        "total": "Total Resources",
+        "shared": "Shared Across Workspaces",
+        "compat": "With Compat Env Names",
+        "mounted": "Mounted",
+        "available": "Available"
+      },
+      "meta": {
+        "tags": "Tags",
+        "fields": "Fields",
+        "compatEnvNames": "Injected Env Vars",
+        "usage": "Workspace Usage"
+      },
+      "tooltips": {
+        "noWorkspaceRef": "Not referenced by any workspace",
+        "workspaceRefsTitle": "Referenced by {{count}} workspaces"
+      },
+      "valueKinds": {
+        "text": "Text",
+        "password": "Password / Token",
+        "host": "Host",
+        "port": "Port",
+        "private_key": "Private Key",
+        "username": "Username",
+        "database": "Database",
+        "json": "JSON"
+      },
+      "actions": {
+        "refresh": "Refresh",
+        "create": "Create Resource",
+        "openCenter": "Resource Center",
+        "mounted": "Mounted",
+        "mount": "Mount",
+        "unmount": "Unmount"
+      },
+      "editor": {
+        "createTitle": "Create Workspace Resource",
+        "editTitle": "Edit Workspace Resource",
+        "createAction": "Create",
+        "saveAction": "Save",
+        "template": "Template",
+        "templateSectionTitle": "Template Prefill",
+        "templateSectionHint": "Apply a template at any time, then continue adjusting the form as needed.",
+        "templateAction": "Choose Template",
+        "templateDialogTitle": "Choose Template",
+        "templateDialogHint": "Applying a template will fill the current form with the selected content.",
+        "templateOverwriteWarning": "Applying a template will overwrite the content currently in the form.",
+        "templateApply": "Apply Template",
+        "name": "Resource Name",
+        "resourceNote": "Resource Note",
+        "resourceTags": "Resource Tags",
+        "resourceTagsHint": "Separate tags with commas, for example: ssh, deploy, github",
+        "resourcePrompt": "Resource Prompt",
+        "resourcePromptHelper": "This content enters the AI context and should tell CC when to use this resource and what to watch out for.",
+        "fields": "Field Setup",
+        "fieldsHint": "Drag to reorder fields.",
+        "addField": "Add Field",
+        "removeField": "Remove Field",
+        "unnamedField": "Field {{index}}",
+        "fieldLabel": "Field Label",
+        "fieldDescription": "Field Description",
+        "valueKind": "Field Type",
+        "compatEnvNames": "Injected Env Vars",
+        "compatEnvNamesPlaceholder": "For example: GH_TOKEN, GITHUB_TOKEN",
+        "value": "Field Value",
+        "secretValue": "Sensitive Value",
+        "sensitive": "Sensitive Data",
+        "sensitiveHint": "When enabled, this value will stay out of the prompt body and will only be provided to CC through environment variables."
+      },
+      "deleteDialog": {
+        "title": "Delete Resource",
+        "content": "Delete resource \"{{name}}\"? This action cannot be undone.",
+        "contentWithBindings": "Resource \"{{name}}\" is currently mounted in {{count}} workspaces. Deleting it will remove those mounts at the same time, and this action cannot be undone.",
+        "boundListTitle": "Affected Workspaces",
+        "confirm": "Delete Resource"
+      },
+      "secretHealth": {
+        "title": "Resource sensitive fields are unavailable",
+        "description": "{{count}} resources contain sensitive fields that cannot be read. This usually happens after moving devices when NEKRO_JWT_SECRET_KEY differs from the old environment.",
+        "recoverAction": "Recover with old key",
+        "purgeAction": "Clear invalid fields",
+        "recoverTitle": "Recover Resources with Old Key",
+        "recoverContent": "Enter the NEKRO_JWT_SECRET_KEY used on the old device when these resources were created. After recovery, legacy ciphertext will be converted to plaintext JSON readable by the current version.",
+        "recoverConfirm": "Recover",
+        "purgeTitle": "Clear Invalid Sensitive Fields",
+        "purgeContent": "This clears all currently unreadable sensitive field values. Non-sensitive data such as hosts, usernames, and notes will be kept. You will need to edit the resources again to fill passwords, tokens, or private keys.",
+        "purgeConfirm": "Clear Fields",
+        "recoverSuccess": "Recovered sensitive fields for {{count}} resources",
+        "recoverFailed": "Recovery failed: {{message}}",
+        "purgeSuccess": "Cleared invalid sensitive fields for {{count}} resources",
+        "purgeFailed": "Clear failed: {{message}}"
+      },
+      "notifications": {
+        "created": "Resource created",
+        "createFailed": "Create failed: {{message}}",
+        "updated": "Resource updated",
+        "updateFailed": "Update failed: {{message}}",
+        "deleted": "Resource deleted",
+        "deleteFailed": "Delete failed: {{message}}",
+        "mounted": "Resource mounted to the current workspace",
+        "mountFailed": "Mount failed: {{message}}",
+        "mountConflict": "Compat environment variable {{env}} conflicts with resource \"{{name}}\"",
+        "unmounted": "Resource removed from the current workspace",
+        "unmountFailed": "Unmount failed: {{message}}",
+        "reorderFailed": "Reorder failed: {{message}}",
+        "workspaceRequired": "Open a workspace before performing this action"
+      }
+    },
+    "prompt": {
+      "summaryCards": {
+        "naContext": {
+          "title": "Collaboration State",
+          "description": "Current status and latest progress."
+        },
+        "ccRules": {
+          "title": "Execution Rules",
+          "description": "Manage long-lived rules for both CC and NA.",
+          "subtitle": "CC / NA configured separately",
+          "tooltip": "This section contains two layers: execution rules for CC and wording / communication rules visible only to NA."
+        },
+        "sharedFacts": {
+          "title": "Fixed Facts",
+          "description": "Stable facts shared by both sides."
+        }
+      },
+      "systemPromptTitle": "System Prompt (Read-only)",
+      "systemPromptHint": "Expand to view the current content",
+      "expandTooltip": "Expand preview",
+      "collapseTooltip": "Collapse preview",
+      "naContextTitle": "Collaboration State Summary (_na_context)",
+      "naContextHint": "Current status, latest progress, temporary notes",
+      "naContextDesc": "Use this for time-sensitive information. Later tasks may continue updating it.",
+      "naContextPlaceholder": "For example:\n- The current main task is reorganizing workspace guidance\n- A new entry path and key file locations have been confirmed\n- A file for explanation is already available in the shared directory",
+      "sharedFactsTitle": "Shared Fixed Facts",
+      "sharedFactsHint": "Shared by both sides and kept stable",
+      "sharedFactsDesc": "Use this for long-lived facts and constraints. Put anything here that should not be changed automatically.",
+      "sharedFactsPlaceholder": "For example:\n- Frontend checks must be completed before submission\n- Direct pushes to the main branch are forbidden\n- Page copy should stay clear and avoid too many internal terms",
+      "extraTitle": "Custom Append Prompt",
+      "extraHint": "Visible only to CC",
+      "ccRulesDesc": "Use this for coding style, delivery preferences, and output format requirements.",
+      "extraPlaceholder": "Enter custom instructions here, e.g.:\n\n## Personal Preferences\n\n- Use English for all code comments\n- Prefer Python for problem solving",
+      "naRulesTitle": "NA-only Rules",
+      "naRulesHint": "Visible only to NA",
+      "naRulesDesc": "Use this for wording style, communication boundaries, and response preferences.",
+      "naRulesPlaceholder": "For example:\n- Start with the conclusion before going into detail\n- When mentioning the collaboration summary, remind the user that it may continue to be updated later",
+      "editorGuideTitle": "Editing Guide",
+      "editorGuideItems": [
+        "If you are correcting what the workspace is like right now, write it in the collaboration state summary.",
+        "If you are declaring a stable fact or hard constraint that should continue to hold, write it in shared fixed facts.",
+        "If you only want to constrain CC behavior, write it in execution rules instead of mixing it into _na_context."
+      ],
+      "naContextWarning": "_na_context can be updated automatically by CC. If a piece of information must not be rewritten, move it to Shared Fixed Facts or NA-only Rules.",
+      "saveBtn": "Save",
+      "notifications": {
+        "saveSuccess": "Custom prompt saved",
+        "saveFailed": "Save failed: {{message}}",
+        "naContextSaveSuccess": "Collaboration state summary saved. Future CC delegations will be reminded to review the latest version first.",
+        "sharedRulesSaveSuccess": "Shared fixed facts saved",
+        "naRulesSaveSuccess": "NA-only rules saved"
+      }
+    },
+    "config": {
+      "sections": {
+        "basic": "Basic Settings",
+        "skills": "Skills",
+        "mcp": "MCP Config",
+        "ccModel": "CC Model Config",
+        "envVars": "Environment Variables",
+        "danger": "Danger Zone"
+      },
+      "fields": {
+        "name": "Workspace Name",
+        "desc": "Description",
+        "policy": "Runtime Policy",
+        "image": "Sandbox Image",
+        "imageHint": "Leave blank to use default image",
+        "imageHelperText": "Leave blank to use the system default image with :latest tag",
+        "ccModel": "Select CC Model Preset",
+        "modelHelperText": "The selected preset's environment config will be injected into the sandbox",
+        "generatedConfig": "Generated Inject Config"
+      },
+      "policyOptions": {
+        "agent": "Agent — Explicit tool whitelist, interactive tools disabled",
+        "relaxed": "Relaxed — No tool-level restrictions",
+        "strict": "Strict — No file write / command exec / network"
+      },
+      "ccModelDefault": "(default)",
+      "envVars": {
+        "hint": "Variables are injected into the sandbox process on each CC conversation, and synced to the CLAUDE.md environment section (only key and description are exposed, not the value)",
+        "key": "Variable Name",
+        "value": "Value",
+        "description": "Description",
+        "add": "Add Variable",
+        "remove": "Remove"
+      },
+      "dangerDesc": "Deleting this workspace will also stop the sandbox container and remove all configuration. This action cannot be undone.",
+      "deleteBtn": "Delete This Workspace",
+      "buttons": {
+        "save": "Save",
+        "saving": "Saving",
+        "delete": "Delete",
+        "deleting": "Deleting"
+      },
+      "notifications": {
+        "saveSuccess": "Settings saved",
+        "saveFailed": "Save failed: {{message}}",
+        "deleteSuccess": "Workspace deleted",
+        "deleteFailed": "Delete failed: {{message}}",
+        "ccPresetSuccess": "CC model preset updated",
+        "ccPresetFailed": "Set failed: {{message}}",
+        "envVarsSaveSuccess": "Environment variables saved",
+        "envVarsSaveFailed": "Save failed: {{message}}"
+      },
+      "invalidId": "Invalid workspace ID",
+      "loadFailed": "Load failed: {{message}}",
+      "deleteDialog": {
+        "title": "Confirm Delete Workspace",
+        "content": "Are you sure you want to delete workspace {{name}}? This action cannot be undone.",
+        "cancel": "Cancel",
+        "delete": "Delete"
+      }
+    },
+    "errors": {
+      "imageNotFound": "Image not found, please pull the image from the overview page first",
+      "image": {
+        "checking": "Checking",
+        "ready": "Ready",
+        "notPulled": "Not Pulled",
+        "pullDialog": {
+          "title": "Pull Sandbox Image",
+          "confirmTitle": "Pull Sandbox Image",
+          "confirmHint": "The following image will be pulled from Docker Hub. First-time pull may take a while — please ensure your network is available:",
+          "cancel": "Cancel",
+          "image": "Image",
+          "pulling": "Pulling...",
+          "success": "Pull complete",
+          "failed": "Pull failed",
+          "close": "Close",
+          "retry": "Retry",
+          "pullBtn": "Start Pull"
+        }
+      }
+    }
+  },
+  "knowledge": {
+    "title": "Workspace Knowledge Base",
+    "description": "Manage static knowledge files inside the workspace, including import, search, full-text viewing, and raw file download.",
+    "actions": {
+      "addFile": "Add Knowledge File",
+      "refresh": "Refresh",
+      "search": "Search",
+      "clearSearch": "Clear Search",
+      "reindexAll": "Reindex All",
+      "createText": "New Text Doc",
+      "uploadFile": "Upload File",
+      "batchUpload": "Batch Upload",
+      "cancel": "Cancel",
+      "close": "Close",
+      "create": "Create",
+      "creating": "Creating...",
+      "upload": "Upload",
+      "uploading": "Uploading...",
+      "chooseFile": "Choose File",
+      "chooseFiles": "Choose Files (multi-select)",
+      "reChooseFiles": "Re-select Files",
+      "importFolder": "Import Folder",
+      "importZip": "Import Zip Archive",
+      "reChooseFolder": "Re-select Folder",
+      "or": "or",
+      "startUpload": "Start Upload ({{count}} files)",
+      "cancelUpload": "Cancel Upload",
+      "canceling": "Canceling...",
+      "batchActions": "Batch Actions ({{count}})",
+      "bulkDeleteReady": "Delete Completed ({{count}})",
+      "bulkDeleteSelected": "Delete Selected ({{count}})",
+      "bulkReindexSelected": "Reindex Selected ({{count}})",
+      "bulkDisableSelected": "Disable Indexing ({{count}})",
+      "removeFromQueue": "Remove From Queue",
+      "reindex": "Reindex",
+      "reuseGlobal": "Reuse Knowledge Base",
+      "saveReuse": "Save Reuse",
+      "downloadRaw": "Download Raw",
+      "delete": "Delete",
+      "remove": "Remove",
+      "enable": "Enable Search",
+      "disable": "Disable Search",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "save": "Save",
+      "edit": "Edit"
+    },
+    "batchStatus": {
+      "waiting": "Waiting",
+      "uploading": "Uploading",
+      "done": "Done",
+      "error": "Failed",
+      "edit": "Edit metadata"
+    },
+    "stats": {
+      "documents": "{{count}} docs",
+      "ready": "{{count}} ready",
+      "failed": "{{count}} issues",
+      "reusedGlobal": "{{count}} global reused"
+    },
+    "status": {
+      "pending": "Pending",
+      "extracting": "Extracting",
+      "indexing": "Indexing",
+      "ready": "Ready",
+      "failed": "Failed"
+    },
+    "badges": {
+      "extract": "Extract: {{status}}",
+      "sync": "Index: {{status}}"
+    },
+    "sections": {
+      "documents": "Documents",
+      "searchResults": "Search Results"
+    },
+    "list": {
+      "total": "{{count}} documents",
+      "noPreview": "No preview available",
+      "globalBound": "Reused",
+      "viewFlat": "Flat list",
+      "viewGrouped": "Group by category",
+      "viewGraph": "Knowledge graph",
+      "uncategorized": "Uncategorized"
+    },
+    "search": {
+      "placeholder": "Search rules, FAQ, manuals, design docs...",
+      "empty": "No matching knowledge entries",
+      "resultCount": "{{count}} hits"
+    },
+    "empty": "There are no knowledge documents in this workspace yet. Create a text document or upload a file first.",
+    "detail": {
+      "noSelection": "Select a document on the left to view details.",
+      "loadFailed": "Failed to load knowledge document details.",
+      "noSummary": "No summary",
+      "noTags": "No tags",
+      "paths": "Paths",
+      "sourcePath": "Source Relative Path",
+      "workspaceSourcePath": "Workspace Source Path",
+      "normalizedPath": "Normalized Fulltext Path",
+      "metadata": "Metadata",
+      "category": "Category",
+      "fileName": "File Name",
+      "fileSize": "File Size",
+      "chunkCount": "Chunk Count",
+      "updatedAt": "Updated At",
+      "indexedAt": "Indexed At",
+      "preview": "Preview"
+    },
+    "preview": {
+      "normalized": "Normalized Fulltext",
+      "source": "Source Text",
+      "empty": "No content available for this preview."
+    },
+    "progress": {
+      "title": "Index Progress",
+      "pending": "Preparing indexing task...",
+      "detail": "{{processed}} / {{total}} chunks processed",
+      "phase": {
+        "queued": "Queued",
+        "extracting": "Extracting",
+        "chunking": "Chunking",
+        "embedding": "Embedding",
+        "upserting": "Writing Index",
+        "ready": "Completed",
+        "failed": "Failed"
+      }
+    },
+    "config": {
+      "embeddingRequired": "The knowledge base embedding model group is missing or invalid. Make sure `KB_EMBEDDING_MODEL_GROUP` exists and its model type is `embedding` before creating, uploading, or reindexing knowledge."
+    },
+    "form": {
+      "title": "Title",
+      "format": "Text Format",
+      "sourcePath": "Target Path",
+      "sourcePathPlaceholder": "e.g. faq/getting-started.md",
+      "supportedFormats": "Supported upload formats: {{formats}}",
+      "dirImportHint": "Select a local folder — files are categorized by subfolder name and paths are fully preserved",
+      "zipImportHint": "Upload a zip archive; it will be extracted and imported following its directory structure (encrypted archives are not supported)",
+      "dirImportModeHint": "Folder import mode: categories have been inferred from the directory structure. Expand any file to adjust.",
+      "reuseSearch": "Search global knowledge by title, path, category, or tags",
+      "fileName": "File Name",
+      "category": "Category",
+      "tags": "Tags",
+      "tagsPlaceholder": "Separate tags with commas",
+      "summary": "Summary",
+      "content": "Content",
+      "tagsHelper": "Separate multiple tags with commas"
+    },
+    "dialogs": {
+      "createTitle": "Create Text Knowledge",
+      "uploadTitle": "Upload Knowledge File",
+      "batchUploadTitle": "Batch Upload Knowledge Files",
+      "dirImportTitle": "Import Folder",
+      "reuseTitle": "Add From Global Knowledge",
+      "reuseHint": "Choose the global knowledge files to add to this workspace. Saving will bind those files to the current workspace.",
+      "reuseEmpty": "No reusable global knowledge files match the current filter.",
+      "deleteTitle": "Confirm Delete",
+      "removeTitle": "Confirm Remove",
+      "deleteContent": "Delete knowledge document \"{{title}}\"? This action cannot be undone.",
+      "removeContent": "Remove knowledge file \"{{title}}\" from this workspace? The global source file will be kept.",
+      "bulkDeleteReadyTitle": "Delete Completed Files",
+      "bulkDeleteReadyContent": "This will remove all completed knowledge entries in the current workspace, {{count}} in total. That includes {{documentCount}} workspace document(s) and {{assetCount}} reused global asset(s). This action cannot be undone.",
+      "bulkDeleteSelectedTitle": "Delete Selected Entries",
+      "bulkDeleteSelectedContent": "This will process the {{count}} selected entries. Workspace documents will be deleted, while reused global knowledge files will only be removed from the current workspace. That includes {{documentCount}} workspace document(s) and {{assetCount}} reused global asset(s).",
+      "editMetaTitle": "Edit Metadata"
+    },
+    "notifications": {
+      "addSuccess": "Knowledge file added to the current workspace",
+      "addReusedSuccess": "Identical content detected. This upload was skipped; the existing knowledge file was reused and added to the current workspace. The title, category, tags, and summary you entered did not overwrite the original asset.",
+      "createSuccess": "Knowledge document created",
+      "createFailed": "Create failed: {{message}}",
+      "uploadSuccess": "Knowledge file uploaded",
+      "uploadFailed": "Upload failed: {{message}}",
+      "deleteSuccess": "Knowledge document deleted",
+      "deleteFailed": "Delete failed: {{message}}",
+      "bulkDeleteReadySuccess": "Deleted {{count}} completed item(s)",
+      "bulkDeleteReadyPartial": "Batch delete finished: {{deleted}} deleted, {{failed}} failed",
+      "bulkDeleteSelectedSuccess": "Processed {{count}} selected item(s)",
+      "bulkDeleting": "Deleting {{count}} item(s)...",
+      "bulkDeleteSelectedPartial": "Batch processing finished: {{deleted}} processed, {{failed}} failed",
+      "bulkDisableSelectedSuccess": "Disabled indexing for {{count}} selected item(s)",
+      "bulkDisableSelectedPartial": "Batch disable finished: {{updated}} updated, {{failed}} failed",
+      "reindexSuccess": "Document reindexed",
+      "reindexFailed": "Reindex failed: {{message}}",
+      "bulkReindexSelectedSuccess": "Queued reindex for {{count}} selected item(s)",
+      "bulkReindexSelectedPartial": "Batch reindex finished: {{queued}} queued, {{failed}} failed",
+      "reindexAllSuccess": "Reindex triggered: {{success}} queued, {{failed}} already in progress",
+      "reindexAllFailed": "Reindex all failed: {{message}}",
+      "searchFailed": "Search failed: {{message}}",
+      "updateSuccess": "Knowledge document updated",
+      "updateFailed": "Update failed: {{message}}",
+      "reuseBindingsSuccess": "Global knowledge reuse updated",
+      "reuseBindingsFailed": "Failed to update reuse bindings: {{message}}",
+      "removeSuccess": "Knowledge file removed from the current workspace",
+      "removeFailed": "Failed to remove knowledge file: {{message}}",
+      "downloadFailed": "Download failed: {{message}}",
+      "unsupportedFormat": "File {{name}} is not supported. Supported formats: {{formats}}",
+      "dirImportSkipped": "Skipped {{count}} file(s) with unsupported formats",
+      "dirImportNoSupported": "No supported files found in the selected folder. Supported formats: {{formats}}",
+      "dirImportCategoryTooLong": "The directory group \"{{category}}\" is {{length}} characters long, exceeding the limit of {{max}}. Shorten the folder name before uploading.",
+      "zipImportSuccess": "Zip import done: {{imported}} imported, {{reused}} reused, {{skipped}} skipped, {{failed}} failed",
+      "zipImportPartial": "Zip import partially succeeded: {{imported}} imported, {{reused}} reused, {{skipped}} skipped, {{failed}} failed",
+      "zipImportNothingImported": "No supported importable files found in the archive (supported: md/txt/html/json/yaml/csv/xlsx/pdf/docx)",
+      "zipImportFailed": "Zip import failed: {{message}}",
+      "zipImportFailedGeneric": "Zip import failed, please check the archive and try again",
+      "zipImportMoreErrors": "…and {{count}} more not shown"
+    },
+    "references": {
+      "title": "References",
+      "referencesTo": "This document references",
+      "referencedBy": "Referenced by",
+      "empty": "No references",
+      "add": "Add Reference",
+      "remove": "Remove reference",
+      "editDesc": "Edit description",
+      "addDialogTitle": "Add Reference",
+      "editDialogTitle": "Edit Reference Description",
+      "editingTarget": "Target: {{title}}",
+      "searchPlaceholder": "Search by title, category, summary...",
+      "noCandidates": "No candidates available. All documents in this view are already referenced, or there is only one document.",
+      "descriptionLabel": "Description (optional)",
+      "descriptionPlaceholder": "e.g. Chapter 3 expands on configuration details",
+      "addSuccess": "Reference added",
+      "addFailed": "Failed to add reference: {{message}}",
+      "removeSuccess": "Reference removed",
+      "removeFailed": "Failed to remove reference: {{message}}",
+      "updateSuccess": "Reference description updated",
+      "updateFailed": "Failed to update reference: {{message}}",
+      "autoDetected": "Automatically detected from document content"
+    },
+    "graph": {
+      "center": "KB",
+      "entryCount": "{{count}} items",
+      "totalCount": "{{count}} items",
+      "categoryCount": "{{count}} categories",
+      "referenceCount": "{{count}} references",
+      "referenceModeContext": "Context refs",
+      "referenceModeAll": "All refs",
+      "collapsedCount": "{{count}} collapsed",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "fit": "Fit to screen",
+      "showAllReferences": "Show all references",
+      "showContextReferences": "Show references only on hover",
+      "expandCategory": "Expand category {{category}}",
+      "collapseCategory": "Collapse category {{category}}",
+      "hintContext": "Wheel to zoom · Drag to pan · Click categories to collapse or expand · Hover nodes to inspect related references · Click nodes to open details",
+      "hintAll": "Wheel to zoom · Drag to pan · Click categories to collapse or expand · All references are currently visible · Click nodes to open details"
+    },
+    "batchPanel": {
+      "inProgress": "Uploading {{done}}/{{total}}",
+      "done": "Done ({{total}} total, {{failed}} failed)"
+    }
+  },
+  "kbLibrary": {
+    "title": "Knowledge Library",
+    "description": "Manage reusable knowledge files in one place. Import once, bind to multiple workspaces on demand, and avoid repeated uploads and repeated indexing costs.",
+    "actions": {
+      "addFile": "Add Knowledge File",
+      "refresh": "Refresh",
+      "createText": "New Text Doc",
+      "create": "Create",
+      "creating": "Creating...",
+      "upload": "Upload File",
+      "batchUpload": "Batch Upload",
+      "chooseFile": "Choose File",
+      "chooseFiles": "Choose Files (multi-select)",
+      "reChooseFiles": "Re-select Files",
+      "startUpload": "Start Upload ({{count}} files)",
+      "cancelUpload": "Cancel Upload",
+      "canceling": "Canceling...",
+      "batchActions": "Batch Actions ({{count}})",
+      "bulkDeleteSelected": "Delete Selected ({{count}})",
+      "bulkReindexSelected": "Reindex Selected ({{count}})",
+      "removeFromQueue": "Remove From Queue",
+      "close": "Close",
+      "clearFilters": "Clear Filters",
+      "bind": "Bind Workspaces",
+      "saveBindings": "Save Bindings",
+      "reindex": "Reindex",
+      "downloadRaw": "Download Raw",
+      "delete": "Delete File",
+      "cancel": "Cancel",
+      "edit": "Edit",
+      "save": "Save"
+    },
+    "batchStatus": {
+      "waiting": "Waiting",
+      "uploading": "Uploading",
+      "done": "Done",
+      "error": "Failed",
+      "edit": "Edit metadata"
+    },
+    "stats": {
+      "total": "Files",
+      "ready": "Reusable",
+      "indexing": "Processing",
+      "bindings": "Workspace Bindings"
+    },
+    "status": {
+      "all": "All",
+      "ready": "Ready",
+      "indexing": "Processing",
+      "failed": "Failed"
+    },
+    "filter": {
+      "all": "All",
+      "ready": "Ready",
+      "indexing": "Processing",
+      "failed": "Failed"
+    },
+    "search": {
+      "placeholder": "Search by title, path, category, summary, or tags"
+    },
+    "toolbar": {
+      "cardView": "Card View",
+      "listView": "List View"
+    },
+    "list": {
+      "total": "{{count}} files",
+      "bindingCount": "{{count}} workspaces",
+      "noSummary": "No summary"
+    },
+    "empty": {
+      "title": "No global knowledge files yet",
+      "noMatch": "No matching files"
+    },
+    "detail": {
+      "noSelection": "Select a file on the left to view details.",
+      "loadFailed": "Failed to load file detail.",
+      "meta": "File Info",
+      "chunkCount": "{{count}} chunks",
+      "fileSize": "Size {{value}}",
+      "updatedAt": "Updated {{value}}",
+      "noTags": "No tags",
+      "noBindings": "Not bound to any workspace yet",
+      "preview": "Preview"
+    },
+    "preview": {
+      "normalized": "Normalized Text",
+      "source": "Source Text",
+      "empty": "No content available in the current view."
+    },
+    "progress": {
+      "title": "Index Progress",
+      "pending": "Preparing the indexing task…",
+      "detail": "Processed {{processed}} / {{total}} chunks",
+      "phase": {
+        "queued": "Queued",
+        "extracting": "Extracting",
+        "chunking": "Chunking",
+        "embedding": "Embedding",
+        "upserting": "Writing Index",
+        "ready": "Completed",
+        "failed": "Failed"
+      }
+    },
+    "config": {
+      "embeddingRequired": "The knowledge base embedding model group is missing or invalid. Make sure `KB_EMBEDDING_MODEL_GROUP` exists and its model type is `embedding` before creating, uploading, or reindexing global knowledge."
+    },
+    "form": {
+      "title": "Title",
+      "format": "Text Format",
+      "sourcePath": "Target Path",
+      "sourcePathPlaceholder": "e.g. handbook/onboarding.md",
+      "category": "Category",
+      "fileName": "File Name",
+      "tags": "Tags",
+      "tagsPlaceholder": "Separate tags with commas",
+      "summary": "Summary",
+      "content": "Content",
+      "supportedFormats": "Supported upload formats: {{formats}}",
+      "bindWorkspaces": "Bind to Workspaces",
+      "tagsHelper": "Separate multiple tags with commas"
+    },
+    "dialogs": {
+      "createTitle": "Create Global Text Knowledge",
+      "uploadTitle": "Upload Global Knowledge File",
+      "batchUploadTitle": "Batch Upload Global Knowledge Files",
+      "bindTitle": "Bind Workspaces",
+      "bindHint": "Choose the workspaces that should reuse this file. After binding, the workspaces can use it directly without re-uploading.",
+      "deleteTitle": "Delete Global Knowledge File",
+      "bulkDeleteSelectedTitle": "Delete Selected Files",
+      "bulkDeleteSelectedContent": "This will delete the {{count}} selected files. This action cannot be undone. Files still bound to workspaces will fail to delete and remain in place.",
+      "deleteContent": "Delete file \"{{title}}\"? If it is still bound to workspaces, unbind it first.",
+      "editMetaTitle": "Edit Metadata"
+    },
+    "notifications": {
+      "createSuccess": "Text knowledge created and queued for indexing",
+      "createReused": "Identical content detected. This create request was skipped and the existing global knowledge file was reused. The title, category, tags, summary, and enabled state you entered did not overwrite the original asset.",
+      "createFailed": "Create failed: {{message}}",
+      "uploadSuccess": "File uploaded and queued for indexing",
+      "uploadReused": "Identical file content detected. This upload was skipped and the existing global knowledge file was reused. The title, category, tags, summary, and enabled state you entered did not overwrite the original asset.",
+      "uploadFailed": "Upload failed: {{message}}",
+      "reindexSuccess": "File reindex queued",
+      "reindexFailed": "Reindex failed: {{message}}",
+      "bulkReindexSelectedSuccess": "Queued reindex for {{count}} file(s)",
+      "bulkReindexSelectedPartial": "Batch reindex finished: {{queued}} queued, {{failed}} failed",
+      "deleteSuccess": "File deleted",
+      "deleteFailed": "Delete failed: {{message}}",
+      "bulkDeleteSelectedSuccess": "Deleted {{count}} file(s)",
+      "bulkDeleting": "Deleting {{count}} file(s)...",
+      "bulkDeleteSelectedPartial": "Batch delete finished: {{deleted}} deleted, {{failed}} failed",
+      "bindSuccess": "Workspace bindings updated",
+      "bindFailed": "Binding failed: {{message}}",
+      "downloadFailed": "Download failed: {{message}}",
+      "unsupportedFormat": "File {{name}} is not supported. Supported: {{formats}}",
+      "zipImportSuccess": "Zip import done: {{imported}} imported, {{reused}} reused, {{skipped}} skipped, {{failed}} failed",
+      "zipImportPartial": "Zip import partially succeeded: {{imported}} imported, {{reused}} reused, {{skipped}} skipped, {{failed}} failed",
+      "zipImportNothingImported": "No supported importable files found in the archive (supported: md/txt/html/json/yaml/csv/xlsx/pdf/docx)",
+      "zipImportFailed": "Zip import failed: {{message}}",
+      "zipImportFailedGeneric": "Zip import failed, please check the archive and try again",
+      "zipImportMoreErrors": "…and {{count}} more not shown"
+    },
+    "batchPanel": {
+      "inProgress": "Uploading {{done}}/{{total}}",
+      "done": "Done ({{total}} total, {{failed}} failed)"
+    }
+  },
+  "timers": {
+    "title": "Timers",
+    "description": "View one-shot reminders and recurring jobs in one place, with workspace-aware linkage.",
+    "loading": "Loading timers...",
+    "healthHint": "There are {{count}} tasks that need attention. Check failed or auto-paused recurring jobs first.",
+    "stats": {
+      "total": "All Tasks",
+      "activeRecurring": "Active Recurring",
+      "paused": "Paused",
+      "upcoming24h": "Due in 24h",
+      "errors": "Issues"
+    },
+    "actions": {
+      "refresh": "Refresh",
+      "onlyErrors": "Only Issues",
+      "resetFilters": "Reset Filters",
+      "view": "View Details",
+      "runNow": "Run Now",
+      "pause": "Pause",
+      "resume": "Resume",
+      "delete": "Delete",
+      "cancel": "Cancel",
+      "viewWorkspace": "View Workspace",
+      "viewChannel": "View Channel"
+    },
+    "filters": {
+      "searchPlaceholder": "Search by title, ID, workspace or channel",
+      "workspace": "Workspace",
+      "allWorkspaces": "All Workspaces",
+      "type": "Type",
+      "allTypes": "All Types",
+      "status": "Status",
+      "allStatuses": "All Statuses",
+      "timeRange": "Time Range",
+      "sortBy": "Sort By",
+      "totalCount": "{{count}} tasks"
+    },
+    "types": {
+      "oneShot": "One-shot",
+      "recurring": "Recurring",
+      "oneShotTemporary": "Temporary wake-up"
+    },
+    "status": {
+      "active": "Active",
+      "paused": "Paused",
+      "error": "Error"
+    },
+    "timeRange": {
+      "all": "All",
+      "today": "Today",
+      "next24h": "Next 24h",
+      "next7d": "Next 7 Days",
+      "overdue": "Overdue"
+    },
+    "sort": {
+      "nextRun": "Earliest Next Run",
+      "recentUpdate": "Recently Updated",
+      "recentRun": "Recently Run",
+      "errorFirst": "Issues First"
+    },
+    "table": {
+      "task": "Task",
+      "type": "Type",
+      "status": "Status",
+      "workspace": "Workspace",
+      "channel": "Channel",
+      "rule": "Schedule",
+      "nextRun": "Next Run",
+      "lastRun": "Last Run",
+      "issue": "Issue",
+      "actions": "Actions"
+    },
+    "detail": {
+      "basic": "Basic Info",
+      "schedule": "Schedule",
+      "health": "Health",
+      "linkage": "Linkage",
+      "source": "Source",
+      "tags": "Tags",
+      "createdAt": "Created At",
+      "updatedAt": "Updated At",
+      "triggerAt": "Trigger At",
+      "workdayMode": "Workday Mode",
+      "scheduleTags": "Schedule Tags",
+      "timezone": "Timezone",
+      "healthTags": "Health Tags",
+      "failureCount": "Consecutive Failures",
+      "failureCountChip": "{{count}} failures",
+      "lastError": "Last Error",
+      "temporary": "Temporary",
+      "linkageTags": "Linkage Tags",
+      "healthStateNormal": "Healthy",
+      "healthStateAbnormal": "Issue Detected",
+      "healthAlertNormal": "This task is healthy and ready to run as scheduled.",
+      "healthAlertError": "This task has an issue and needs manual attention."
+    },
+    "source": {
+      "agent": "Created by Agent",
+      "system": "System Task",
+      "unknown": "Unknown"
+    },
+    "workdayMode": {
+      "none": "Raw Cron Rule",
+      "mon_fri": "Mon-Fri",
+      "weekend": "Weekend",
+      "cn_workday": "CN Workday",
+      "cn_restday": "CN Rest Day"
+    },
+    "misc": {
+      "untitled": "Untitled Task",
+      "noDescription": "No description",
+      "unknownChannel": "Unknown Channel",
+      "unlinkedWorkspace": "Unlinked",
+      "primaryChannel": "Primary",
+      "hasError": "Has Error",
+      "failureCount": "{{count}} failures",
+      "yes": "Yes",
+      "no": "No",
+      "oneShotRule": "One-shot reminder"
+    },
+    "empty": {
+      "title": "No timers yet",
+      "description": "There are no visible timer tasks right now. New tasks created by the agent or system will appear here.",
+      "filteredTitle": "No matching tasks",
+      "filteredDescription": "Try adjusting the filters or clear them to view more tasks."
+    },
+    "deleteDialog": {
+      "title": "Confirm Delete",
+      "content": "Delete task \"{{name}}\"? This action cannot be undone."
+    },
+    "pluginAlert": {
+      "message": "The built-in \"Timer Utilities\" plugin is currently disabled, so the AI cannot create new timer tasks directly. Enable the plugin first in Plugin Management.",
+      "action": "Go Enable"
+    },
+    "notifications": {
+      "runNowSuccess": "Task executed",
+      "runNowFailed": "Run failed: {{message}}",
+      "pauseSuccess": "Task paused",
+      "pauseFailed": "Pause failed: {{message}}",
+      "resumeSuccess": "Task resumed",
+      "resumeFailed": "Resume failed: {{message}}",
+      "deleteSuccess": "Task deleted",
+      "deleteFailed": "Delete failed: {{message}}"
+    }
+  }
+}

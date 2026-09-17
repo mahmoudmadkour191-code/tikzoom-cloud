@@ -1,0 +1,715 @@
+#!/usr/bin/env python3
+"""llama-swap-build-config — beim llama-swap-Restart aufgerufen, räumt auf
+und normalisiert:
+
+  1. Verwaiste TTS-Profile rauswerfen.
+     Pro ``<model>-tts-<engine>(-speed)?`` Variante prüfen, ob das
+     zugehörige Docker-Image laut AIfred-Engine-Registry noch
+     vorhanden ist. Ist die Engine deinstalliert, fliegt das Profil
+     samt Group-Membership raus.
+
+  2. Tote Modelle rauswerfen (GGUF gelöscht).
+     Jedes config-Modell, dessen ``--model``-GGUF nicht mehr auf der
+     Platte liegt, fliegt aus ``config.yaml`` (models + group-members)
+     UND aus ``model_vram_cache.json``. So räumt sich beides selbst
+     auf, sobald ein Modell gelöscht wurde — kein Hand-Editieren. Nur
+     nachweislich Totes wird entfernt; Settings/Nicht-GGUF-Backends
+     bleiben bewusst unangetastet.
+
+  3. Speculative-Decoding-Flags normalisieren.
+     MTP-fähige GGUFs (Tensor-Namen enthalten ``nextn``/``mtp``)
+     bekommen ``--spec-type draft-mtp``, non-MTP-Modelle ``ngram`` als
+     sicheren Default. Idempotent.
+
+  4. Doppelte GPU-Flags deduplizieren + ``--cache-reuse`` normalisieren.
+     Historisch haben zwei Writer (autoscan-Insert mit Multi-Line-
+     Parse-Bug + Kalibrierung) den ``-sm layer --tensor-split … -fit
+     off``-Block doppelt in cmds geschrieben — llama.cpp nimmt zwar den
+     letzten Wert, aber die Dubletten sind Ballast und verwirren jeden
+     Nur-erste-Fundstelle-Parser. Hier wird je Flag nur das LETZTE
+     Vorkommen behalten. Außerdem bekommt jedes Modell OHNE ``--mmproj``
+     ``--cache-reuse 256`` (KV-Chunk-Reuse per Shift → TTFT bei RAG-/
+     Agent-Prompts); bei mmproj-Modellen würde der Server es eh mit
+     Warnung deaktivieren — wir setzen es dort gar nicht erst.
+
+Repo-Heimat: ``scripts/llama-swap-build-config`` im AIfred-Repo. Im PATH
+liegt ``~/bin/llama-swap-build-config`` als Symlink hierher — das
+Restart-Script ruft den absoluten ``/home/mp/bin/...`` Pfad auf, der
+Symlink leitet aufs Repo-File um.
+
+ENV:
+  LLAMA_SWAP_CONFIG  Pfad zur config.yaml (default: ~/.config/llama-swap/config.yaml)
+  AIFRED_REPO        Pfad zum AIfred-Repo (default: ~/Projekte/AIfred-Intelligence)
+                     — wird zum sys.path hinzugefügt, damit der TTS-Cleanup
+                     ``aifred.lib.tts_engines`` importieren kann
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shlex
+import sys
+from pathlib import Path
+
+import yaml
+
+try:
+    from gguf import GGUFReader
+except ImportError:
+    sys.stderr.write(
+        "❌ Python-Modul 'gguf' nicht verfügbar — "
+        "bitte mit AIfred-venv aufrufen oder `pip install gguf`.\n"
+    )
+    sys.exit(2)
+
+
+# ── Konfiguration ──────────────────────────────────────────────────────────
+CONFIG_PATH = Path(
+    os.environ.get(
+        "LLAMA_SWAP_CONFIG",
+        str(Path.home() / ".config/llama-swap/config.yaml"),
+    )
+)
+MTP_STATUS_CACHE = Path.home() / ".cache/llama_mtp_status.json"
+LOOKUP_CACHE_DIR = Path.home() / ".cache"
+
+# AIfred-Repo (für die TTS-Engine-Registry — wir lesen ``is_installed()``
+# von dort, um verwaiste TTS-Profile in der YAML aufzuräumen wenn eine
+# Engine deinstalliert wurde). Optional: ohne den Import fällt der
+# Cleanup einfach aus und das Script läuft weiter.
+AIFRED_REPO = Path(
+    os.environ.get("AIFRED_REPO", str(Path.home() / "Projekte/AIfred-Intelligence"))
+)
+if AIFRED_REPO.exists() and str(AIFRED_REPO) not in sys.path:
+    sys.path.insert(0, str(AIFRED_REPO))
+
+MTP_FLAGS = [
+    "--spec-type", "draft-mtp",
+    "--spec-draft-n-max", "3",
+    "--spec-draft-p-min", "0.75",
+]
+
+# Alle bekannten Spec-Flags (alt + neu), die vor der Re-Injektion entfernt
+# werden. Werte = Anzahl der nachfolgenden Wert-Argumente.
+SPEC_TOKENS = {
+    "--draft": 1, "--draft-n": 1, "--draft-max": 1,
+    "--draft-min": 1, "--draft-n-min": 1,
+    "--draft-p-min": 1, "--draft-p-split": 1,
+    "--spec-type": 1,
+    "--spec-draft-n-max": 1, "--spec-draft-n-min": 1,
+    "--spec-draft-p-min": 1, "--spec-draft-p-split": 1,
+    "--lookup-cache-dynamic": 1, "-lcd": 1,
+    "--lookup-cache-static": 1, "-lcs": 1,
+    "--spec-default": 0,
+}
+
+# Flags, die historisch doppelt in cmds geraten sind (autoscan-Insert vor
+# dem Multi-Line-Parse-Fix + Kalibrierungs-Writer). Wert = Anzahl der
+# Wert-Argumente. Dedupe behält das LETZTE Vorkommen — llama.cpp nimmt bei
+# wiederholten Flags ohnehin den letzten Wert.
+DEDUPE_TOKENS = {"-sm": 1, "--tensor-split": 1, "-ts": 1, "-fit": 1}
+
+# TTFT-Hebel: KV-Chunks bereits verarbeiteter Prompt-Teile per Shift
+# wiederverwenden statt neu zu rechnen (min. Chunk-Größe 256 Tokens).
+# Greift bei AIfreds RAG-/Agent-Prompts, deren Mitte sich ändert, während
+# Prefix+Suffix stabil bleiben. Wird nur bei Modellen OHNE --mmproj
+# gesetzt — der Server deaktiviert cache_reuse bei Multimodal selbst
+# ("not supported by multimodal"), das Flag wäre dort nur Warn-Spam.
+CACHE_REUSE_FLAGS = ["--cache-reuse", "256"]
+
+
+# ── MTP-Detection ──────────────────────────────────────────────────────────
+def load_mtp_cache() -> dict:
+    if MTP_STATUS_CACHE.exists():
+        try:
+            data = json.loads(MTP_STATUS_CACHE.read_text())
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def save_mtp_cache(cache: dict) -> None:
+    MTP_STATUS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    MTP_STATUS_CACHE.write_text(json.dumps(cache, indent=2, sort_keys=True))
+
+
+def _multipart_parts(gguf_path: Path) -> list[Path]:
+    """Returns all parts of a multi-part GGUF (``-NNNNN-of-NNNNN.gguf``).
+    For single-file GGUFs returns ``[gguf_path]``. Used by detect_mtp:
+    GGUFReader only reads one part at a time, but MTP-Tensoren landen oft
+    in einem späteren Part (Manifest-Part 1 enthält null Tensoren).
+    """
+    m = re.match(r"^(.+)-(\d{5})-of-(\d{5})\.gguf$", gguf_path.name)
+    if not m:
+        return [gguf_path]
+    base, _, total = m.group(1), m.group(2), int(m.group(3))
+    return [
+        gguf_path.parent / f"{base}-{i:05d}-of-{total:05d}.gguf"
+        for i in range(1, total + 1)
+    ]
+
+
+def _cache_lookup(cache: dict, key: str, mtime: float, field: str) -> bool | None:
+    """mtime-validierter Lookup eines einzelnen Flags im Detection-Cache."""
+    entry = cache.get(key)
+    if entry and entry.get("mtime") == mtime and field in entry:
+        return bool(entry[field])
+    return None
+
+
+def _cache_store(
+    cache: dict, key: str, mtime: float, field: str, value: bool,
+) -> None:
+    """Schreibt ein Flag ins Cache-Entry, ohne fremde Felder desselben
+    (mtime-gültigen) Entries zu verwerfen — MTP- und MoE-Detection teilen
+    sich den Cache pro GGUF."""
+    entry = cache.get(key)
+    if entry and entry.get("mtime") == mtime:
+        entry[field] = value
+    else:
+        cache[key] = {"mtime": mtime, field: value}
+
+
+def detect_mtp(gguf_path: Path, cache: dict) -> bool:
+    """Liest GGUF-Header, prüft auf MTP-Tensoren. mtime-basierter Cache."""
+    key = str(gguf_path)
+    try:
+        mtime = gguf_path.stat().st_mtime
+    except FileNotFoundError:
+        sys.stderr.write(f"⚠️  GGUF nicht gefunden: {gguf_path}\n")
+        return False
+    cached = _cache_lookup(cache, key, mtime, "has_mtp")
+    if cached is not None:
+        return cached
+
+    parts = _multipart_parts(gguf_path)
+    has_mtp = False
+    try:
+        for part in parts:
+            if not part.exists():
+                continue
+            reader = GGUFReader(str(part))
+            if any(
+                ("nextn" in t.name.lower() or "mtp" in t.name.lower())
+                for t in reader.tensors
+            ):
+                has_mtp = True
+                break
+    except Exception as e:
+        sys.stderr.write(f"⚠️  GGUF-Read-Fehler {gguf_path}: {e}\n")
+        return False
+
+    _cache_store(cache, key, mtime, "has_mtp", has_mtp)
+    return has_mtp
+
+
+def detect_moe(gguf_path: Path, cache: dict) -> bool:
+    """Prüft via GGUF-KV-Metadaten (``<arch>.expert_count``), ob das Modell
+    ein MoE ist. Architektur-agnostisch; Metadaten stehen vollständig im
+    ersten Part, Multi-Part-Scan wie bei MTP ist nicht nötig.
+    mtime-basierter Cache (geteilt mit detect_mtp)."""
+    key = str(gguf_path)
+    try:
+        mtime = gguf_path.stat().st_mtime
+    except FileNotFoundError:
+        sys.stderr.write(f"⚠️  GGUF nicht gefunden: {gguf_path}\n")
+        return False
+    cached = _cache_lookup(cache, key, mtime, "is_moe")
+    if cached is not None:
+        return cached
+
+    is_moe = False
+    try:
+        reader = GGUFReader(str(gguf_path))
+        for name, field in reader.fields.items():
+            if name.endswith(".expert_count"):
+                is_moe = int(field.contents() or 0) > 0
+                break
+    except Exception as e:
+        sys.stderr.write(f"⚠️  GGUF-Read-Fehler {gguf_path}: {e}\n")
+        return False
+
+    _cache_store(cache, key, mtime, "is_moe", is_moe)
+    return is_moe
+
+
+# ── Flag-Normalisierung ────────────────────────────────────────────────────
+def force_flag_value(tokens: list[str], flag: str, value: str) -> list[str]:
+    """Setzt ``flag value``: hebt vorhandene Vorkommen auf ``value`` an,
+    fehlt das Flag, wird es angehängt."""
+    out = list(tokens)
+    found = False
+    for i, tok in enumerate(out[:-1]):
+        if tok == flag:
+            out[i + 1] = value
+            found = True
+    if not found:
+        out += [flag, value]
+    return out
+
+
+def strip_tokens(tokens: list[str], flags: dict[str, int]) -> list[str]:
+    """Entfernt alle in ``flags`` gelisteten Flags (inkl. Wert-Argumente)."""
+    out: list[str] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in flags:
+            i += 1 + flags[tok]
+            continue
+        out.append(tok)
+        i += 1
+    return out
+
+
+def strip_spec_tokens(tokens: list[str]) -> list[str]:
+    """Entfernt alle bekannten Spec-Flags (inkl. ihrer Wert-Argumente)."""
+    return strip_tokens(tokens, SPEC_TOKENS)
+
+
+def dedupe_flag_tokens(tokens: list[str]) -> list[str]:
+    """Behält je DEDUPE_TOKENS-Flag nur das LETZTE Vorkommen (samt Wert).
+
+    Selbstheilung für die historisch doppelten ``-sm layer --tensor-split
+    … -fit off``-Blöcke — Position der Flags ist llama-server egal, nur
+    der letzte Wert zählt.
+    """
+    last: dict[str, int] = {}
+    for i, tok in enumerate(tokens):
+        if tok in DEDUPE_TOKENS:
+            last[tok] = i
+    out: list[str] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in DEDUPE_TOKENS and i != last[tok]:
+            i += 1 + DEDUPE_TOKENS[tok]
+            continue
+        out.append(tok)
+        i += 1
+    return out
+
+
+def find_model_path(tokens: list[str]) -> Path | None:
+    for i, t in enumerate(tokens):
+        if t in ("--model", "-m") and i + 1 < len(tokens):
+            return Path(tokens[i + 1])
+    return None
+
+
+def is_llama_server_cmd(cmd: str) -> bool:
+    """True wenn das cmd ein llama-server-Aufruf ist. Nur solche Einträge
+    verwaltet dieses Script — fremde Backends (z.B. vLLM-Einträge, deren
+    ``python -m`` sonst als ``-m <Modellpfad>`` fehlgedeutet würde) bleiben
+    komplett unangetastet: kein Prune, keine Normalisierung."""
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        return False
+    return bool(tokens) and Path(tokens[0]).name == "llama-server"
+
+
+_MMPROJ_PRECISION_RE = re.compile(r"-(?:f16|bf16|f32|q\d+(?:_\w+)?)$", re.IGNORECASE)
+
+
+def find_mmproj_for_model(model_path: Path) -> Path | None:
+    """Find a vision projector (mmproj) that belongs to ``model_path``.
+
+    Convention: the mmproj GGUF lives in the SAME directory as the model GGUF
+    and its name (minus the ``mmproj-`` prefix and the ``-F16``/``-Q…``
+    precision suffix) is a prefix of the model's base stem. Example::
+
+        Qwen3.6-27B-MTP-UD-Q8_K_XL.gguf   ←  mmproj-Qwen3.6-27B-F16.gguf
+                                              core "Qwen3.6-27B" is a prefix
+
+    Returns the longest (most specific) match, or None. This keeps unrelated
+    projectors in the same folder (e.g. mmproj-Qwen3VL-8B) from matching.
+    """
+    name = model_path.name
+    m = re.match(r"^(.+)-\d{5}-of-\d{5}\.gguf$", name)
+    base_stem = (m.group(1) if m else model_path.stem).lower()
+
+    best: Path | None = None
+    best_len = 0
+    for cand in model_path.parent.glob("mmproj*.gguf"):
+        core = _MMPROJ_PRECISION_RE.sub("", cand.stem)
+        if core.lower().startswith("mmproj-"):
+            core = core[len("mmproj-"):]
+        if core and base_stem.startswith(core.lower()) and len(core) > best_len:
+            best, best_len = cand, len(core)
+    return best
+
+
+def strip_mmproj_if_missing(tokens: list[str]) -> tuple[list[str], str | None]:
+    """Entfernt ``--mmproj <pfad>`` aus der cmd, wenn die mmproj-Datei fehlt.
+
+    Anders als beim ``--model``-GGUF wird NICHT das ganze Modell verworfen —
+    ein fehlender Vision-Encoder soll das Sprachmodell nicht killen, sondern
+    es nur text-only weiterlaufen lassen. Gültige ``--mmproj``-Pfade bleiben
+    unangetastet (und überleben so jeden Restart). Gibt (tokens, dropped_path).
+    """
+    out: list[str] = []
+    dropped: str | None = None
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "--mmproj" and i + 1 < len(tokens):
+            mmproj_path = Path(tokens[i + 1])
+            if not mmproj_path.exists():
+                dropped = str(mmproj_path)
+                i += 2
+                continue
+        out.append(tok)
+        i += 1
+    return out, dropped
+
+
+def lookup_cache_path(model_path: Path) -> Path:
+    """Cache-Pfad vom GGUF-Stem ableiten, damit Modell-Varianten (z.B. TTS-Splits
+    auf dem gleichen GGUF) sich denselben ngram-Cache teilen."""
+    stem = model_path.stem
+    # Bei Multi-Part-GGUFs den Split-Suffix abschneiden (z.B. -00001-of-00003)
+    stem = re.sub(r"-\d{5}-of-\d{5}$", "", stem)
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("_")
+    return LOOKUP_CACHE_DIR / f"llama_lookup_{safe}.bin"
+
+
+def build_spec_flags(model_path: Path, has_mtp: bool) -> list[str]:
+    if has_mtp:
+        return list(MTP_FLAGS)
+    # ngram-mod statt ngram-cache: in-memory n-gram lookup (kein persistent
+    # disk-cache, aber ngram-cache crasht im Constructor in llama.cpp b9295).
+    # Funktional fast identisch.
+    return [
+        "--spec-type", "ngram-mod",
+        "--spec-draft-n-max", "4",
+        "--spec-draft-p-min", "0.75",
+    ]
+
+
+# Tokens die ohne Quoting wieder ausgegeben werden dürfen. llama-swap macht
+# ${VAR}-Substitution und splittet anhand von Whitespace; Single-Quotes von
+# shlex.quote() würden in den Argv-Token bleiben und das Argument verfälschen.
+_SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_./:=,${}@%+-]+$")
+
+
+def quote_if_needed(token: str) -> str:
+    if token and _SAFE_TOKEN_RE.match(token):
+        return token
+    return shlex.quote(token)
+
+
+def normalize_cmd(cmd: str, model_name: str, mtp_cache: dict) -> tuple[str, str]:
+    """Returns (new_cmd, status). status ∈ {'MTP', 'ngram', 'skip'}.
+
+    Strategie:
+    - MTP-Tensoren im GGUF erkannt -> MTP-Flags (--spec-type draft-mtp).
+    - Sonst -> ngram-cache mit p-min=0.75 als sicherer Default.
+
+    Modelle die explizit von Speculative-Decoding ausgenommen werden sollen
+    können hier per Name in einer Skip-Liste vermerkt werden (siehe SKIP_SPEC).
+    """
+    tokens = shlex.split(cmd)
+    model_path = find_model_path(tokens)
+    if model_path is None:
+        return cmd, "skip"
+
+    # Selbstheilend: totes --mmproj entfernen (Modell läuft text-only weiter),
+    # gültiges --mmproj bleibt erhalten und überlebt so den Restart.
+    tokens, dropped_mmproj = strip_mmproj_if_missing(tokens)
+    if dropped_mmproj:
+        sys.stderr.write(
+            f"⚠️  {model_name}: --mmproj entfernt (Datei fehlt: {dropped_mmproj})\n"
+        )
+
+    # Auto-Detect: native Vision aktivieren, wenn ein passendes mmproj-File
+    # neben dem GGUF liegt. -vlm-Varianten nutzen den separaten Side-Channel
+    # und bleiben mmproj-frei (sonst doppelte Vision-Reserve). Die Kalibrierung
+    # erkennt das --mmproj und plant den Bild-VRAM (768 MB) selbst ein.
+    if "--mmproj" not in tokens and "-vlm" not in model_name:
+        mmproj = find_mmproj_for_model(model_path)
+        if mmproj is not None:
+            insert_at = next(
+                (i for i, t in enumerate(tokens) if t == "--port"), len(tokens)
+            )
+            tokens[insert_at:insert_at] = ["--mmproj", str(mmproj)]
+            sys.stderr.write(f"👁️  {model_name}: --mmproj gesetzt ({mmproj.name})\n")
+
+    # Sidecar-Draft-Profile (DSpark / EAGLE3 / DFlash): Spec-Setup ist
+    # handkalibriert (separates Draft-GGUF via --model-draft, Device-
+    # Pinning, eigene Draft-Params) — build-config kennt nur MTP/ngram
+    # und würde es zu ngram zurücknormalisieren und das --model-draft
+    # verwaisen lassen. Deshalb Spec-Flags unangetastet lassen; die
+    # Pflege-Schritte (mmproj, Dedupe, MoE-Batch) laufen normal weiter.
+    sidecar_spec_types = {"draft-dspark", "draft-eagle3", "draft-dflash"}
+    preserve_spec = any(
+        tok == "--spec-type" and i + 1 < len(tokens) and tokens[i + 1] in sidecar_spec_types
+        for i, tok in enumerate(tokens)
+    )
+
+    has_mtp = detect_mtp(model_path, mtp_cache)
+    is_moe = detect_moe(model_path, mtp_cache)
+    base = list(tokens) if preserve_spec else strip_spec_tokens(tokens)
+    # Historische Dubletten (-sm/--tensor-split/-fit doppelt) entfernen und
+    # --cache-reuse idempotent neu setzen (strip + re-inject wie bei Spec).
+    base = dedupe_flag_tokens(base)
+    base = strip_tokens(base, {"--cache-reuse": 1})
+    # -b/-ub 2048 für MoE-Modelle: Experten-Gewichts-Reads amortisieren sich
+    # über größere Microbatches (llama-bench 2026-07-31: 35B-A3B pp8192
+    # 1585->2423 t/s (+53%), 397B 240->399 t/s (+66%); dense 27B nur +8%,
+    # Decode überall unverändert). Realer VRAM-Preis ~1 GB/GPU, den die
+    # Kalibrierung via fit-params einplant. Dense Profile bleiben beim
+    # llama.cpp-Default (512) bzw. bei manuell gesetzten Werten.
+    if is_moe:
+        base = force_flag_value(base, "-b", "2048")
+        base = force_flag_value(base, "-ub", "2048")
+    spec = [] if preserve_spec else build_spec_flags(model_path, has_mtp)
+    new_tokens = base + spec
+    if "--mmproj" not in new_tokens:
+        new_tokens = new_tokens + CACHE_REUSE_FLAGS
+    new_cmd = " ".join(quote_if_needed(t) for t in new_tokens)
+    if preserve_spec:
+        return new_cmd, "sidecar"
+    return new_cmd, ("MTP" if has_mtp else "ngram")
+
+
+# ── TTS-Profil-Cleanup ─────────────────────────────────────────────────────
+def cleanup_uninstalled_tts_profiles(data: dict) -> list[str]:
+    """Entfernt ``<model>-tts-<engine>`` und ``-speed``-Pendants aus der
+    config, wenn das Docker-Image der Engine lokal nicht (mehr) gebaut
+    ist. Bereinigt auch Group-``members``-Listen.
+
+    Source-of-Truth ist die AIfred-Engine-Registry — eine Engine gilt
+    als "installed", wenn ``TTSEngine.is_installed()`` ``True`` liefert
+    (Docker-Image vorhanden).
+    """
+    from aifred.lib.tts_engines import TTS_ENGINES, installed_gpu_engines
+
+    all_gpu_keys = {e.key for e in TTS_ENGINES.values() if e.needs_gpu}
+    installed_keys = {e.key for e in installed_gpu_engines()}
+    uninstalled = all_gpu_keys - installed_keys
+    if not uninstalled:
+        return []
+
+    # Engine-Key-Match boundary-sicher: exaktes Suffix ODER Key gefolgt
+    # von weiterem Segment (-speed, -vlm-…-Kombos). fish-speech bleibt
+    # zusammen statt von einem Regex als "fish" gelesen zu werden.
+    def _matches(name: str, key: str) -> bool:
+        return name.endswith(f"-tts-{key}") or f"-tts-{key}-" in name
+
+    removed: list[str] = []
+    models = data.get("models") or {}
+    for name in list(models.keys()):
+        if any(_matches(name, key) for key in uninstalled):
+            del models[name]
+            removed.append(name)
+
+    _prune_from_groups(data, removed)
+    return removed
+
+
+def _prune_from_groups(data: dict, removed: list[str]) -> None:
+    """Entfernt die ``removed``-Modellnamen aus allen ``groups.*.members``-
+    Listen. Gemeinsame Mechanik für TTS- und Missing-GGUF-Cleanup."""
+    if not removed:
+        return
+    removed_set = set(removed)
+    groups = data.get("groups") or {}
+    for grp_cfg in groups.values():
+        if not isinstance(grp_cfg, dict):
+            continue
+        members = grp_cfg.get("members") or []
+        kept = [m for m in members if m not in removed_set]
+        if len(kept) != len(members):
+            grp_cfg["members"] = kept
+
+
+# ── Missing-GGUF-Cleanup ────────────────────────────────────────────────────
+def cleanup_missing_gguf_models(data: dict) -> list[str]:
+    """Entfernt Modelle aus der config, deren ``--model``-GGUF nicht mehr auf
+    der Platte liegt — plus Group-``members``-Cleanup. Damit räumt sich die
+    config beim nächsten Restart selbst auf, sobald ein Modell gelöscht wurde
+    (alle Varianten eines gelöschten Basis-Modells teilen denselben GGUF-Pfad
+    und fliegen gemeinsam raus).
+
+    Konservativ: nur prunen wenn ``--model`` vorhanden UND die Datei fehlt.
+    Ein nicht parsbares cmd oder fehlendes ``--model`` bleibt unangetastet —
+    wir löschen nur, was nachweislich tot ist.
+    """
+    removed: list[str] = []
+    models = data.get("models") or {}
+    for name in list(models.keys()):
+        cmd = (models[name] or {}).get("cmd", "")
+        if not cmd:
+            continue
+        if not is_llama_server_cmd(cmd):
+            continue  # fremdes Backend (z.B. vLLM) — nicht unser Zuständigkeitsbereich
+        try:
+            model_path = find_model_path(shlex.split(cmd))
+        except ValueError:
+            continue  # unparsbares cmd — in Ruhe lassen
+        if model_path is None:
+            continue  # kein --model — nichts zu prüfen
+        if not model_path.exists():
+            del models[name]
+            removed.append(name)
+
+    _prune_from_groups(data, removed)
+    return removed
+
+
+def cleanup_missing_gguf_vram_cache(dry_run: bool) -> list[str]:
+    """Entfernt Einträge aus ``model_vram_cache.json``, deren ``gguf_path``
+    nicht mehr existiert. Spiegelt den config-Prune: ein gelöschtes Modell
+    soll auch im VRAM-Cache keine Leichen hinterlassen.
+
+    Nur Einträge MIT ``gguf_path`` werden geprüft — Einträge ohne (z.B.
+    Nicht-GGUF-Backends) bleiben unangetastet, weil ihre Gültigkeit nicht
+    über die Platte verifizierbar ist. Schreibt mit ``.bak``-Backup, außer
+    im Dry-Run.
+    """
+    try:
+        from aifred.lib.model_vram_cache import CACHE_FILE, load_cache, save_cache
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write(f"⚠️  VRAM-Cache-Prune übersprungen (Import: {e})\n")
+        return []
+
+    cache = load_cache()
+    removed: list[str] = []
+    for model_id in list(cache.keys()):
+        entry = cache.get(model_id)
+        gguf = entry.get("gguf_path") if isinstance(entry, dict) else None
+        if gguf and not Path(gguf).exists():
+            del cache[model_id]
+            removed.append(model_id)
+
+    if not removed or dry_run:
+        return removed
+
+    bak = Path(str(CACHE_FILE) + ".bak")
+    try:
+        bak.write_text(CACHE_FILE.read_text())
+    except OSError:
+        pass
+    save_cache(cache)
+    return removed
+
+
+# ── YAML-IO ────────────────────────────────────────────────────────────────
+def extract_header_comments(text: str) -> tuple[str, str]:
+    """Trennt führende Kommentar-/Leerzeilen ab, damit sie nach dem PyYAML-
+    Round-Trip wieder vorangestellt werden können."""
+    lines = text.splitlines(keepends=True)
+    i = 0
+    while i < len(lines) and (lines[i].lstrip().startswith("#") or lines[i].strip() == ""):
+        i += 1
+    return "".join(lines[:i]), "".join(lines[i:])
+
+
+def main() -> int:
+    dry_run = "--dry-run" in sys.argv or "-n" in sys.argv
+
+    if not CONFIG_PATH.exists():
+        sys.stderr.write(f"❌ config nicht gefunden: {CONFIG_PATH}\n")
+        return 1
+
+    raw = CONFIG_PATH.read_text()
+    header, body = extract_header_comments(raw)
+    data = yaml.safe_load(body)
+    if not isinstance(data, dict) or "models" not in data:
+        sys.stderr.write("❌ kein 'models'-key in config\n")
+        return 1
+
+    # Verwaiste TTS-Profile (Engine deinstalliert, Profil noch in YAML)
+    # rauswerfen, bevor wir die übrigen Modelle normalisieren.
+    removed_tts = cleanup_uninstalled_tts_profiles(data)
+    if removed_tts:
+        sys.stderr.write(
+            f"🧹 Verwaiste TTS-Profile entfernt "
+            f"({len(removed_tts)} — Engine-Image nicht installiert):\n"
+        )
+        for name in removed_tts:
+            sys.stderr.write(f"   – {name}\n")
+
+    # Tote Modelle (GGUF gelöscht) aus der config werfen, bevor wir die
+    # übrigen normalisieren — sonst würde detect_mtp gleich über die
+    # fehlenden Dateien stolpern.
+    removed_gguf = cleanup_missing_gguf_models(data)
+    if removed_gguf:
+        sys.stderr.write(
+            f"🧹 Tote Modelle entfernt (GGUF nicht mehr vorhanden, "
+            f"{len(removed_gguf)}):\n"
+        )
+        for name in removed_gguf:
+            sys.stderr.write(f"   – {name}\n")
+
+    # Gleicher Prune im VRAM-Cache (eigene Datei, eigenes Backup, respektiert
+    # --dry-run). Läuft unabhängig vom config-Write.
+    removed_cache = cleanup_missing_gguf_vram_cache(dry_run)
+    if removed_cache:
+        verb = "würden entfernt" if dry_run else "entfernt"
+        sys.stderr.write(
+            f"🧹 VRAM-Cache: {len(removed_cache)} tote Eintrag/Einträge {verb}:\n"
+        )
+        for name in removed_cache:
+            sys.stderr.write(f"   – {name}\n")
+
+    mtp_cache = load_mtp_cache()
+
+    summary: list[tuple[str, str]] = []
+    changed = 0
+
+    for name, cfg in data["models"].items():
+        cmd = (cfg or {}).get("cmd", "")
+        if not cmd:
+            continue
+        if not is_llama_server_cmd(cmd):
+            summary.append((name, "extern"))
+            continue
+        new_cmd, status = normalize_cmd(cmd, name, mtp_cache)
+        if new_cmd != cmd:
+            data["models"][name]["cmd"] = new_cmd
+            changed += 1
+        summary.append((name, status))
+
+    save_mtp_cache(mtp_cache)
+
+    # Status-Übersicht (auch wenn nichts geändert wurde)
+    sys.stderr.write("Speculative-Status pro Modell:\n")
+    for name, status in summary:
+        symbol = {"MTP": "🚀", "ngram": "📋", "sidecar": "🎯", "skip": "⚠️ ", "extern": "🔌"}.get(status, "?")
+        sys.stderr.write(f"  {symbol} {status:5}  {name}\n")
+
+    if changed == 0 and not removed_tts and not removed_gguf:
+        sys.stderr.write("\n✓ Keine Änderungen — config bereits normalisiert.\n")
+        return 0
+
+    rendered = yaml.safe_dump(
+        data, default_flow_style=False, sort_keys=False, width=10000, allow_unicode=True
+    )
+    new_content = header + rendered
+
+    if dry_run:
+        sys.stderr.write(
+            f"\n[DRY-RUN] {changed} Modell(e) würden aktualisiert, "
+            f"{len(removed_tts) + len(removed_gguf)} entfernt werden.\n"
+            f"[DRY-RUN] Neue config würde nach: {CONFIG_PATH}\n"
+            f"[DRY-RUN] Vorschau (stdout):\n\n"
+        )
+        sys.stdout.write(new_content)
+        return 0
+
+    # Backup vor Write
+    bak = CONFIG_PATH.with_suffix(".yaml.bak")
+    bak.write_text(raw)
+    CONFIG_PATH.write_text(new_content)
+
+    sys.stderr.write(f"\n✓ {changed} Modell(e) aktualisiert. Backup: {bak}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

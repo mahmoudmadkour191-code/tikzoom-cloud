@@ -1,0 +1,30 @@
+# Git and GitLab .files
+.git
+.gitignore
+.gitlab-ci.yml
+
+# Docker Ops files
+build/**/Dockerfile
+docker-compose.yml
+docker-compose.yaml
+.dockerignore
+
+# Dotenvs
+.env*
+
+# Python envs
+.venv*
+venv*
+
+# Claude tests
+.claude/
+CLAUDE.md
+
+# PostgreSQL scripts
+postgres/
+
+# Python scripts
+scripts/
+
+# Other
+pyrightconfig.json

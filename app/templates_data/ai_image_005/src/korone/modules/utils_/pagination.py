@@ -1,0 +1,99 @@
+import math
+from itertools import batched, starmap
+from typing import TYPE_CHECKING, Any
+
+from aiogram.types import DisabledButton, InlineKeyboardButton, InlineKeyboardMarkup
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+type _PaginationButton = tuple[str, str | None]
+
+
+class Pagination:
+    __slots__ = ("item_data", "item_title", "objects", "page_data")
+
+    def __init__(
+        self,
+        objects: list[Any],
+        page_data: Callable[[int], str],
+        item_data: Callable[[Any, int], str],
+        item_title: Callable[[Any, int], str],
+    ) -> None:
+        self.objects = objects
+        self.page_data = page_data
+        self.item_data = item_data
+        self.item_title = item_title
+
+    def create(self, page: int, lines: int = 5, columns: int = 1) -> InlineKeyboardMarkup:
+        items_per_page = lines * columns
+        page = max(1, page)
+        offset = (page - 1) * items_per_page
+        total_items = len(self.objects)
+        last_page = math.ceil(total_items / items_per_page)
+
+        current_page_items = self.objects[offset : offset + items_per_page]
+
+        buttons: list[_PaginationButton] = [
+            (self.item_title(item, page), self.item_data(item, page)) for item in current_page_items
+        ]
+        kb_lines: list[list[_PaginationButton]] = [list(batch) for batch in batched(buttons, columns)]
+
+        if last_page > 1:
+            pages_range = range(1, last_page + 1)
+            nav_buttons = self._generate_navigation_buttons(page, last_page, pages_range)
+            kb_lines.append(nav_buttons)
+
+        return InlineKeyboardMarkup(inline_keyboard=[list(starmap(self._create_button, line)) for line in kb_lines])
+
+    @staticmethod
+    def _create_button(text: str, data: str | None) -> InlineKeyboardButton:
+        if data is None:
+            return InlineKeyboardButton(text=text, disabled=DisabledButton())
+        return InlineKeyboardButton(text=text, callback_data=data)
+
+    @staticmethod
+    def _format_page_number(n: int, current_page: int) -> str:
+        return f"· {n} ·" if n == current_page else str(n)
+
+    def _generate_navigation_buttons(self, page: int, last_page: int, pages_range: range) -> list[_PaginationButton]:
+        if last_page <= 5:
+            return [(self._format_page_number(n, page), self.page_data(n)) for n in pages_range]
+        if page <= 3:
+            return self._generate_first_section_navigation(page, last_page, pages_range)
+        if page >= last_page - 2:
+            return self._generate_last_section_navigation(page, last_page, pages_range)
+        return self._generate_middle_section_navigation(page, last_page)
+
+    def _generate_first_section_navigation(
+        self, page: int, last_page: int, pages_range: range
+    ) -> list[_PaginationButton]:
+        nav: list[_PaginationButton] = [(self._format_page_number(n, page), self.page_data(n)) for n in pages_range[:3]]
+
+        if last_page >= 4:
+            nav.append(("4 ›" if last_page > 5 else "4", self.page_data(4)))
+
+        if last_page > 4:
+            nav.append((f"{last_page} »" if last_page > 5 else str(last_page), self.page_data(last_page)))
+
+        return nav
+
+    def _generate_last_section_navigation(
+        self, page: int, last_page: int, pages_range: range
+    ) -> list[_PaginationButton]:
+        nav: list[_PaginationButton] = [("« 1" if last_page > 5 else "1", self.page_data(1))]
+        if last_page > 5:
+            nav.append((f"‹ {last_page - 3}", self.page_data(last_page - 3)))
+
+        nav.extend((self._format_page_number(n, page), self.page_data(n)) for n in pages_range[-3:])
+
+        return nav
+
+    def _generate_middle_section_navigation(self, page: int, last_page: int) -> list[_PaginationButton]:
+        return [
+            ("« 1", self.page_data(1)),
+            (f"‹ {page - 1}", self.page_data(page - 1)),
+            (f"· {page} ·", None),
+            (f"{page + 1} ›", self.page_data(page + 1)),
+            (f"{last_page} »", self.page_data(last_page)),
+        ]

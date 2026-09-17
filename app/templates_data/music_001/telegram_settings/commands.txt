@@ -1,0 +1,4 @@
+dl - + <links> required! download now
+link - + <links> required! get direct url
+settings - change default mode and spam
+help - show the help message

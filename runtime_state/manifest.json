@@ -1,13 +1,13 @@
 {
  "version": 1,
- "updated": "2026-09-18T08:09:42.008985Z",
+ "updated": "2026-09-18T08:24:43.578401Z",
  "files": {
   "bots_storage/8202070583/db180d6a_numbers_bot_fixed-2/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
   "bots_storage/8202070583/db180d6a_numbers_bot_fixed-2/numbers_bot.db": "4cf2e8d579e4ca9bd618afb5cea13334d0f9fa990e752f71aa4851e33aa4ca9c",
   "bots_storage/8202070583/49071b57__MCV_P_Bot/_MCV_P_Bot.py": "ccb65da67beac30e0e89f49ccb51a7101b9e5e9fbf29e4b8b8bbf79c3931eecb",
   "bots_storage/8202070583/49071b57__MCV_P_Bot/emoji_map.json": "9858394d55fa8ec338cd61dd7b122d33ddf2068fed7097995d6fd89ee7c3de27",
   "bots_storage/8202070583/49071b57__MCV_P_Bot/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
-  "bots_storage/8202070583/49071b57__MCV_P_Bot/numbers_bot.db": "97b88586e60e12db0a2f00129ebd9c8618d187722d715950c1f7b635430c0abb",
+  "bots_storage/8202070583/49071b57__MCV_P_Bot/numbers_bot.db": "ae9eb51f5b6f69f72e0e3e831563a2782bc4771fc3fcc00b9a4a9dfa51ed77ab",
   "bots_storage/8202070583/71bf9725__MCV_P/quran.db": "ae6c0d4e68d57912059bcafbc2fc6f682981ffffab57076af28196614a14a40f",
   "bots_storage/8202070583/71bf9725__MCV_P/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
   "bots_storage/8202070583/71bf9725__MCV_P/_MCV_P.py": "2e0fa7c303da553d72d87d5ac05ab6a65863d88e411706fc850f297a27e43fdc",

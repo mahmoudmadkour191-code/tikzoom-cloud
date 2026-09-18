@@ -1,6 +1,6 @@
 {
  "version": 1,
- "updated": "2026-09-18T08:39:45.197965Z",
+ "updated": "2026-09-18T08:54:47.048178Z",
  "files": {
   "bots_storage/8202070583/db180d6a_numbers_bot_fixed-2/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
   "bots_storage/8202070583/db180d6a_numbers_bot_fixed-2/numbers_bot.db": "4cf2e8d579e4ca9bd618afb5cea13334d0f9fa990e752f71aa4851e33aa4ca9c",
@@ -8,12 +8,13 @@
   "bots_storage/8202070583/49071b57__MCV_P_Bot/emoji_map.json": "9858394d55fa8ec338cd61dd7b122d33ddf2068fed7097995d6fd89ee7c3de27",
   "bots_storage/8202070583/49071b57__MCV_P_Bot/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
   "bots_storage/8202070583/49071b57__MCV_P_Bot/numbers_bot.db": "ed4a450d7aa6036e58aa94778012da237765808c0a5da086eef1e3d5cb7c6215",
-  "bots_storage/8202070583/71bf9725__MCV_P/quran.db": "7723e22499b09c7434f2447c3beac7b5ec47d87c1b993ca4ed91afd042818589",
+  "bots_storage/8202070583/71bf9725__MCV_P/quran.db": "87f86b18687fd04898d978e700fd3cad6a897f3648c43ab88f4c5c4498b761ca",
   "bots_storage/8202070583/71bf9725__MCV_P/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
   "bots_storage/8202070583/71bf9725__MCV_P/_MCV_P.py": "2e0fa7c303da553d72d87d5ac05ab6a65863d88e411706fc850f297a27e43fdc",
   "bots_storage/8202070583/11a4f882_newfile/quran.db": "a14ca8993eb6e9ad7123e8995e889a518a9d8c93c8066c56dd7245f32d8c9960",
   "bots_storage/8202070583/11a4f882_newfile/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
   "bots_storage/8202070583/57c1bad1_القرآن_الكريم/القرآن_الكريم.py": "ca006110f7637597b2e967d9d3a5ad15114309c908107a8f7066bb137363eec3",
+  "bots_storage/8202070583/71bf9725__MCV_P/temp_audio/18_ar.alafasy.mp3": "3596cf2faaf62b42ff11d9ee79621f35bf3c0ddb116981c046407bfea56ba2d5",
   "bots_storage/8202070583/71bf9725__MCV_P/temp_audio/100_ar.alafasy.mp3": "d2daf329e1da9e92006ee30fa60cc2eca328cbb6afd964b837b94054ca0e75cd",
   "bots_storage/8202070583/71bf9725__MCV_P/temp_audio/3_ar.alafasy.mp3": "53303b6029cc127b709fa076ff7e886640d0b89e2a46143aceb432b5b0b4c887",
   "bots_storage/8202070583/71bf9725__MCV_P/temp_audio/1_ar.alafasy.mp3": "3ac2fd2b9313dee8c69c78ebbf71ac10e5bff9223b7829bff84a8f0ffc165ee1",

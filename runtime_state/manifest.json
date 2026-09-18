@@ -1,7 +1,9 @@
 {
  "version": 1,
- "updated": "2026-09-18T06:54:33.837498Z",
+ "updated": "2026-09-18T07:09:35.352817Z",
  "files": {
+  "bots_storage/8202070583/db180d6a_numbers_bot_fixed-2/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
+  "bots_storage/8202070583/db180d6a_numbers_bot_fixed-2/numbers_bot.db": "4cf2e8d579e4ca9bd618afb5cea13334d0f9fa990e752f71aa4851e33aa4ca9c",
   "bots_storage/8835933361/bde4cf25_music_008/models.py": "34ef1cfb2808be6932e7e8a680dab74a123d5b245d4543850f74c29dabb0eda0",
   "bots_storage/8835933361/bde4cf25_music_008/requirements.txt": "314a7161d4c49c981db49a578235bd62eb8bf3358f5e81a19d379a31621107a8",
   "bots_storage/8835933361/bde4cf25_music_008/consts.py": "1d79f186c4707277d3038137c0bddbc762ce5a1c568fcd2d550b76c395c00f1b",

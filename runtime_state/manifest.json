@@ -1,13 +1,15 @@
 {
  "version": 1,
- "updated": "2026-09-18T10:39:58.815200Z",
+ "updated": "2026-09-18T10:55:00.504571Z",
  "files": {
+  "bots_storage/6472365461/51ca26c0_numbers_bot_fixed/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
+  "bots_storage/6472365461/51ca26c0_numbers_bot_fixed/numbers_bot_fixed.py": "1b09ad56b4d3562c72f75c87b5314eed4d14998e77efe4f81d99f3de0664deb1",
   "bots_storage/8202070583/db180d6a_numbers_bot_fixed-2/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
   "bots_storage/8202070583/db180d6a_numbers_bot_fixed-2/numbers_bot.db": "4cf2e8d579e4ca9bd618afb5cea13334d0f9fa990e752f71aa4851e33aa4ca9c",
   "bots_storage/8202070583/49071b57__MCV_P_Bot/_MCV_P_Bot.py": "ccb65da67beac30e0e89f49ccb51a7101b9e5e9fbf29e4b8b8bbf79c3931eecb",
   "bots_storage/8202070583/49071b57__MCV_P_Bot/emoji_map.json": "9858394d55fa8ec338cd61dd7b122d33ddf2068fed7097995d6fd89ee7c3de27",
   "bots_storage/8202070583/49071b57__MCV_P_Bot/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
-  "bots_storage/8202070583/49071b57__MCV_P_Bot/numbers_bot.db": "ed4a450d7aa6036e58aa94778012da237765808c0a5da086eef1e3d5cb7c6215",
+  "bots_storage/8202070583/49071b57__MCV_P_Bot/numbers_bot.db": "c6c9a261041c42f6202985502a4d22b7cb96257479320525ab32260b64e72310",
   "bots_storage/8202070583/71bf9725__MCV_P/quran.db": "cd98ba52da7bab8aa57ec2f16c173d74c5861d86ef7de3a24557e290514e6cd0",
   "bots_storage/8202070583/71bf9725__MCV_P/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
   "bots_storage/8202070583/71bf9725__MCV_P/_MCV_P.py": "2e0fa7c303da553d72d87d5ac05ab6a65863d88e411706fc850f297a27e43fdc",

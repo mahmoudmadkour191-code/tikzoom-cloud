@@ -1,12 +1,5 @@
 {
  "version": 1,
- "updated": "2026-09-18T20:35:44.378595Z",
- "files": {
-  "bots_storage/6472365461/4df5994a_متجر_متكامل1/متجر_متكامل1.py": "bfcbdab8984b85a0af77786677bb93a8d6162179fde469b7e933b7a6ff861430",
-  "bots_storage/6472365461/0f1f7859_متجر_تجرب/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
-  "bots_storage/6472365461/0f1f7859_متجر_تجرب/store.db": "9523aa5403600af593d81addb5160de19c0df674b15d2905e6741892d7e48491",
-  "bots_storage/6472365461/65fba0ec_متجر_متكامل_3/store_bot.db": "e38e783e41180dee3fc8058f55266c92f59e361753d1ee2ae782129e549956f2",
-  "bots_storage/6472365461/65fba0ec_متجر_متكامل_3/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
-  "bots_storage/6472365461/b9ae5b8e_متجر_متكامل2/متجر_متكامل2.py": "0cdba92676f296babc70cba2a8644687d6d36aa10d15ba18d0e9375393180419"
- }
+ "updated": "2026-09-18T21:31:35.685918Z",
+ "files": {}
 }

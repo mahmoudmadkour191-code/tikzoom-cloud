@@ -1,9 +1,14 @@
 {
  "version": 1,
- "updated": "2026-09-18T07:24:36.796353Z",
+ "updated": "2026-09-18T07:39:38.364606Z",
  "files": {
   "bots_storage/8202070583/db180d6a_numbers_bot_fixed-2/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
   "bots_storage/8202070583/db180d6a_numbers_bot_fixed-2/numbers_bot.db": "4cf2e8d579e4ca9bd618afb5cea13334d0f9fa990e752f71aa4851e33aa4ca9c",
+  "bots_storage/8202070583/49071b57__MCV_P_Bot/_MCV_P_Bot.py": "ccb65da67beac30e0e89f49ccb51a7101b9e5e9fbf29e4b8b8bbf79c3931eecb",
+  "bots_storage/8202070583/49071b57__MCV_P_Bot/emoji_map.json": "9858394d55fa8ec338cd61dd7b122d33ddf2068fed7097995d6fd89ee7c3de27",
+  "bots_storage/8202070583/49071b57__MCV_P_Bot/deps.log": "99c677c63e5487ea0d83ddfb481f84f0f00250d7a79eb0e0dc15a9f5d3ae4546",
+  "bots_storage/8202070583/49071b57__MCV_P_Bot/numbers_bot.db": "97b88586e60e12db0a2f00129ebd9c8618d187722d715950c1f7b635430c0abb",
+  "bots_storage/8202070583/57c1bad1_القرآن_الكريم/القرآن_الكريم.py": "ca006110f7637597b2e967d9d3a5ad15114309c908107a8f7066bb137363eec3",
   "bots_storage/8835933361/bde4cf25_music_008/models.py": "34ef1cfb2808be6932e7e8a680dab74a123d5b245d4543850f74c29dabb0eda0",
   "bots_storage/8835933361/bde4cf25_music_008/requirements.txt": "314a7161d4c49c981db49a578235bd62eb8bf3358f5e81a19d379a31621107a8",
   "bots_storage/8835933361/bde4cf25_music_008/consts.py": "1d79f186c4707277d3038137c0bddbc762ce5a1c568fcd2d550b76c395c00f1b",
